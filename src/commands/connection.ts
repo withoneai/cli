@@ -229,6 +229,84 @@ export async function connectionListCommand(options?: { search?: string; limit?:
   }
 }
 
+export async function connectionDeleteCommand(
+  connectionKey: string,
+  options?: { force?: boolean }
+): Promise<void> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    output.error('Not configured. Run `one init` first.');
+  }
+
+  const api = new OneApi(apiKey, getApiBase());
+
+  const spinner = output.createSpinner();
+  spinner.start('Finding connection...');
+
+  let allConnections: Connection[] = [];
+  try {
+    allConnections = await api.listConnections();
+  } catch (error) {
+    spinner.stop('Failed to load connections');
+    output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+
+  // Filter by access control settings
+  const ac = getAccessControlFromAllSources();
+  const allowedKeys = ac.connectionKeys || ['*'];
+  const connections = allowedKeys.includes('*')
+    ? allConnections
+    : allConnections.filter(conn => allowedKeys.includes(conn.key));
+
+  const connection = connections.find(conn => conn.key === connectionKey);
+
+  if (!connection) {
+    spinner.stop('Connection not found');
+    output.error(`No connection found with key: ${connectionKey}`);
+  }
+
+  spinner.stop(`Found ${connection!.platform} (${connection!.state})`);
+
+  // Confirmation prompt (skip in agent mode or with --force)
+  if (!output.isAgentMode() && !options?.force) {
+    console.log();
+    console.log(`  ${getStatusIndicator(connection!.state)} ${connection!.platform}  ${pc.dim(connection!.key)}`);
+    console.log();
+
+    const confirmed = await p.confirm({
+      message: 'Are you sure you want to delete this connection?',
+      initialValue: false,
+    });
+
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.cancel('Deletion cancelled.');
+      process.exit(0);
+    }
+  }
+
+  const deleteSpinner = output.createSpinner();
+  deleteSpinner.start('Deleting connection...');
+
+  try {
+    await api.deleteConnection(connection!.id);
+
+    if (output.isAgentMode()) {
+      output.json({
+        deleted: true,
+        platform: connection!.platform,
+        key: connection!.key,
+      });
+      return;
+    }
+
+    deleteSpinner.stop('Connection deleted');
+    p.log.success(`${pc.green('✓')} ${connection!.platform} connection removed.`);
+  } catch (error) {
+    deleteSpinner.stop('Failed to delete connection');
+    output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
 function getStatusIndicator(state: Connection['state']): string {
   switch (state) {
     case 'operational':
