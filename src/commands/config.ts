@@ -1,8 +1,9 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { readConfig, getAccessControl, updateAccessControl } from '../lib/config.js';
+import { readConfig, writeConfig, getApiBase, getAccessControl, updateAccessControl, updateApiBase } from '../lib/config.js';
 import { getAgentStatuses, installMcpConfig } from '../lib/agents.js';
 import { OneApi } from '../lib/api.js';
+import { getApiKeyUrl } from '../lib/browser.js';
 import * as output from '../lib/output.js';
 import type { AccessControlSettings, PermissionLevel } from '../lib/types.js';
 
@@ -166,7 +167,7 @@ async function selectConnections(apiKey: string): Promise<string[] | undefined> 
   let connections: { platform: string; key: string }[];
 
   try {
-    const api = new OneApi(apiKey);
+    const api = new OneApi(apiKey, getApiBase());
     const rawConnections = await api.listConnections();
     connections = rawConnections.map(c => ({ platform: c.platform, key: c.key }));
     spinner.stop(`Found ${connections.length} connection(s)`);
@@ -201,6 +202,194 @@ async function selectConnections(apiKey: string): Promise<string[] | undefined> 
 
   if (p.isCancel(selected)) return undefined;
   return selected as string[];
+}
+
+export async function configSetBaseUrlCommand(url?: string, options?: { reset?: boolean }): Promise<void> {
+  const config = readConfig();
+  if (!config) {
+    if (output.isAgentMode()) {
+      output.error('No One config found. Run "one init" first.');
+    } else {
+      p.log.error(`No One config found. Run ${pc.cyan('one init')} first.`);
+    }
+    return;
+  }
+
+  if (options?.reset) {
+    if (output.isAgentMode()) {
+      output.error('This command requires interactive input. Run without --agent.');
+    }
+
+    const defaultBase = 'https://api.withone.ai';
+
+    const newKey = await p.text({
+      message: `Enter your API key for ${pc.cyan(defaultBase)}:`,
+      placeholder: 'sk_live_...',
+      validate: (value) => {
+        if (!value) return 'API key is required';
+        if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
+          return 'API key should start with sk_live_ or sk_test_';
+        }
+        return undefined;
+      },
+    });
+
+    if (p.isCancel(newKey)) {
+      p.outro('No changes made.');
+      return;
+    }
+
+    const spinner = p.spinner();
+    spinner.start('Validating API key...');
+
+    let isValid = false;
+    try {
+      const api = new OneApi(newKey, `${defaultBase}/v1`);
+      isValid = await api.validateApiKey();
+    } catch (err) {
+      spinner.stop('Connection failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      p.log.error(`Could not reach ${pc.cyan(defaultBase)}: ${msg}`);
+      return;
+    }
+
+    if (!isValid) {
+      spinner.stop('Invalid API key');
+      p.log.error(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
+      return;
+    }
+
+    spinner.stop('API key validated');
+
+    updateApiBase(null);
+    const updatedConfig = readConfig();
+    if (updatedConfig) {
+      updatedConfig.apiKey = newKey;
+      writeConfig(updatedConfig);
+    }
+
+    // Reinstall MCP configs with the new key
+    const ac = getAccessControl();
+    const statuses = getAgentStatuses();
+    const reinstalled: string[] = [];
+
+    for (const s of statuses) {
+      if (s.globalMcp) {
+        installMcpConfig(s.agent, newKey, 'global', ac);
+        reinstalled.push(`${s.agent.name} (global)`);
+      }
+      if (s.projectMcp) {
+        installMcpConfig(s.agent, newKey, 'project', ac);
+        reinstalled.push(`${s.agent.name} (project)`);
+      }
+    }
+
+    if (reinstalled.length > 0) {
+      p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
+    }
+
+    p.log.success(`API base URL reset to default: ${pc.cyan(defaultBase)}`);
+    p.outro('Base URL and API key updated.');
+    return;
+  }
+
+  if (!url) {
+    // No URL provided — show current value
+    const current = getApiBase();
+    if (output.isAgentMode()) {
+      output.json({ apiBase: current });
+    } else {
+      console.log(`  ${pc.dim('API base URL:')} ${current}`);
+    }
+    return;
+  }
+
+  if (output.isAgentMode()) {
+    output.error('This command requires interactive input. Run without --agent.');
+  }
+
+  // Normalize: strip trailing slashes and /v1 suffix — we store the base domain only
+  let normalized = url.replace(/\/+$/, '').replace(/\/v1$/, '');
+
+  // Validate URL
+  try {
+    new URL(normalized);
+  } catch {
+    p.log.error('Invalid URL.');
+    return;
+  }
+
+  // Prompt for API key for the new environment
+  const newKey = await p.text({
+    message: `Enter your API key for ${pc.cyan(normalized)}:`,
+    placeholder: 'sk_live_...',
+    validate: (value) => {
+      if (!value) return 'API key is required';
+      if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
+        return 'API key should start with sk_live_ or sk_test_';
+      }
+      return undefined;
+    },
+  });
+
+  if (p.isCancel(newKey)) {
+    p.outro('No changes made.');
+    return;
+  }
+
+  // Validate key against the new base URL
+  const spinner = p.spinner();
+  spinner.start('Validating API key...');
+
+  let isValid = false;
+  try {
+    const api = new OneApi(newKey, `${normalized}/v1`);
+    isValid = await api.validateApiKey();
+  } catch (err) {
+    spinner.stop('Connection failed');
+    const msg = err instanceof Error ? err.message : String(err);
+    p.log.error(`Could not reach ${pc.cyan(normalized)}: ${msg}`);
+    return;
+  }
+
+  if (!isValid) {
+    spinner.stop('Invalid API key');
+    p.log.error(`Invalid API key for ${pc.cyan(normalized)}.`);
+    return;
+  }
+
+  spinner.stop('API key validated');
+
+  // Save both the new base URL and key
+  updateApiBase(normalized);
+  const updatedConfig = readConfig();
+  if (updatedConfig) {
+    updatedConfig.apiKey = newKey;
+    writeConfig(updatedConfig);
+  }
+
+  // Reinstall MCP configs with the new key
+  const ac = getAccessControl();
+  const statuses = getAgentStatuses();
+  const reinstalled: string[] = [];
+
+  for (const s of statuses) {
+    if (s.globalMcp) {
+      installMcpConfig(s.agent, newKey, 'global', ac);
+      reinstalled.push(`${s.agent.name} (global)`);
+    }
+    if (s.projectMcp) {
+      installMcpConfig(s.agent, newKey, 'project', ac);
+      reinstalled.push(`${s.agent.name} (project)`);
+    }
+  }
+
+  if (reinstalled.length > 0) {
+    p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
+  }
+
+  p.log.success(`API base URL set to: ${pc.cyan(`${normalized}/v1`)}`);
+  p.outro('Base URL and API key updated.');
 }
 
 function formatList(list: string[] | undefined): string {

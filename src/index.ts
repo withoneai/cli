@@ -3,7 +3,7 @@
 import { createRequire } from 'module';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
-import { configCommand } from './commands/config.js';
+import { configCommand, configSetBaseUrlCommand } from './commands/config.js';
 import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
@@ -33,7 +33,7 @@ import {
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
-import { updateCommand, checkLatestVersionCached, getCurrentVersion, autoUpdate } from './commands/update.js';
+import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
 import { setAgentMode, isAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
@@ -50,6 +50,7 @@ program
     one init                              Set up API key and install MCP server
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
     one config                            Configure access control (permissions, scoping)
+    one set-base-url [url]                Set custom API base URL (--reset for default)
 
   Workflow (use these in order):
     1. one list                           List your connected platforms and connection keys
@@ -116,7 +117,7 @@ program.hook('postAction', async () => {
   const info = await updateCheckPromise;
   if (!info) return;
   const current = getCurrentVersion();
-  if (current === info.version) return;
+  if (!isNewerVersion(info.version, current)) return;
   // Auto-update silently in the background
   autoUpdate(info.version, info.publishedAt);
 });
@@ -136,6 +137,14 @@ program
   .description('Configure MCP access control (permissions, connections, actions)')
   .action(async () => {
     await configCommand();
+  });
+
+program
+  .command('set-base-url [url]')
+  .description('Set a custom API base URL, e.g. https://development.withone.ai (omit to show current)')
+  .option('--reset', 'Reset to default (https://api.withone.ai)')
+  .action(async (url?: string, options?: { reset?: boolean }) => {
+    await configSetBaseUrlCommand(url, options);
   });
 
 const connection = program
