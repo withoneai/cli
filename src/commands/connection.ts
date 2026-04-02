@@ -243,12 +243,13 @@ export async function connectionDeleteCommand(
   const spinner = output.createSpinner();
   spinner.start('Finding connection...');
 
-  let allConnections: Connection[] = [];
+  let allConnections: Connection[];
   try {
     allConnections = await api.listConnections();
   } catch (error) {
     spinner.stop('Failed to load connections');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    return; // unreachable, but helps TypeScript narrow
   }
 
   // Filter by access control settings
@@ -258,19 +259,21 @@ export async function connectionDeleteCommand(
     ? allConnections
     : allConnections.filter(conn => allowedKeys.includes(conn.key));
 
-  const connection = connections.find(conn => conn.key === connectionKey);
+  const match = connections.find(conn => conn.key === connectionKey);
 
-  if (!connection) {
+  if (!match) {
     spinner.stop('Connection not found');
     output.error(`No connection found with key: ${connectionKey}`);
+    return; // unreachable, but helps TypeScript narrow
   }
 
-  spinner.stop(`Found ${connection!.platform} (${connection!.state})`);
+  const connection = match;
+  spinner.stop(`Found ${connection.platform} (${connection.state})`);
 
   // Confirmation prompt (skip in agent mode or with --force)
   if (!output.isAgentMode() && !options?.force) {
     console.log();
-    console.log(`  ${getStatusIndicator(connection!.state)} ${connection!.platform}  ${pc.dim(connection!.key)}`);
+    console.log(`  ${getStatusIndicator(connection.state)} ${connection.platform}  ${pc.dim(connection.key)}`);
     console.log();
 
     const confirmed = await p.confirm({
@@ -288,19 +291,19 @@ export async function connectionDeleteCommand(
   deleteSpinner.start('Deleting connection...');
 
   try {
-    await api.deleteConnection(connection!.id);
+    await api.deleteConnection(connection.id);
+    deleteSpinner.stop('Connection deleted');
 
     if (output.isAgentMode()) {
       output.json({
         deleted: true,
-        platform: connection!.platform,
-        key: connection!.key,
+        platform: connection.platform,
+        key: connection.key,
       });
       return;
     }
 
-    deleteSpinner.stop('Connection deleted');
-    p.log.success(`${pc.green('✓')} ${connection!.platform} connection removed.`);
+    p.log.success(`${pc.green('✓')} ${connection.platform} connection removed.`);
   } catch (error) {
     deleteSpinner.stop('Failed to delete connection');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
