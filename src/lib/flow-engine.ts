@@ -1191,13 +1191,17 @@ export async function executeFlow(
     resolvedInputs[name] = value;
   }
 
-  // Build context
+  // Build context. When resuming (or when FlowRunner pre-creates the
+  // context), the caller's `input` map is the raw, un-coerced one — we
+  // overwrite it with the validated/coerced inputs so that `$.input.X`
+  // selectors see the right types.
   const context: FlowContext = resumeState?.context || {
     input: resolvedInputs,
     env: process.env as Record<string, string | undefined>,
     steps: {},
     loop: {},
   };
+  context.input = resolvedInputs;
 
   const completedStepIds = resumeState
     ? new Set(resumeState.completedSteps)
