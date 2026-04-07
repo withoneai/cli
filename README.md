@@ -98,7 +98,7 @@ one flow validate welcome-customer
 one flow execute welcome-customer -i email=jane@example.com
 ```
 
-Workflows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, while loops, parallel steps, transforms, sub-flows, pagination, bash steps, and more. Run `one guide flows` for the full reference.
+Workflows live under `.one/flows/<key>/flow.json` with an optional `lib/` subfolder for `.mjs` code modules — create new flows in this folder layout. (The legacy single-file layout `.one/flows/<key>.flow.json` is deprecated but still loads for backward compatibility.) Flows support conditions, loops, while loops, parallel steps, transforms, sub-flows, pagination, bash steps, and external `.mjs` code modules. Run `one guide flows` for the full reference.
 
 ## How it works
 
@@ -161,6 +161,21 @@ one list
 ```
 
 You need the connection key (rightmost column) when executing actions.
+
+### `one connection delete <connection-key>`
+
+Remove a connection by its key.
+
+```bash
+one connection delete live::gmail::default::abc123
+one connection rm live::gmail::default::abc123      # alias
+```
+
+Shows the connection details and asks for confirmation before deleting. Use `--force` to skip the confirmation prompt.
+
+| Option | What it does |
+|--------|-------------|
+| `-f, --force` | Skip confirmation prompt |
 
 ### `one platforms`
 
@@ -312,7 +327,7 @@ In agent mode (`--agent`), the JSON response includes the guide content and an `
 
 ### `one flow create [key]`
 
-Create a workflow from a JSON definition. Workflows are saved to `.one/flows/<key>.flow.json`.
+Create a workflow from a JSON definition. New workflows are always saved to the folder layout at `.one/flows/<key>/flow.json` (with a `lib/` subfolder scaffolded for code modules). The legacy `.one/flows/<key>.flow.json` single-file layout is deprecated; existing legacy files continue to load and run unchanged for backward compatibility.
 
 ```bash
 # From a --definition flag
@@ -328,7 +343,7 @@ one flow create my-flow --definition '...' -o ./custom/path.json
 | Option | What it does |
 |--------|-------------|
 | `--definition <json>` | Workflow definition as a JSON string |
-| `-o, --output <path>` | Custom output path (default: `.one/flows/<key>.flow.json`) |
+| `-o, --output <path>` | Custom output path (default: `.one/flows/<key>/flow.json`) |
 
 ### `one flow execute <key>`
 
@@ -407,6 +422,17 @@ one config
 | Knowledge-only mode | Enable/disable execution | Off |
 
 Settings propagate automatically to all installed agent configs.
+
+#### `one config skills status` / `one config skills sync`
+
+`one init` copies the packaged skill files (`SKILL.md`, `references/`) into `~/.agents/skills/one/` and symlinks per-agent paths to that canonical directory. When the CLI self-updates, the skill files in the canonical dir would normally stay frozen at the version that was installed. To prevent stale docs, every CLI command checks a `.one-cli-version` marker in the canonical dir and silently refreshes the skill files if they don't match the running CLI version. No user action required.
+
+| Command | What it does |
+|---------|--------------|
+| `one config skills status` | Show installed skill version, current CLI version, and path |
+| `one config skills sync` | Force a re-copy of packaged skill files (for troubleshooting) |
+
+Auto-sync refuses to resurrect skills if you opted out of skill installation during `one init` — the canonical dir has to already exist.
 
 ## The workflow
 

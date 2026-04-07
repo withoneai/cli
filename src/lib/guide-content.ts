@@ -31,6 +31,7 @@ Search for actions, read their docs, and execute them. This is the core workflow
 **Quick start:**
 \`\`\`bash
 one --agent connection list                                    # See connected platforms
+one --agent connection delete <connection-key>                 # Remove a connection
 one --agent actions search <platform> "<query>" -t execute     # Find an action
 one --agent actions knowledge <platform> <actionId>            # Read docs (REQUIRED)
 one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
@@ -57,7 +58,8 @@ one --agent flow list                                 # List all workflows
 \`\`\`
 
 **Key concepts:**
-- Workflows are JSON files at \`.one/flows/<key>.flow.json\`
+- Workflows live at \`.one/flows/<key>/flow.json\` (folder layout — REQUIRED for new flows). The legacy \`.one/flows/<key>.flow.json\` single-file layout is DEPRECATED but still loads for backward compatibility
+- Code steps can reference an external \`.mjs\` module under the flow's \`lib/\` folder (stdin JSON in, stdout JSON out) — keeps JS out of JSON strings and makes flows shareable
 - 12 step types: action, transform, code, condition, loop, parallel, file-read, file-write, while, flow, paginate, bash
 - Data wiring via selectors: \`$.input.param\`, \`$.steps.stepId.response\`, \`$.loop.item\`
 - AI analysis via bash steps: \`claude --print\` with \`parseJson: true\`
@@ -112,6 +114,7 @@ Request specific sections:
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
+- Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 `;
 
 export const GUIDE_ACTIONS = `# One Actions — Reference
@@ -127,6 +130,14 @@ one --agent connection list
 \`\`\`
 
 Returns platforms, status, connection keys, and tags.
+
+### 1b. Delete a Connection
+
+\`\`\`bash
+one --agent connection delete <connection-key>
+\`\`\`
+
+Removes a connection by its key. In agent mode, returns \`{"deleted": true, "platform": "...", "key": "..."}\`. The connection key comes from \`one connection list\`.
 
 ### 2. Search Actions
 

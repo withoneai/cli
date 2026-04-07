@@ -4,6 +4,12 @@ export interface FlowInputDeclaration {
   default?: unknown;
   description?: string;
   connection?: { platform: string };
+  /**
+   * Allowed values. If set, the resolved input must be strictly equal to one
+   * of these (compared after type coercion). Useful for tier/stage/category
+   * inputs where only a fixed vocabulary is valid.
+   */
+  enum?: unknown[];
 }
 
 export interface FlowActionConfig {
@@ -52,7 +58,10 @@ export interface FlowFileWriteConfig {
 }
 
 export interface FlowCodeConfig {
-  source: string;
+  /** Inline JS source (async function body). Mutually exclusive with `module`. */
+  source?: string;
+  /** Path to a .mjs file relative to the flow's root directory (e.g. "lib/normalize.mjs"). Mutually exclusive with `source`. */
+  module?: string;
 }
 
 export interface FlowWhileConfig {
@@ -74,20 +83,58 @@ export interface FlowPaginateConfig {
   maxPages?: number;
 }
 
+/**
+ * A bash-step env var value. Can be:
+ * - a plain string (interpolated as-is, like before — caller is responsible for escaping)
+ * - `{ json: <selector|value> }` — the value is JSON-serialized, written to a temp
+ *   file, and the env var is set to the temp file path. Use with `@$VAR` in curl
+ *   data, etc. The temp file is cleaned up after the step finishes.
+ * - `{ shell: <selector|value> }` — the value is resolved and POSIX-shell-quoted,
+ *   so it can be safely interpolated inside bash double-quoted strings via `"$VAR"`.
+ */
+export type FlowBashEnvValue = string | { json: unknown } | { shell: string };
+
 export interface FlowBashConfig {
   command: string;
   timeout?: number;
   parseJson?: boolean;
   cwd?: string;
-  env?: Record<string, string>;
+  env?: Record<string, FlowBashEnvValue>;
 }
 
 export interface FlowStepErrorConfig {
   strategy: 'fail' | 'continue' | 'retry' | 'fallback';
   retries?: number;
   retryDelayMs?: number;
+  /**
+   * Delay growth between retries.
+   * - `fixed` (default): every retry waits `retryDelayMs`.
+   * - `exponential`: retry N waits `retryDelayMs * 2^(N-1)`, capped at `maxDelayMs`.
+   * - `exponential-jitter`: same as exponential, but each wait is multiplied by a
+   *    uniform random factor in [0.5, 1.0) to spread retries and avoid thundering herds.
+   */
+  backoff?: 'fixed' | 'exponential' | 'exponential-jitter';
+  /** Upper bound for backoff delays. Defaults to 30000 (30s). */
+  maxDelayMs?: number;
   fallbackStepId?: string;
+  /**
+   * Conditional retry — only retry when the underlying error matches one of
+   * these codes. Entries can be HTTP status numbers (429, 502), error code
+   * strings ('TIMEOUT', 'ETIMEDOUT', 'ECONNRESET'), or substring matches
+   * against the error message. If unset, all errors are retried (legacy
+   * behavior).
+   */
+  retryOn?: (string | number)[];
+  /**
+   * Conditional fail-fast — if the error matches any entry here, the step
+   * fails immediately without consuming further retries. Takes precedence
+   * over `retryOn`. Same matching rules.
+   */
+  failFastOn?: (string | number)[];
 }
+
+export type FlowOutputSchemaType = 'string' | 'number' | 'boolean' | 'object' | 'array' | 'unknown';
+export type FlowOutputSchema = { [field: string]: FlowOutputSchemaType | FlowOutputSchema };
 
 export type FlowStepType = 'action' | 'transform' | 'code' | 'condition' | 'loop' | 'parallel' | 'file-read' | 'file-write' | 'while' | 'flow' | 'paginate' | 'bash';
 
@@ -97,6 +144,32 @@ export interface FlowStep {
   type: FlowStepType;
   if?: string;
   unless?: string;
+  /**
+   * Wall-clock timeout for the step in milliseconds. When exceeded, the step fails with
+   * a TimeoutError (errorCode: 'TIMEOUT'). If `onError.strategy` is `continue`, the step
+   * result will have `status: 'timeout'` so downstream steps can distinguish a timeout
+   * from a normal failure.
+   */
+  timeoutMs?: number;
+  /**
+   * Presence preconditions for this step. Each entry is a `$.input.X` or
+   * `$.steps.X.output...` selector that must resolve to a non-empty value
+   * (not undefined, null, '', or []) before the step runs. If any selector
+   * is missing the step fails with a descriptive error — including *why*
+   * the upstream value is missing (e.g. the source step was skipped or
+   * failed). Failures honor the step's `onError` strategy.
+   */
+  requires?: string[];
+  /**
+   * Optional declaration of the shape of this step's `output`. When set, the
+   * validator checks that downstream `$.steps.<this.id>.output.<field>`
+   * references match a declared field. Field values are type names
+   * (`string` | `number` | `boolean` | `object` | `array` | `unknown`) or
+   * a nested record for object subfields. Purely a documentation /
+   * validation aid — the engine does not coerce or check the runtime value
+   * against the schema.
+   */
+  outputSchema?: FlowOutputSchema;
   onError?: FlowStepErrorConfig;
   action?: FlowActionConfig;
   transform?: FlowTransformConfig;
@@ -122,10 +195,17 @@ export interface Flow {
 }
 
 export interface StepResult {
-  status: 'success' | 'skipped' | 'failed';
+  // 'success' — step ran and produced output
+  // 'skipped' — step was skipped by an `if`/`unless` condition
+  // 'failed'  — step threw an error (and onError swallowed it, or the engine is reporting pre-throw state)
+  // 'timeout' — step exceeded its configured `timeoutMs`
+  status: 'success' | 'skipped' | 'failed' | 'timeout';
   response?: unknown;
   output?: unknown;
   error?: string;
+  // Machine-readable error classifier. Currently set to 'TIMEOUT' for timed-out steps.
+  // Other steps may populate this in the future (e.g. HTTP status codes for action errors).
+  errorCode?: string;
   durationMs?: number;
   retries?: number;
 }
@@ -164,5 +244,7 @@ export interface FlowExecuteOptions {
   mock?: boolean;
   verbose?: boolean;
   allowBash?: boolean;
+  /** Absolute directory that contains this flow's `flow.json` (or the legacy `.one/flows/` dir). Used to resolve code.module paths. */
+  rootDir?: string;
   onEvent?: (event: FlowEvent) => void;
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { OneApi } from './api.js';
 import { isMethodAllowed, isActionAllowed } from './api.js';
@@ -20,6 +21,94 @@ const execAsync = promisify(exec);
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Error thrown when a step exceeds its `timeoutMs`. Carries an `errorCode` of
+ * 'TIMEOUT' so the step-result builder can surface `status: 'timeout'` to
+ * downstream consumers (withoneai/cli#58, #67).
+ */
+class StepTimeoutError extends Error {
+  errorCode = 'TIMEOUT' as const;
+  constructor(stepId: string, timeoutMs: number) {
+    super(`Step "${stepId}" exceeded timeout of ${timeoutMs}ms`);
+    this.name = 'StepTimeoutError';
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stepId: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new StepTimeoutError(stepId, timeoutMs)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
+/**
+ * Compute the delay before retry attempt N (1-indexed first retry = attempt 2
+ * in the executor loop). Honours `backoff` and `maxDelayMs` from the step's
+ * onError config; defaults to fixed-delay so existing flows are unchanged.
+ */
+/**
+ * Decide whether an error should be retried based on the step's onError
+ * config (withoneai/cli#53). Match rules:
+ *   - `failFastOn` takes precedence: any match → do not retry
+ *   - `retryOn` (if set): error must match an entry → retry
+ *   - if neither set → retry (legacy behavior, decided by attempt count)
+ *
+ * Match entries can be:
+ *   - numbers — interpreted as HTTP status codes; matched against any
+ *     `(\d{3})` substring in the error message (covers "HTTP 429", "status 502", etc.)
+ *   - strings — matched against `error.errorCode` (case-sensitive) OR as a
+ *     case-insensitive substring of the error message. This covers Node
+ *     error codes (`ETIMEDOUT`, `ECONNRESET`) and our own (`TIMEOUT`).
+ */
+export function shouldRetryError(
+  err: unknown,
+  onError: import('./flow-types.js').FlowStepErrorConfig | undefined,
+): { retry: boolean; reason?: string } {
+  if (!onError) return { retry: false };
+  const message = err instanceof Error ? err.message : String(err);
+  const errorCode = (err as { errorCode?: string } | undefined)?.errorCode;
+
+  const matches = (entry: string | number): boolean => {
+    if (typeof entry === 'number') {
+      // Match against any 3-digit status code in the message
+      const re = new RegExp(`\\b${entry}\\b`);
+      return re.test(message);
+    }
+    if (errorCode && entry === errorCode) return true;
+    return message.toLowerCase().includes(entry.toLowerCase());
+  };
+
+  if (Array.isArray(onError.failFastOn) && onError.failFastOn.some(matches)) {
+    return { retry: false, reason: 'failFastOn' };
+  }
+  if (Array.isArray(onError.retryOn)) {
+    if (onError.retryOn.some(matches)) return { retry: true, reason: 'retryOn' };
+    return { retry: false, reason: 'no-retryOn-match' };
+  }
+  return { retry: true };
+}
+
+function computeRetryDelay(onError: import('./flow-types.js').FlowStepErrorConfig, attempt: number): number {
+  const base = onError.retryDelayMs ?? 1000;
+  const max = onError.maxDelayMs ?? 30_000;
+  const backoff = onError.backoff ?? 'fixed';
+  // attempt == 2 is the first retry, so the exponent is (attempt - 2)
+  const retryIndex = attempt - 2;
+  let delay: number;
+  if (backoff === 'exponential' || backoff === 'exponential-jitter') {
+    delay = Math.min(base * Math.pow(2, retryIndex), max);
+    if (backoff === 'exponential-jitter') {
+      delay = delay * (0.5 + Math.random() * 0.5);
+    }
+  } else {
+    delay = base;
+  }
+  return Math.round(delay);
 }
 
 // ── Selector Resolution ──
@@ -61,13 +150,86 @@ export function resolveSelector(selectorPath: string, context: FlowContext): unk
   return current;
 }
 
+/**
+ * POSIX-shell-quote a string so it can be safely interpolated into a bash
+ * command. Wraps in single quotes and escapes any embedded single quotes
+ * using the standard `'\''` close-reopen trick.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Apply a context-specific escaping pipe to a resolved Handlebars value.
+ * Pipes are intended for use in `{{ $.x | json }}` style interpolations and
+ * make it safe to embed user-provided data into shell commands, JSON
+ * payloads, URLs, markdown, or HTML without writing per-call escapers.
+ */
+export function applyHandlebarsPipe(value: unknown, pipe: string): string {
+  switch (pipe) {
+    case 'json':
+      return JSON.stringify(value ?? null);
+    case 'shell': {
+      if (value === undefined || value === null) return `''`;
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return shellQuote(str);
+    }
+    case 'url': {
+      if (value === undefined || value === null) return '';
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return encodeURIComponent(str);
+    }
+    case 'md': {
+      if (value === undefined || value === null) return '';
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      // Escape markdown structural characters that commonly break tables/links.
+      return str.replace(/([\\`*_{}\[\]()#+\-!|])/g, '\\$1');
+    }
+    case 'html': {
+      if (value === undefined || value === null) return '';
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    default:
+      throw new Error(`Unknown Handlebars pipe: "${pipe}". Supported: json, shell, url, md, html.`);
+  }
+}
+
 export function interpolateString(str: string, context: FlowContext): string {
-  return str.replace(/\{\{(\$\.[^}]+)\}\}/g, (_match, selector) => {
-    const value = resolveSelector(selector, context);
-    if (value === undefined || value === null) return '';
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-  });
+  // Supports three token shapes:
+  //   {{$.path.to.value}}             — raw stringification (string interp)
+  //   {{q $.path.to.value}}           — POSIX-shell-quoted, safe for bash steps
+  //   {{$.path.to.value | pipe}}      — context-aware escaping (json|shell|url|md|html)
+  return str.replace(
+    /\{\{\s*(q\s+)?(\$\.[^}\s|]+)(?:\s*\|\s*([a-zA-Z]+))?\s*\}\}/g,
+    (_match, qFlag, selector, pipe) => {
+      const value = resolveSelector(selector, context);
+
+      if (pipe) {
+        if (qFlag) {
+          throw new Error(`Handlebars expression "{{q ${selector} | ${pipe}}}" combines the legacy "q" prefix with a pipe — pick one (prefer the pipe form).`);
+        }
+        return applyHandlebarsPipe(value, pipe);
+      }
+
+      if (value === undefined || value === null) return qFlag ? `''` : '';
+      if (typeof value === 'object') {
+        console.warn(
+          `[flow] WARNING: Handlebars expression "{{${qFlag ? 'q ' : ''}${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
+          `To pass objects/arrays as native values, use a direct selector without {{ }}: "${selector}"`
+        );
+        const json = JSON.stringify(value);
+        return qFlag ? shellQuote(json) : json;
+      }
+      const str = String(value);
+      return qFlag ? shellQuote(str) : str;
+    },
+  );
 }
 
 export function resolveValue(value: unknown, context: FlowContext): unknown {
@@ -76,8 +238,8 @@ export function resolveValue(value: unknown, context: FlowContext): unknown {
     if (value.startsWith('$.') && !value.includes('{{')) {
       return resolveSelector(value, context);
     }
-    // String with interpolation
-    if (value.includes('{{$.')) {
+    // String with interpolation ({{$.x}}, {{ $.x }}, {{q $.x}}, or {{ $.x | pipe }})
+    if (/\{\{\s*(q\s+)?\$\./.test(value)) {
       return interpolateString(value, context);
     }
     return value;
@@ -193,13 +355,146 @@ function executeTransformStep(step: FlowStep, context: FlowContext): StepResult 
   return { status: 'success', output, response: output };
 }
 
-async function executeCodeStep(step: FlowStep, context: FlowContext): Promise<StepResult> {
-  const source = step.code!.source;
+async function executeCodeStep(
+  step: FlowStep,
+  context: FlowContext,
+  options: FlowExecuteOptions,
+): Promise<StepResult> {
+  const config = step.code!;
+
+  if (config.module) {
+    const output = await executeCodeModule(step.id, config.module, context, options);
+    return { status: 'success', output, response: output };
+  }
+
+  if (typeof config.source !== 'string') {
+    throw new Error(`Code step "${step.id}" must define either "source" or "module"`);
+  }
+
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const sandboxedRequire = createSandboxedRequire();
-  const fn = new AsyncFunction('$', 'require', source);
-  const output = await fn(context, sandboxedRequire);
-  return { status: 'success', output, response: output };
+  // Tag the source with a sourceURL so V8 stack frames are attributable to
+  // this specific code step, then run it. On error, rewrite the stack so the
+  // line numbers reference the user's source (not the AsyncFunction wrapper)
+  // and prepend the offending line of code.
+  const sourceURL = `code:${step.id}`;
+  const taggedSource = `${config.source}\n//# sourceURL=${sourceURL}`;
+  const fn = new AsyncFunction('$', 'require', taggedSource);
+  try {
+    const output = await fn(context, sandboxedRequire);
+    return { status: 'success', output, response: output };
+  } catch (err) {
+    throw rewriteCodeStepError(err, step.id, config.source, sourceURL);
+  }
+}
+
+/**
+ * Rewrite an error thrown from inside a code step so the message points at
+ * the user's source line instead of the AsyncFunction wrapper. The
+ * `new AsyncFunction(...)` wrapper prepends 2 lines (`async function
+ * anonymous($, require\n) {`) before the user's body, so stack frame line
+ * numbers are off by 2.
+ */
+function rewriteCodeStepError(err: unknown, stepId: string, source: string, sourceURL: string): Error {
+  if (!(err instanceof Error)) return new Error(String(err));
+  const WRAPPER_LINE_OFFSET = 2;
+  const sourceLines = source.split('\n');
+  const stack = err.stack || '';
+  // Match frames like "at code:stepId:LINE:COL" or "at <anonymous> (code:stepId:LINE:COL)"
+  const re = new RegExp(`${sourceURL.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:(\\d+):(\\d+)`);
+  const match = stack.match(re);
+  if (!match) {
+    err.message = `Code step "${stepId}" failed: ${err.message}`;
+    return err;
+  }
+  const wrappedLine = parseInt(match[1], 10);
+  const col = parseInt(match[2], 10);
+  const userLine = wrappedLine - WRAPPER_LINE_OFFSET;
+  const lineContent = sourceLines[userLine - 1] ?? '';
+  const trimmed = lineContent.trim();
+  err.message = `Code step "${stepId}" failed at line ${userLine}:${col}\n  ${trimmed}\n  ${err.message}`;
+  // Also rewrite stack frames so further tooling sees user-relative lines.
+  err.stack = stack.replace(new RegExp(`(${sourceURL.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:)(\\d+)`, 'g'), (_m, prefix, l) =>
+    `${prefix}${parseInt(l, 10) - WRAPPER_LINE_OFFSET}`,
+  );
+  return err;
+}
+
+/**
+ * Execute a code step that references an external .mjs module. The module is
+ * spawned as a child `node` process; the flow context `$` is piped to stdin
+ * as JSON and the module's stdout is parsed as JSON and returned.
+ *
+ * Contract for module authors (see guide):
+ *
+ *   const $ = JSON.parse(await new Response(process.stdin).text());
+ *   // ...compute...
+ *   process.stdout.write(JSON.stringify(result));
+ */
+async function executeCodeModule(
+  stepId: string,
+  modulePath: string,
+  context: FlowContext,
+  options: FlowExecuteOptions,
+): Promise<unknown> {
+  const rootDir = options.rootDir;
+  if (!rootDir) {
+    throw new Error(`Code step "${stepId}" uses module "${modulePath}" but no flow rootDir is available. Flows that use code modules must be loaded via loadFlowWithMeta.`);
+  }
+
+  // Safety: reject absolute paths and path traversal outside rootDir.
+  if (path.isAbsolute(modulePath)) {
+    throw new Error(`Code module path must be relative to the flow root, got absolute: "${modulePath}"`);
+  }
+  const absPath = path.resolve(rootDir, modulePath);
+  const relFromRoot = path.relative(rootDir, absPath);
+  if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) {
+    throw new Error(`Code module "${modulePath}" resolves outside the flow directory`);
+  }
+
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`Code module not found: ${absPath}`);
+  }
+
+  // Strip `env` — don't leak process.env into arbitrary user scripts via $.
+  const { env: _omitEnv, ...safeContext } = context;
+  void _omitEnv;
+  const stdinPayload = JSON.stringify(safeContext);
+
+  return await new Promise<unknown>((resolve, reject) => {
+    const child = spawn(process.execPath, [absPath], {
+      cwd: rootDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on('data', (c: Buffer) => stdoutChunks.push(c));
+    child.stderr.on('data', (c: Buffer) => stderrChunks.push(c));
+
+    child.on('error', err => reject(err));
+    child.on('close', (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      if (code !== 0) {
+        reject(new Error(`Code module "${modulePath}" exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+        return;
+      }
+      const trimmed = stdout.trim();
+      if (trimmed === '') {
+        resolve(undefined);
+        return;
+      }
+      try {
+        resolve(JSON.parse(stripCodeFences(trimmed)));
+      } catch (err) {
+        reject(new Error(`Code module "${modulePath}" did not print valid JSON to stdout: ${(err as Error).message}`));
+      }
+    });
+
+    child.stdin.write(stdinPayload);
+    child.stdin.end();
+  });
 }
 
 async function executeConditionStep(
@@ -459,24 +754,67 @@ async function executeSubflowStep(
   }
 
   // Dynamic import to avoid circular dependency at module level
-  const { loadFlow } = await import('./flow-runner.js');
-  const subFlow = loadFlow(resolvedKey);
+  const { loadFlowWithMeta } = await import('./flow-runner.js');
+  const { flow: subFlow, rootDir: subRootDir } = loadFlowWithMeta(resolvedKey);
 
+  // Sub-flows resolve their own code modules against their own rootDir.
   const subContext = await executeFlow(
     subFlow,
     resolvedInputs,
     api,
     permissions,
     allowedActionIds,
-    options,
+    { ...options, rootDir: subRootDir },
     undefined,
     [...flowStack, resolvedKey],
   );
 
+  // Sub-flow output layout (withoneai/cli#66):
+  //
+  //   Previously: `output = subContext.steps`, forcing callers to write
+  //     `$.steps.loadConfig.output.<innerStepId>.output.<field>`
+  //
+  //   Now: we flatten the sub-flow's FINAL step output onto the top-level
+  //   output, so `$.steps.loadConfig.output.<field>` works directly. The
+  //   legacy nested path (`.output.<innerStepId>.output.<field>`) continues
+  //   to work because we spread flattened fields OVER the steps map — both
+  //   access patterns resolve. If an inner step id collides with a
+  //   flattened field name, the flattened field wins (and we emit a
+  //   deprecation warning once per collision).
+  //
+  //   Also exposed: `output._steps` always points at the full sub-flow
+  //   steps map for callers that need deterministic access regardless of
+  //   field collisions.
+  const finalStep = subFlow.steps[subFlow.steps.length - 1];
+  const finalOutput = finalStep ? subContext.steps[finalStep.id]?.output : undefined;
+  let flattenedOutput: unknown;
+  if (finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput)) {
+    const collisions = Object.keys(finalOutput as Record<string, unknown>).filter(
+      k => k in subContext.steps,
+    );
+    if (collisions.length > 0) {
+      options.onEvent?.({
+        event: 'flow:warning',
+        message: `Sub-flow "${resolvedKey}" final step output fields [${collisions.join(', ')}] collide with sub-step ids — flattened fields take precedence.`,
+      } as FlowEvent);
+    }
+    flattenedOutput = {
+      ...subContext.steps,
+      ...(finalOutput as Record<string, unknown>),
+      _steps: subContext.steps,
+    };
+  } else {
+    flattenedOutput = {
+      ...subContext.steps,
+      _steps: subContext.steps,
+      ...(finalOutput !== undefined ? { _finalOutput: finalOutput } : {}),
+    };
+  }
+
   return {
     status: 'success',
-    output: subContext.steps,
-    response: subContext,
+    output: flattenedOutput,
+    response: flattenedOutput,
   };
 }
 
@@ -547,6 +885,63 @@ async function executePaginateStep(
   };
 }
 
+/**
+ * Resolve a bash step's `env` map, supporting structured `{ json: ... }` and
+ * `{ shell: ... }` values (withoneai/cli#54). Returns the resolved env vars
+ * along with a list of temp files that must be cleaned up after the step.
+ */
+function resolveBashEnv(
+  envConfig: Record<string, unknown> | undefined,
+  context: FlowContext,
+  stepId: string,
+): { env: Record<string, string>; tempFiles: string[] } {
+  const out: Record<string, string> = {};
+  const tempFiles: string[] = [];
+  if (!envConfig) return { env: out, tempFiles };
+
+  for (const [key, raw] of Object.entries(envConfig)) {
+    if (raw === undefined || raw === null) continue;
+
+    // Structured form: { json: ... } or { shell: ... }
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      const obj = raw as Record<string, unknown>;
+      if ('json' in obj) {
+        const resolved = resolveValue(obj.json, context);
+        const json = JSON.stringify(resolved ?? null);
+        const tmp = path.join(
+          os.tmpdir(),
+          `one-flow-${stepId}-${key}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+        );
+        fs.writeFileSync(tmp, json, { encoding: 'utf-8' });
+        tempFiles.push(tmp);
+        out[key] = tmp;
+        continue;
+      }
+      if ('shell' in obj) {
+        const resolved = resolveValue(obj.shell, context);
+        // Plain (non-quoted) string. The user should reference it inside
+        // bash double quotes ("$VAR") — bash itself handles word-splitting
+        // safely. We still strip nothing; the value is what it is.
+        out[key] = resolved === undefined || resolved === null
+          ? ''
+          : typeof resolved === 'object' ? JSON.stringify(resolved) : String(resolved);
+        continue;
+      }
+      // Unknown object shape — fall through to JSON stringification.
+      out[key] = JSON.stringify(resolveValue(raw, context));
+      continue;
+    }
+
+    // Legacy: plain string (interpolated)
+    const resolved = resolveValue(raw, context);
+    out[key] = resolved === undefined || resolved === null
+      ? ''
+      : typeof resolved === 'object' ? JSON.stringify(resolved) : String(resolved);
+  }
+
+  return { env: out, tempFiles };
+}
+
 // Feature 9: Bash step
 async function executeBashStep(
   step: FlowStep,
@@ -559,23 +954,86 @@ async function executeBashStep(
   const config = step.bash!;
   const command = resolveValue(config.command, context) as string;
   const cwd = config.cwd ? resolveValue(config.cwd, context) as string : process.cwd();
+  const { env: resolvedEnv, tempFiles } = resolveBashEnv(
+    config.env as Record<string, unknown> | undefined,
+    context,
+    step.id,
+  );
   const env = config.env
-    ? { ...process.env, ...resolveValue(config.env, context) as Record<string, string> }
+    ? { ...process.env, ...resolvedEnv }
     : process.env;
 
-  const { stdout, stderr } = await execAsync(command, {
-    timeout: config.timeout || 30000,
-    cwd,
-    env,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      timeout: config.timeout || 30000,
+      cwd,
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+    });
 
-  const output = config.parseJson ? JSON.parse(stripCodeFences(stdout)) : stdout.trim();
-  return {
-    status: 'success',
-    output,
-    response: { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 },
-  };
+    const output = config.parseJson ? JSON.parse(stripCodeFences(stdout)) : stdout.trim();
+    return {
+      status: 'success',
+      output,
+      response: { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 },
+    };
+  } finally {
+    for (const tmp of tempFiles) {
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    }
+  }
+}
+
+// ── Input describe helper (for type-error messages) ──
+
+function describe(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array (${JSON.stringify(value)})`;
+  if (typeof value === 'object') return `object (${JSON.stringify(value)})`;
+  return `${typeof value} (${JSON.stringify(value)})`;
+}
+
+// ── Requires precondition check ──
+
+/**
+ * A required selector is "missing" if it resolves to undefined, null, an
+ * empty string, or an empty array. Empty objects are intentionally allowed
+ * — `{}` is a valid value for many step types.
+ */
+function isMissing(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string' && value.length === 0) return true;
+  if (Array.isArray(value) && value.length === 0) return true;
+  return false;
+}
+
+/**
+ * Build a "...because step X was skipped" suffix when a required selector
+ * points at an upstream step whose status explains the missing value.
+ */
+function explainMissing(selector: string, context: FlowContext): string {
+  const parts = selector.slice(2).split('.');
+  if (parts[0] !== 'steps' || parts.length < 2) return '';
+  const stepId = parts[1].replace(/\[.*$/, '');
+  const upstream = context.steps[stepId];
+  if (!upstream) return ` (upstream step "${stepId}" has not run)`;
+  if (upstream.status === 'skipped') return ` (upstream step "${stepId}" was skipped)`;
+  if (upstream.status === 'failed') return ` (upstream step "${stepId}" failed: ${upstream.error ?? 'unknown error'})`;
+  if (upstream.status === 'timeout') return ` (upstream step "${stepId}" timed out)`;
+  return '';
+}
+
+export function checkRequires(step: FlowStep, context: FlowContext): void {
+  if (!step.requires || step.requires.length === 0) return;
+  for (const selector of step.requires) {
+    const value = resolveSelector(selector, context);
+    if (isMissing(value)) {
+      const why = explainMissing(selector, context);
+      throw new Error(
+        `Step "${step.id}" requires ${selector} but it resolved to ${value === undefined ? 'undefined' : value === null ? 'null' : Array.isArray(value) ? 'an empty array' : 'an empty string'}${why}`
+      );
+    }
+  }
 }
 
 // ── Core Execution ──
@@ -614,15 +1072,21 @@ export async function executeSingleStep(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) {
+        const delay = computeRetryDelay(step.onError!, attempt);
         options.onEvent?.({
           event: 'step:retry',
           stepId: step.id,
           attempt,
           maxRetries: step.onError!.retries!,
+          delayMs: delay,
         });
-        const delay = step.onError?.retryDelayMs || 1000;
         await sleep(delay);
       }
+
+      // Presence preconditions: fail fast (and via onError) if any required
+      // selector resolves to a missing value. Run before mock dispatch so
+      // contract violations surface even in dry runs.
+      checkRequires(step, context);
 
       // Feature 7: Mock mode — mock external steps, run logic steps normally
       if (options.mock && (step.type === 'action' || step.type === 'paginate' || step.type === 'bash')) {
@@ -638,51 +1102,53 @@ export async function executeSingleStep(
         return result;
       }
 
-      let result: StepResult;
+      const dispatch = async (): Promise<StepResult> => {
+        switch (step.type) {
+          case 'action':
+            return await executeActionStep(step, context, api, permissions, allowedActionIds);
+          case 'transform':
+            return executeTransformStep(step, context);
+          case 'code':
+            return await executeCodeStep(step, context, options);
+          case 'condition':
+            return await executeConditionStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'loop':
+            return await executeLoopStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'parallel':
+            return await executeParallelStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'file-read':
+            return executeFileReadStep(step, context);
+          case 'file-write':
+            return executeFileWriteStep(step, context);
+          case 'while':
+            return await executeWhileStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'flow':
+            return await executeSubflowStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'paginate':
+            return await executePaginateStep(step, context, api, permissions, allowedActionIds, options);
+          case 'bash':
+            return await executeBashStep(step, context, options);
+          default:
+            throw new Error(`Unknown step type: ${step.type}`);
+        }
+      };
 
-      switch (step.type) {
-        case 'action':
-          result = await executeActionStep(step, context, api, permissions, allowedActionIds);
-          break;
-        case 'transform':
-          result = executeTransformStep(step, context);
-          break;
-        case 'code':
-          result = await executeCodeStep(step, context);
-          break;
-        case 'condition':
-          result = await executeConditionStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'loop':
-          result = await executeLoopStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'parallel':
-          result = await executeParallelStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'file-read':
-          result = executeFileReadStep(step, context);
-          break;
-        case 'file-write':
-          result = executeFileWriteStep(step, context);
-          break;
-        case 'while':
-          result = await executeWhileStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'flow':
-          result = await executeSubflowStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'paginate':
-          result = await executePaginateStep(step, context, api, permissions, allowedActionIds, options);
-          break;
-        case 'bash':
-          result = await executeBashStep(step, context, options);
-          break;
-        default:
-          throw new Error(`Unknown step type: ${step.type}`);
-      }
+      const result: StepResult = step.timeoutMs
+        ? await withTimeout(dispatch(), step.timeoutMs, step.id)
+        : await dispatch();
 
       result.durationMs = Date.now() - startTime;
-      if (attempt > 1) result.retries = attempt - 1;
+      if (attempt > 1) {
+        result.retries = attempt - 1;
+        // Surface a clear "succeeded after N retries" event so observers
+        // (and downstream tooling) can distinguish a clean run from a
+        // recovered run.
+        options.onEvent?.({
+          event: 'step:retry-success',
+          stepId: step.id,
+          retries: attempt - 1,
+        });
+      }
       context.steps[step.id] = result;
       return result;
     } catch (err) {
@@ -692,18 +1158,39 @@ export async function executeSingleStep(
         // All retries exhausted or no retry strategy
         break;
       }
+
+      // Conditional retry (cli#53): if retryOn/failFastOn are set, decide
+      // whether THIS particular error should be retried at all.
+      if (step.onError?.strategy === 'retry' &&
+          (step.onError.retryOn || step.onError.failFastOn)) {
+        const decision = shouldRetryError(lastError, step.onError);
+        if (!decision.retry) {
+          options.onEvent?.({
+            event: 'step:retry-skip',
+            stepId: step.id,
+            reason: decision.reason ?? 'no-match',
+            error: lastError.message,
+          });
+          break;
+        }
+      }
     }
   }
 
   // Handle error with strategy
   const errorMessage = lastError?.message || 'Unknown error';
   const strategy = step.onError?.strategy || 'fail';
+  const retriesUsed = Math.max(0, maxAttempts - 1);
+  const isTimeout = lastError instanceof StepTimeoutError;
+  const errorCode = (lastError as { errorCode?: string } | undefined)?.errorCode;
 
   if (strategy === 'continue') {
     const result: StepResult = {
-      status: 'failed',
+      status: isTimeout ? 'timeout' : 'failed',
       error: errorMessage,
+      ...(errorCode ? { errorCode } : {}),
       durationMs: Date.now() - startTime,
+      retries: retriesUsed,
     };
     context.steps[step.id] = result;
     return result;
@@ -713,9 +1200,11 @@ export async function executeSingleStep(
     // The fallback step must already be defined in the flow
     // We mark this step as failed and the caller should handle fallback
     const result: StepResult = {
-      status: 'failed',
+      status: isTimeout ? 'timeout' : 'failed',
       error: errorMessage,
+      ...(errorCode ? { errorCode } : {}),
       durationMs: Date.now() - startTime,
+      retries: retriesUsed,
     };
     context.steps[step.id] = result;
     return result;
@@ -790,30 +1279,86 @@ export async function executeFlow(
   resumeState?: { context: FlowContext; completedSteps: string[] },
   flowStack: string[] = [],
 ): Promise<FlowContext> {
-  // Validate required inputs
-  for (const [name, decl] of Object.entries(flow.inputs)) {
-    if (decl.required !== false && inputs[name] === undefined && decl.default === undefined) {
-      throw new Error(`Missing required input: "${name}" — ${decl.description || ''}`);
-    }
-  }
-
-  // Build resolved inputs with defaults
+  // Validate, coerce, and apply defaults to inputs.
+  // Coercion is intentionally narrow: it only fixes the cases where a value
+  // arrived as the "wrong" primitive (string from a CLI flag, JSON-parsed
+  // value from a subflow caller). It never silently drops information.
   const resolvedInputs: Record<string, unknown> = {};
   for (const [name, decl] of Object.entries(flow.inputs)) {
-    if (inputs[name] !== undefined) {
-      resolvedInputs[name] = inputs[name];
-    } else if (decl.default !== undefined) {
-      resolvedInputs[name] = decl.default;
+    const provided = inputs[name];
+    const isMissing = provided === undefined || provided === null;
+
+    if (isMissing) {
+      if (decl.required !== false && decl.default === undefined) {
+        throw new Error(`Missing required input: "${name}"${decl.description ? ` — ${decl.description}` : ''}`);
+      }
+      if (decl.default !== undefined) {
+        resolvedInputs[name] = decl.default;
+      }
+      continue;
     }
+
+    let value: unknown = provided;
+
+    // Type coercion + check
+    switch (decl.type) {
+      case 'string':
+        if (typeof value !== 'string') value = String(value);
+        break;
+      case 'number':
+        if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) {
+          value = Number(value);
+        }
+        if (typeof value !== 'number' || Number.isNaN(value)) {
+          throw new Error(`Input "${name}" must be a number, got ${describe(provided)}`);
+        }
+        break;
+      case 'boolean':
+        if (value === 'true' || value === '1' || value === 1) value = true;
+        else if (value === 'false' || value === '0' || value === 0) value = false;
+        if (typeof value !== 'boolean') {
+          throw new Error(`Input "${name}" must be a boolean, got ${describe(provided)}`);
+        }
+        break;
+      case 'array':
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch { /* leave as-is, fail below */ }
+        }
+        if (!Array.isArray(value)) {
+          throw new Error(`Input "${name}" must be an array, got ${describe(provided)}`);
+        }
+        break;
+      case 'object':
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch { /* leave as-is, fail below */ }
+        }
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error(`Input "${name}" must be an object, got ${describe(provided)}`);
+        }
+        break;
+    }
+
+    // Enum check (post-coercion)
+    if (Array.isArray(decl.enum) && decl.enum.length > 0) {
+      if (!decl.enum.some(allowed => allowed === value)) {
+        throw new Error(`Input "${name}" must be one of ${JSON.stringify(decl.enum)}, got ${JSON.stringify(value)}`);
+      }
+    }
+
+    resolvedInputs[name] = value;
   }
 
-  // Build context
+  // Build context. When resuming (or when FlowRunner pre-creates the
+  // context), the caller's `input` map is the raw, un-coerced one — we
+  // overwrite it with the validated/coerced inputs so that `$.input.X`
+  // selectors see the right types.
   const context: FlowContext = resumeState?.context || {
     input: resolvedInputs,
     env: process.env as Record<string, string | undefined>,
     steps: {},
     loop: {},
   };
+  context.input = resolvedInputs;
 
   const completedStepIds = resumeState
     ? new Set(resumeState.completedSteps)

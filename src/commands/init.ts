@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { writeConfig, readConfig, getConfigPath, getAccessControl } from '../lib/config.js';
+import { writeConfig, readConfig, getConfigPath, getApiBase, getAccessControl } from '../lib/config.js';
 import {
   getAllAgents,
   installMcpConfig,
@@ -21,6 +21,8 @@ import { configCommand } from './config.js';
 import open from 'open';
 import * as output from '../lib/output.js';
 import type { Agent } from '../lib/types.js';
+import { writeInstalledSkillVersion } from '../lib/skill-sync.js';
+import { getCurrentVersion } from './update.js';
 
 export async function initCommand(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
   if (output.isAgentMode()) {
@@ -189,7 +191,7 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
   const spinner = p.spinner();
   spinner.start('Validating API key...');
 
-  const api = new OneApi(newKey);
+  const api = new OneApi(newKey, getApiBase());
   const isValid = await api.validateApiKey();
 
   if (!isValid) {
@@ -407,6 +409,9 @@ function installSkillForAgents(agentIds: string[]): { installed: string[]; faile
       fs.rmSync(canonical, { recursive: true });
     }
     copyDirSync(source, canonical);
+    // Stamp the canonical install with the CLI version so skill-sync can
+    // auto-refresh it on future CLI upgrades without re-running `one init`.
+    writeInstalledSkillVersion(getCurrentVersion());
   } catch {
     return { installed: [], failed: ['canonical copy'] };
   }
@@ -699,7 +704,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   const spinner = p.spinner();
   spinner.start('Validating API key...');
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const isValid = await api.validateApiKey();
 
   if (!isValid) {
@@ -759,7 +764,7 @@ const TOP_INTEGRATIONS = [
 ];
 
 async function promptConnectIntegrations(apiKey: string): Promise<void> {
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const connected: string[] = [];
 
   // Check which top integrations are already connected

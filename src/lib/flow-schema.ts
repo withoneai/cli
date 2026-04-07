@@ -60,6 +60,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     default:     { type: 'unknown', required: false, description: 'Default value if not provided' },
     description: { type: 'string', required: false, description: 'Human-readable description' },
     connection:  { type: 'object', required: false, description: 'Connection metadata: { platform: "gmail" } — enables auto-resolution' },
+    enum:        { type: 'array',  required: false, description: 'Allowed values. Resolved input must equal one of these (post-coercion).' },
   },
 
   stepCommonFields: {
@@ -68,6 +69,9 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     type:   { type: 'string', required: true, description: 'Step type (determines which config object is required)' },
     if:     { type: 'string', required: false, description: 'JS expression — skip step if falsy' },
     unless: { type: 'string', required: false, description: 'JS expression — skip step if truthy' },
+    timeoutMs: { type: 'number', required: false, description: 'Wall-clock timeout (ms). On expiry the step fails with errorCode:"TIMEOUT"; with onError:continue the result gets status:"timeout".' },
+    requires:  { type: 'array', required: false, description: 'Presence preconditions: array of $.input.X or $.steps.X.output... selectors that must resolve to a non-empty value before the step runs. Failures honor onError.' },
+    outputSchema: { type: 'object', required: false, description: 'Optional declaration of the shape this step\'s output produces. When set, the validator checks that downstream $.steps.<this.id>.output.<field> references point at declared fields. Format: { fieldName: "string"|"number"|"boolean"|"object"|"array"|"unknown" } — nested objects are supported.' },
   },
 
   stepTypes: [
@@ -109,13 +113,14 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'code',
       configKey: 'code',
-      description: 'Multi-line async JS with explicit return',
+      description: 'JS code — inline source or an external .mjs module under the flow\'s lib/ folder',
       fields: {
-        source: { type: 'string', required: true, description: 'JS function body (flow context as $, supports await)' },
+        source: { type: 'string', required: false, description: 'Inline JS function body (flow context as $, supports await). Mutually exclusive with "module".' },
+        module: { type: 'string', required: false, description: 'Relative path to a .mjs file under the flow folder (e.g. "lib/normalize.mjs"). Reads $ from stdin as JSON, writes result to stdout as JSON. Mutually exclusive with "source".' },
       },
       example: {
         id: 'processData', name: 'Process and enrich data', type: 'code',
-        code: { source: 'const items = $.steps.fetch.response.data;\nreturn items.filter(i => i.active);' },
+        code: { module: 'lib/process-data.mjs' },
       },
     },
     {
@@ -254,11 +259,11 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'bash',
       configKey: 'bash',
-      description: 'Shell command (requires --allow-bash)',
+      description: 'Shell command (requires --allow-bash). Output shape: $.steps.<id>.output is the parsed JSON when parseJson:true, otherwise the trimmed stdout string. $.steps.<id>.response always exposes { stdout, stderr, exitCode }.',
       fields: {
         command:   { type: 'string', required: true, description: 'Shell command to execute (supports selectors)' },
         timeout:   { type: 'number', required: false, description: 'Timeout in ms (default: 30000)' },
-        parseJson: { type: 'boolean', required: false, description: 'Parse stdout as JSON (default: false)' },
+        parseJson: { type: 'boolean', required: false, description: 'Parse stdout as JSON (default: false). When true, $.steps.<id>.output is the parsed object/array; when false, it is the trimmed stdout string.' },
         cwd:       { type: 'string', required: false, description: 'Working directory (supports selectors)' },
         env:       { type: 'object', required: false, description: 'Additional environment variables' },
       },
@@ -318,7 +323,32 @@ export function generateFlowGuide(): string {
 
 ## Overview
 
-Workflows are JSON files at \`.one/flows/<key>.flow.json\` that chain actions across platforms.
+Workflows live in \`.one/flows/\` (relative to your current working directory — the CLI does NOT walk up parent directories or fall back to a global location) and chain actions across platforms. Two layouts are supported:
+
+- **Folder layout (REQUIRED for new flows)** — \`.one/flows/<key>/flow.json\`, with an optional \`lib/\` subfolder for JavaScript modules. This is like a skill: the folder groups the JSON spec with any JavaScript modules it needs, so the whole flow is shareable. **Always create new flows in this layout.**
+- **Single-file layout (DEPRECATED)** — \`.one/flows/<key>.flow.json\`. Still loads and runs for backward compatibility, but is deprecated. Do not create new flows in this layout. When editing an existing single-file flow, migrate it to the folder layout: move \`<key>.flow.json\` to \`<key>/flow.json\` and extract any non-trivial \`code.source\` blocks into \`<key>/lib/*.mjs\` modules.
+
+When resolving a flow by key, the CLI checks the folder layout first, then the deprecated legacy file. The \`loadFlow\` helper in agent integrations behaves the same.
+
+## Before you execute a flow you did NOT author — READ THIS
+
+**Agents: always inspect a flow before running it.** Nothing about a flow's runtime requirements is guessable from its name. Before \`flow execute\`, do one of these:
+
+1. Run \`one --agent flow list\` — the JSON output includes \`requiresBash\`, \`usesCodeModules\`, \`inputs\` (with \`autoResolvable\` flags), \`stepTypes\`, and the flow's \`description\`. This is the fastest path.
+2. Read the flow's \`description\` field directly from the JSON. Flow authors are required (see "Author conventions" below) to state any \`--allow-bash\` requirement and any non-auto-resolving inputs in the description.
+3. Run \`one --agent flow execute <key> --dry-run\` to see the resolved inputs and step plan without side effects.
+
+If you skip this step you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* — the CLI now pre-flights and fails fast, so you won't waste a long run, but the error is still avoidable by reading first.
+
+## Author conventions — WRITE flows that are safe to execute blind
+
+When you create a flow, its \`description\` field is the contract with future executors (human or agent). It MUST state:
+
+- **\`--allow-bash\` if any step is type \`bash\`.** Example: *"Fetches recent Gmail threads and summarizes them with Claude Haiku. Requires \`--allow-bash\`."*
+- **Every input that does NOT have a \`connection\` hint.** Connection inputs auto-resolve when exactly one matching connection exists; everything else must be passed via \`-i name=value\` and the description must name it.
+- **Any files/directories the flow writes to** so operators know what will be modified on disk.
+
+A good description is one paragraph. If a flow's description doesn't tell you how to run it, treat that as a bug in the flow and fix it.
 
 ## Commands
 
@@ -335,7 +365,69 @@ one --agent flow resume <runId>                        # Resume failed run
 one --agent flow scaffold [template]                   # Generate a starter template
 \`\`\`
 
-You can also write the JSON file directly to \`.one/flows/<key>.flow.json\` — this is often easier than passing large JSON via --definition.
+You can also write the JSON file directly to \`.one/flows/<key>/flow.json\` — often easier than passing large JSON via --definition. (The legacy \`.one/flows/<key>.flow.json\` single-file location is deprecated; don't use it for new flows.)
+
+## Code modules (flow \`lib/\` folder)
+
+A \`code\` step can either inline JS (\`code.source\`) or reference an external \`.mjs\` module (\`code.module\`). Modules live under the flow's \`lib/\` folder and run as a child \`node\` process:
+
+\`\`\`
+.one/flows/my-flow/
+├── flow.json
+└── lib/
+    └── process-data.mjs
+\`\`\`
+
+**Module contract:** the flow context \`$\` is piped to stdin as JSON; the module writes its result to stdout as JSON. That's the whole interface — no framework imports, no magic.
+
+\`\`\`js
+// lib/process-data.mjs
+const $ = JSON.parse(await new Response(process.stdin).text());
+const items = $.steps.fetch.response.data ?? [];
+process.stdout.write(JSON.stringify(items.filter(i => i.active)));
+\`\`\`
+
+\`\`\`json
+{
+  "id": "processData",
+  "name": "Process and enrich data",
+  "type": "code",
+  "code": { "module": "lib/process-data.mjs" }
+}
+\`\`\`
+
+Modules are full Node processes — \`fs\`, \`https\`, any npm package installed in the host project, etc. are all available. Use this for anything non-trivial; keep \`code.source\` for one-liners.
+
+**Step output shape:** whatever JSON a module writes to stdout becomes both \`$.steps.<id>.output\` and \`$.steps.<id>.response\` (aliases). Downstream steps can reference either; convention is to use \`.output\` for code/transform step results and \`.response\` for action step API payloads.
+
+## Migrating a legacy single-file flow to the folder layout
+
+If you're editing an existing \`.one/flows/<key>.flow.json\`, migrate it — it takes a minute and the result is cleaner. Checklist:
+
+1. \`mkdir -p .one/flows/<key>/lib\`
+2. Move the file: \`mv .one/flows/<key>.flow.json .one/flows/<key>/flow.json\`
+3. For each non-trivial \`code\` step with inline \`source\`, extract it into \`lib/<step-id>.mjs\` (see translation pattern below) and swap the step config from \`{ "source": "..." }\` to \`{ "module": "lib/<step-id>.mjs" }\`. One-liners can stay inline.
+4. Validate: \`one --agent flow validate <key>\`.
+5. Run it and confirm behavior is unchanged.
+
+**Inline source → module translation pattern.** Inline \`code.source\` is an async function body where \`$\` is already in scope and you \`return\` the result. A module is a standalone script where you read \`$\` from stdin and write the result to stdout as JSON. The transform is mechanical:
+
+Before (inline \`code.source\`):
+\`\`\`js
+const items = $.steps.fetch.response.data;
+const active = items.filter(i => i.active);
+return { active, count: active.length };
+\`\`\`
+
+After (\`lib/<step-id>.mjs\`):
+\`\`\`js
+const $ = JSON.parse(await new Response(process.stdin).text());
+const items = $.steps.fetch.response.data;
+const active = items.filter(i => i.active);
+process.stdout.write(JSON.stringify({ active, count: active.length }));
+\`\`\`
+
+The only differences: (1) prepend the stdin-read line, (2) replace \`return X\` with \`process.stdout.write(JSON.stringify(X))\`. That's it.
 
 ## Building a Workflow
 
@@ -416,7 +508,7 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
     sections.push(`| \`${name}\` | ${fd.type} | ${fd.required ? 'yes' : 'no'} | ${fd.description} |`);
   }
 
-  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000 }\` |`);
+  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000, "retryOn": [429, 502, "ETIMEDOUT"], "failFastOn": [401, 403, 404] }\`. \`retryOn\`/\`failFastOn\` (cli#53) make retries conditional on the error code/status — \`failFastOn\` matches skip the retry entirely. |`);
 
   // Step types table
   sections.push(`
@@ -466,11 +558,35 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
 | \`$.loop.item\` / \`$.loop.i\` | Loop iteration |
 | \`"Hello {{$.steps.getUser.response.name}}"\` | String interpolation |
 
+### Context-aware escape pipes (cli#53)
+
+Handlebars interpolations support pipe-based escaping for safe embedding into shell commands, JSON, URLs, markdown, or HTML:
+
+| Pipe | Effect |
+|------|--------|
+| \`{{ $.x \\| json }}\`  | \`JSON.stringify\` (handles quotes, newlines, unicode) |
+| \`{{ $.x \\| shell }}\` | POSIX-shell-quote — safe inside bash arguments |
+| \`{{ $.x \\| url }}\`   | \`encodeURIComponent\` |
+| \`{{ $.x \\| md }}\`    | Escape markdown structural characters |
+| \`{{ $.x \\| html }}\`  | Entity-escape \`& < > " '\` |
+
+Pipes can be applied to any value (objects/arrays are JSON-stringified first for shell/url/md/html). An unknown pipe name throws at runtime. The legacy \`{{q $.x}}\` shell-quote helper still works but new flows should prefer \`{{$.x | shell}}\`.
+
 ### When to use bare selectors vs \`{{...}}\` interpolation
 
 - **Bare selectors** (\`$.input.x\`): Use for fields the engine resolves directly — \`connectionKey\`, \`over\`, \`path\`, \`expression\`, \`condition\`, and any field where the entire value is a single selector. The resolved value keeps its original type (object, array, number).
 - **Interpolation** (\`{{$.input.x}}\`): Use inside string values where the selector is embedded in text — e.g., \`"Hello {{$.steps.getUser.response.name}}"\`. The resolved value is always stringified. Use this in \`data\`, \`pathVars\`, and \`queryParams\` when mixing selectors with literal text.
 - **Rule of thumb**: If the value is purely a selector, use bare. If it's a string containing a selector, use \`{{...}}\`.
+
+### Selectors vs expressions
+
+Selectors in data fields (\`data\`, \`queryParams\`, \`pathVars\`, \`connectionKey\`) are **dot-path lookups only** — they do not support JavaScript operators like \`||\` or \`&&\`. For default values, use the \`default\` field on the input definition:
+
+\`\`\`json
+{ "inputs": { "maxResults": { "type": "number", "default": 10 } } }
+\`\`\`
+
+The \`if\`, \`unless\`, \`condition.expression\`, \`while.condition\`, \`transform.expression\`, and \`code.source\` fields **do** support full JavaScript expressions (e.g., \`$.input.email && $.input.email.length > 0\`).
 
 ### \`output\` vs \`response\` on step results
 
@@ -479,6 +595,39 @@ Every completed step produces both \`output\` and \`response\`:
 - **Code/transform steps**: \`output\` is the return value. \`response\` is an alias for \`output\`.
 - **In practice**: Use \`$.steps.stepId.response\` for action steps (API data) and \`$.steps.stepId.output\` for code/transform steps (computed data). Both work interchangeably, but using the semantically correct one makes flows easier to read.
 
+### Step result metadata (\`status\`, \`error\`, \`errorCode\`)
+
+Every step result also exposes execution metadata that downstream steps can inspect:
+
+| Field | Values | When set |
+|-------|--------|----------|
+| \`$.steps.X.status\` | \`"success"\` \\| \`"skipped"\` \\| \`"failed"\` \\| \`"timeout"\` | Always |
+| \`$.steps.X.error\` | error message string | When status is \`failed\` or \`timeout\` |
+| \`$.steps.X.errorCode\` | machine-readable code (e.g. \`"TIMEOUT"\`) | When the error has a code |
+| \`$.steps.X.durationMs\` | number | Always |
+| \`$.steps.X.retries\` | number | When the step was retried |
+
+This lets downstream steps distinguish \`skipped\` (\`if\` condition false) from \`failed\` (error, \`onError:continue\`) from \`timeout\` (exceeded \`timeoutMs\`) — e.g. \`"if": "$.steps.enrichment.status === 'timeout'"\` to retry with a longer window.
+
+### Sub-flow output (flattened)
+
+When a step has \`type: "flow"\`, the sub-flow's final step output is flattened onto the parent step's \`output\`:
+
+\`\`\`jsonc
+// Sub-flow "sub-consts" has a final step "load" that returns { CHART_URL, API_KEY }
+
+// Preferred (flattened):
+"{{$.steps.loadConfig.output.CHART_URL}}"
+
+// Legacy nested path (still works for backward compatibility):
+"{{$.steps.loadConfig.output.load.output.CHART_URL}}"
+
+// Escape hatch for programmatic access to the full sub-flow steps map:
+"{{$.steps.loadConfig.output._steps.load.output.CHART_URL}}"
+\`\`\`
+
+If a sub-step id collides with a flattened field name, the flattened field wins and the engine emits a \`flow:warning\` event.
+
 ## Error Handling
 
 \`\`\`json
@@ -486,6 +635,68 @@ Every completed step produces both \`output\` and \`response\`:
 \`\`\`
 
 Strategies: \`${FLOW_SCHEMA.errorStrategies.join('\`, \`')}\`
+
+**Conditional retry (cli#53):** add \`retryOn\` and/or \`failFastOn\` to discriminate transient errors from permanent ones. \`failFastOn\` takes precedence; \`retryOn\` (when set) requires a match for the retry to happen. Numbers match against any 3-digit substring of the error message (HTTP statuses); strings match against \`error.errorCode\` exactly OR as a case-insensitive substring of the message.
+
+\`\`\`json
+{
+  "onError": {
+    "strategy": "retry",
+    "retries": 4,
+    "backoff": "exponential",
+    "retryOn":    [429, 502, 503, "ETIMEDOUT", "ECONNRESET"],
+    "failFastOn": [401, 403, 404]
+  }
+}
+\`\`\`
+
+## Step Output Contracts (\`outputSchema\`, cli#59)
+
+Declare a step's output shape so the validator catches downstream field-name typos at flow load time:
+
+\`\`\`json
+{
+  "id": "research",
+  "type": "flow",
+  "flow": { "key": "company-research" },
+  "outputSchema": {
+    "company": "string",
+    "charCount": "number",
+    "quality": { "confidence": "string", "score": "number" }
+  }
+}
+\`\`\`
+
+Field types: \`string\`, \`number\`, \`boolean\`, \`object\`, \`array\`, \`unknown\`. Nested objects describe sub-fields. Any \`$.steps.<id>.output.<field>\` reference from a downstream step is checked against the schema; unknown fields fail validation. The runtime engine does not enforce the schema — it's a documentation / wiring-bug aid.
+
+## Bash structured env vars (cli#54)
+
+A \`bash\` step's \`env\` map accepts two structured forms in addition to plain strings:
+
+\`\`\`json
+{
+  "type": "bash",
+  "bash": {
+    "env": {
+      "PAYLOAD_FILE": { "json": "$.steps.buildConfig.output" },
+      "COMPANY":      { "shell": "$.input.companyName" }
+    },
+    "command": "curl -X POST $ENDPOINT -d @$PAYLOAD_FILE && echo \\"$COMPANY\\""
+  }
+}
+\`\`\`
+
+- \`{ "json": <selector|value> }\` — JSON-serialized to a temp file; the env var holds the temp file path. Auto-cleaned after the step runs (success or failure).
+- \`{ "shell": <selector|value> }\` — exposed as a plain string env var; reference inside bash double quotes (\`"$VAR"\`).
+- A plain string is the legacy form (interpolated as-is, caller is responsible for escaping).
+
+## Dynamic sub-flow dispatch (cli#61)
+
+A \`flow\` step's \`flow.key\` accepts selectors and Handlebars interpolations, so a single orchestrator can route to different sub-flows at runtime:
+
+\`\`\`json
+{ "type": "flow", "flow": { "key": "{{$.input.target}}", "inputs": { "company": "$.input.company" } } }
+\`\`\`
 
 Conditional execution: \`"if": "$.steps.prev.response.data.length > 0"\`
 
@@ -574,7 +785,8 @@ Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, n
 
 - Connection keys are **inputs**, not hardcoded
 - Action IDs in examples are placeholders — always use \`actions search\`
-- Code steps allow \`crypto\`, \`buffer\`, \`url\`, \`path\` — \`fs\`, \`http\`, \`child_process\` are blocked
+- Inline \`code.source\` steps allow \`require('crypto' | 'buffer' | 'url' | 'path')\` — \`fs\`, \`http\`, \`child_process\` are blocked
+- For anything beyond one-liners, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout
 - Bash steps require \`--allow-bash\` flag
 - State is persisted after every step — resume picks up where it left off`);
 

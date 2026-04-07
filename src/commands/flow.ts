@@ -1,13 +1,14 @@
 import pc from 'picocolors';
-import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
-import { FlowRunner, loadFlow, listFlows, saveFlow, resolveFlowPath } from '../lib/flow-runner.js';
+import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash } from '../lib/flow-runner.js';
 import type { Flow, FlowEvent } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
 import fs from 'node:fs';
+import path from 'node:path';
 
 function getConfig() {
   const apiKey = getApiKey();
@@ -153,14 +154,19 @@ export async function flowExecuteCommand(
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const { apiKey, permissions, actionIds } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
   spinner.start(`Loading workflow "${keyOrPath}"...`);
 
   let flow: Flow;
+  let rootDir: string;
+  let flowFilePath: string;
   try {
-    flow = loadFlow(keyOrPath);
+    const loaded = loadFlowWithMeta(keyOrPath);
+    flow = loaded.flow;
+    rootDir = loaded.rootDir;
+    flowFilePath = loaded.filePath;
   } catch (err) {
     spinner.stop('Workflow not found');
     output.error(err instanceof Error ? err.message : String(err));
@@ -168,6 +174,37 @@ export async function flowExecuteCommand(
   }
 
   spinner.stop(`Workflow: ${flow.name} (${flow.steps.length} steps)`);
+
+  // Pre-flight validation — catches schema/syntax errors before any step runs.
+  const preflightErrors = validateFlow(flow, rootDir);
+  if (preflightErrors.length > 0) {
+    if (output.isAgentMode()) {
+      output.json({ error: 'Validation failed', errors: preflightErrors });
+      process.exit(1);
+    }
+    output.error(`Validation failed:\n${preflightErrors.map(e => `  ${e.path}: ${e.message}`).join('\n')}`);
+  }
+
+  // Deprecation warning: legacy single-file layout (`.one/flows/<key>.flow.json`)
+  if (flowFilePath.endsWith('.flow.json')) {
+    const msg = `Workflow "${flow.key}" uses the deprecated single-file layout. Migrate to .one/flows/${flow.key}/flow.json (see: one guide flows).`;
+    if (output.isAgentMode()) {
+      output.json({ event: 'flow:deprecation', flowKey: flow.key, warning: msg });
+    } else {
+      console.error(pc.yellow(`⚠ ${msg}`));
+    }
+  }
+
+  // Pre-flight: if the flow has bash steps, require --allow-bash upfront so
+  // we fail fast instead of partway through a long run.
+  if (!options.allowBash && flowRequiresBash(flow)) {
+    const msg = `Workflow "${flow.key}" contains bash steps. Re-run with --allow-bash to permit shell execution.`;
+    if (output.isAgentMode()) {
+      output.json({ error: msg, requiresBash: true, flowKey: flow.key });
+      process.exit(1);
+    }
+    output.error(msg);
+  }
 
   const inputs = parseInputs(options.input || []);
   const resolvedInputs = await autoResolveConnectionInputs(flow, inputs, api);
@@ -212,6 +249,7 @@ export async function flowExecuteCommand(
       mock: options.mock,
       verbose: options.verbose,
       allowBash: options.allowBash,
+      rootDir,
       onEvent,
     });
 
@@ -291,16 +329,18 @@ export async function flowListCommand(): Promise<void> {
     [
       { key: 'key', label: 'Key' },
       { key: 'name', label: 'Name' },
-      { key: 'description', label: 'Description' },
+      { key: 'layout', label: 'Layout' },
       { key: 'inputCount', label: 'Inputs' },
       { key: 'stepCount', label: 'Steps' },
+      { key: 'flags', label: 'Requires' },
     ],
     flows.map(f => ({
       key: f.key,
       name: f.name,
-      description: f.description || '',
+      layout: f.layout,
       inputCount: String(f.inputCount),
       stepCount: String(f.stepCount),
+      flags: f.requiresBash ? '--allow-bash' : '',
     })),
   );
   console.log();
@@ -313,16 +353,27 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
   spinner.start(`Validating "${keyOrPath}"...`);
 
   let flowData: unknown;
+  let rootDir: string | undefined;
   try {
-    const flowPath = resolveFlowPath(keyOrPath);
-    const content = fs.readFileSync(flowPath, 'utf-8');
-    flowData = JSON.parse(content);
+    // Prefer loadFlowWithMeta so we get rootDir for code-module syntax checks.
+    // Fall back to a raw JSON read if the path doesn't resolve (e.g. malformed
+    // flows that loadFlowWithMeta refuses to parse).
+    try {
+      const loaded = loadFlowWithMeta(keyOrPath);
+      flowData = loaded.flow;
+      rootDir = loaded.rootDir;
+    } catch {
+      const flowPath = resolveFlowPath(keyOrPath);
+      const content = fs.readFileSync(flowPath, 'utf-8');
+      flowData = JSON.parse(content);
+      rootDir = path.dirname(flowPath);
+    }
   } catch (err) {
     spinner.stop('Validation failed');
     output.error(`Could not read workflow: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const errors = validateFlow(flowData);
+  const errors = validateFlow(flowData, rootDir);
 
   if (errors.length > 0) {
     spinner.stop('Validation failed');
@@ -363,11 +414,14 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   }
 
   const { apiKey, permissions, actionIds } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   let flow: Flow;
+  let rootDir: string;
   try {
-    flow = loadFlow(state!.flowKey);
+    const loaded = loadFlowWithMeta(state!.flowKey);
+    flow = loaded.flow;
+    rootDir = loaded.rootDir;
   } catch (err) {
     output.error(`Could not load workflow "${state!.flowKey}": ${err instanceof Error ? err.message : String(err)}`);
     return;
@@ -385,7 +439,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   spinner.start(`Resuming run ${runId} (${state!.completedSteps.length} steps already completed)...`);
 
   try {
-    const context = await runner.resume(flow, api, permissions, actionIds, { onEvent });
+    const context = await runner.resume(flow, api, permissions, actionIds, { onEvent, rootDir });
     spinner.stop('Workflow completed');
 
     if (output.isAgentMode()) {
