@@ -428,6 +428,14 @@ Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 
 `exponential` waits `retryDelayMs * 2^(retryIndex)` (1s, 2s, 4s, 8s…) capped at `maxDelayMs`. `exponential-jitter` multiplies each wait by a random factor in [0.5, 1.0) so concurrent retries spread out.
 
+**Inspecting retry outcomes.** Every retried step exposes how it ended on its `StepResult`:
+
+- `$.steps.<id>.status` — `"success"` or `"failed"`
+- `$.steps.<id>.retries` — number of retries actually performed (0 if first attempt succeeded)
+- `$.steps.<id>.error` — last error message (only set when `status === "failed"` under `continue`/`fallback` strategies)
+
+A successful-after-retry step also emits a `step:retry-success` event with the retry count, so you can distinguish a clean first-attempt success from a recovered one in logs.
+
 Conditional execution: `"if": "$.steps.find.response.data.length > 0"`
 
 ## AI-Augmented Patterns

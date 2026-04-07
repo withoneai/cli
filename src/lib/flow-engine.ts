@@ -874,7 +874,17 @@ export async function executeSingleStep(
       }
 
       result.durationMs = Date.now() - startTime;
-      if (attempt > 1) result.retries = attempt - 1;
+      if (attempt > 1) {
+        result.retries = attempt - 1;
+        // Surface a clear "succeeded after N retries" event so observers
+        // (and downstream tooling) can distinguish a clean run from a
+        // recovered run.
+        options.onEvent?.({
+          event: 'step:retry-success',
+          stepId: step.id,
+          retries: attempt - 1,
+        });
+      }
       context.steps[step.id] = result;
       return result;
     } catch (err) {
@@ -890,12 +900,14 @@ export async function executeSingleStep(
   // Handle error with strategy
   const errorMessage = lastError?.message || 'Unknown error';
   const strategy = step.onError?.strategy || 'fail';
+  const retriesUsed = Math.max(0, maxAttempts - 1);
 
   if (strategy === 'continue') {
     const result: StepResult = {
       status: 'failed',
       error: errorMessage,
       durationMs: Date.now() - startTime,
+      retries: retriesUsed,
     };
     context.steps[step.id] = result;
     return result;
@@ -908,6 +920,7 @@ export async function executeSingleStep(
       status: 'failed',
       error: errorMessage,
       durationMs: Date.now() - startTime,
+      retries: retriesUsed,
     };
     context.steps[step.id] = result;
     return result;
