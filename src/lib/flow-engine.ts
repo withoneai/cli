@@ -83,18 +83,32 @@ export function resolveSelector(selectorPath: string, context: FlowContext): unk
   return current;
 }
 
+/**
+ * POSIX-shell-quote a string so it can be safely interpolated into a bash
+ * command. Wraps in single quotes and escapes any embedded single quotes
+ * using the standard `'\''` close-reopen trick.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export function interpolateString(str: string, context: FlowContext): string {
-  return str.replace(/\{\{(\$\.[^}]+)\}\}/g, (_match, selector) => {
+  // Supports two token shapes:
+  //   {{$.path.to.value}}        — raw stringification (string interp)
+  //   {{q $.path.to.value}}      — POSIX-shell-quoted, safe for bash steps
+  return str.replace(/\{\{\s*(q\s+)?(\$\.[^}\s]+)\s*\}\}/g, (_match, qFlag, selector) => {
     const value = resolveSelector(selector, context);
-    if (value === undefined || value === null) return '';
+    if (value === undefined || value === null) return qFlag ? `''` : '';
     if (typeof value === 'object') {
       console.warn(
-        `[flow] WARNING: Handlebars expression "{{${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
+        `[flow] WARNING: Handlebars expression "{{${qFlag ? 'q ' : ''}${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
         `To pass objects/arrays as native values, use a direct selector without {{ }}: "${selector}"`
       );
-      return JSON.stringify(value);
+      const json = JSON.stringify(value);
+      return qFlag ? shellQuote(json) : json;
     }
-    return String(value);
+    const str = String(value);
+    return qFlag ? shellQuote(str) : str;
   });
 }
 
@@ -104,8 +118,8 @@ export function resolveValue(value: unknown, context: FlowContext): unknown {
     if (value.startsWith('$.') && !value.includes('{{')) {
       return resolveSelector(value, context);
     }
-    // String with interpolation
-    if (value.includes('{{$.')) {
+    // String with interpolation ({{$.x}} or {{q $.x}})
+    if (value.includes('{{$.') || /\{\{\s*q\s+\$\./.test(value)) {
       return interpolateString(value, context);
     }
     return value;

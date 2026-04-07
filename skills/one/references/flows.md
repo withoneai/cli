@@ -404,6 +404,26 @@ e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme
 }
 ```
 
+**Safe interpolation.** Plain `{{$.input.x}}` does string substitution and is **unsafe** for bash — values containing quotes, `$`, backticks, `&`, etc. will break the command (or worse). Use the `q` helper to POSIX-shell-quote the value:
+
+```json
+{ "command": "echo {{q $.input.companyName}} | tr '[:upper:]' '[:lower:]'" }
+```
+
+`{{q $.input.companyName}}` resolves `O'Reilly Media & Co` to `'O'\''Reilly Media & Co'` — a single argv token bash will parse cleanly. Use `{{q ...}}` for **every** interpolation of user-controlled data into a bash command.
+
+Alternatively, pass values as environment variables (also shell-safe) and reference them with `$VAR`:
+
+```json
+{
+  "type": "bash",
+  "bash": {
+    "env": { "COMPANY": "$.input.companyName" },
+    "command": "echo \"$COMPANY\" | tr '[:upper:]' '[:lower:]'"
+  }
+}
+```
+
 ## Error Handling
 
 ```json
