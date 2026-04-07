@@ -64,7 +64,13 @@ export function interpolateString(str: string, context: FlowContext): string {
   return str.replace(/\{\{(\$\.[^}]+)\}\}/g, (_match, selector) => {
     const value = resolveSelector(selector, context);
     if (value === undefined || value === null) return '';
-    if (typeof value === 'object') return JSON.stringify(value);
+    if (typeof value === 'object') {
+      console.warn(
+        `[flow] WARNING: Handlebars expression "{{${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
+        `To pass objects/arrays as native values, use a direct selector without {{ }}: "${selector}"`
+      );
+      return JSON.stringify(value);
+    }
     return String(value);
   });
 }

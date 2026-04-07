@@ -187,6 +187,16 @@ Connection inputs with a `connection` field auto-resolve if the user has exactly
 
 A pure `$.xxx` value resolves to the raw type. A string containing `{{$.xxx}}` does string interpolation.
 
+**Passing objects and arrays:** `{{ }}` interpolation always produces a string — if the resolved value is an object or array it will be JSON-stringified and the engine will log a warning. To pass an object/array as a native value to the next step, use a **direct selector without `{{ }}`**:
+
+```json
+// ✗ Wrong — becomes a JSON string, triggers a runtime warning
+"files": "{{$.steps.extract.output.allFiles}}"
+
+// ✓ Right — passes the array as an array
+"files": "$.steps.extract.output.allFiles"
+```
+
 ### Selectors vs expressions
 
 Selectors in data fields (`data`, `queryParams`, `pathVars`, `connectionKey`) are **dot-path lookups only** — they do not support JavaScript operators like `||` or `&&`. For default values, use the `default` field on the input definition:
