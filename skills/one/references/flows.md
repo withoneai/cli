@@ -130,6 +130,8 @@ Two rules: (1) prepend the stdin-read line, (2) replace `return X` with `process
 one --agent flow validate <key>
 ```
 
+`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. The same checks now also run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
+
 ### Step 6: Execute
 
 ```bash

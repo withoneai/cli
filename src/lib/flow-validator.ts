@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import type { Flow, FlowStep, FlowStepType } from './flow-types.js';
 import { FLOW_SCHEMA, getStepTypeDescriptor, getNestedStepsKeys } from './flow-schema.js';
 
@@ -193,6 +196,14 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
           errors.push({ path: `${path}.${configKey}.module`, message: 'Code module must be a .mjs file' });
         }
       }
+      // Static syntax check of inline code source — catches brace/paren mismatches,
+      // duplicate declarations, etc. before the flow runs.
+      if (hasSource) {
+        const syntaxError = checkCodeSourceSyntax(config.source as string);
+        if (syntaxError) {
+          errors.push({ path: `${path}.${configKey}.source`, message: `Syntax error in code step: ${syntaxError}` });
+        }
+      }
     }
   }
 }
@@ -211,6 +222,28 @@ function detectFlatConfigHint(step: Record<string, unknown>, descriptor: ReturnT
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ── Code step syntax check ──
+
+const AsyncFunctionCtor = Object.getPrototypeOf(async function () {}).constructor as FunctionConstructor;
+
+/**
+ * Parse-check an inline code step source the same way the engine will execute
+ * it (as the body of an async function with `$` and `require` in scope). The
+ * Function constructor parses the body but does not run it, so this is a
+ * static check — it catches syntax errors but not runtime errors.
+ *
+ * Returns the SyntaxError message, or null if the source parses cleanly.
+ */
+export function checkCodeSourceSyntax(source: string): string | null {
+  try {
+    new AsyncFunctionCtor('$', 'require', source);
+    return null;
+  } catch (err) {
+    if (err instanceof SyntaxError) return err.message;
+    return (err as Error).message;
+  }
 }
 
 // ── Step ID uniqueness ──
@@ -384,7 +417,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
 
 // ── Main entry point ──
 
-export function validateFlow(flow: unknown): ValidationError[] {
+export function validateFlow(flow: unknown, rootDir?: string): ValidationError[] {
   const schemaErrors = validateFlowSchema(flow);
   if (schemaErrors.length > 0) return schemaErrors;
 
@@ -392,5 +425,55 @@ export function validateFlow(flow: unknown): ValidationError[] {
   return [
     ...validateStepIds(f),
     ...validateSelectorReferences(f),
+    ...(rootDir ? validateCodeModules(f, rootDir) : []),
   ];
+}
+
+// ── Code module syntax check ──
+
+/**
+ * Read every `code.module` file referenced by the flow and syntax-check its
+ * contents. Catches brace/paren mismatches in `.mjs` modules at flow load
+ * time instead of after upstream steps have already run.
+ */
+export function validateCodeModules(flow: Flow, rootDir: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const nestedKeys = getNestedStepsKeys();
+
+  function walk(steps: FlowStep[], pathPrefix: string): void {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepPath = `${pathPrefix}[${i}]`;
+      if (step.type === 'code' && step.code?.module) {
+        const m = step.code.module;
+        const abs = path.resolve(rootDir, m);
+        if (!fs.existsSync(abs)) {
+          errors.push({
+            path: `${stepPath}.code.module`,
+            message: `Code module "${m}" not found at ${abs}`,
+          });
+        } else {
+          // Use `node --check` so import/export and other module-only syntax parses correctly.
+          const res = spawnSync(process.execPath, ['--check', abs], { encoding: 'utf-8' });
+          if (res.status !== 0) {
+            const msg = (res.stderr || '').split('\n').find(l => l.includes('SyntaxError') || l.includes('Error')) || res.stderr || 'Syntax check failed';
+            errors.push({
+              path: `${stepPath}.code.module`,
+              message: `Syntax error in code module "${m}": ${msg.trim()}`,
+            });
+          }
+        }
+      }
+      // Recurse into nested step arrays
+      for (const { configKey, fieldName } of nestedKeys) {
+        const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        if (config && Array.isArray(config[fieldName])) {
+          walk(config[fieldName] as FlowStep[], `${stepPath}.${configKey}.${fieldName}`);
+        }
+      }
+    }
+  }
+
+  walk(flow.steps, 'steps');
+  return errors;
 }
