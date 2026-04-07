@@ -412,6 +412,22 @@ e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme
 
 Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 
+**Retry backoff.** By default each retry waits exactly `retryDelayMs`. For rate-limited APIs add `"backoff": "exponential"` (or `"exponential-jitter"`) and an optional `"maxDelayMs"` cap (defaults to 30000):
+
+```json
+{
+  "onError": {
+    "strategy": "retry",
+    "retries": 4,
+    "retryDelayMs": 1000,
+    "backoff": "exponential-jitter",
+    "maxDelayMs": 10000
+  }
+}
+```
+
+`exponential` waits `retryDelayMs * 2^(retryIndex)` (1s, 2s, 4s, 8s…) capped at `maxDelayMs`. `exponential-jitter` multiplies each wait by a random factor in [0.5, 1.0) so concurrent retries spread out.
+
 Conditional execution: `"if": "$.steps.find.response.data.length > 0"`
 
 ## AI-Augmented Patterns

@@ -21,6 +21,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Compute the delay before retry attempt N (1-indexed first retry = attempt 2
+ * in the executor loop). Honours `backoff` and `maxDelayMs` from the step's
+ * onError config; defaults to fixed-delay so existing flows are unchanged.
+ */
+function computeRetryDelay(onError: import('./flow-types.js').FlowStepErrorConfig, attempt: number): number {
+  const base = onError.retryDelayMs ?? 1000;
+  const max = onError.maxDelayMs ?? 30_000;
+  const backoff = onError.backoff ?? 'fixed';
+  // attempt == 2 is the first retry, so the exponent is (attempt - 2)
+  const retryIndex = attempt - 2;
+  let delay: number;
+  if (backoff === 'exponential' || backoff === 'exponential-jitter') {
+    delay = Math.min(base * Math.pow(2, retryIndex), max);
+    if (backoff === 'exponential-jitter') {
+      delay = delay * (0.5 + Math.random() * 0.5);
+    }
+  } else {
+    delay = base;
+  }
+  return Math.round(delay);
+}
+
 // ── Selector Resolution ──
 
 export function resolveSelector(selectorPath: string, context: FlowContext): unknown {
@@ -782,13 +805,14 @@ export async function executeSingleStep(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) {
+        const delay = computeRetryDelay(step.onError!, attempt);
         options.onEvent?.({
           event: 'step:retry',
           stepId: step.id,
           attempt,
           maxRetries: step.onError!.retries!,
+          delayMs: delay,
         });
-        const delay = step.onError?.retryDelayMs || 1000;
         await sleep(delay);
       }
 
