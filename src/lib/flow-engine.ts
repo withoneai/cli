@@ -240,9 +240,51 @@ async function executeCodeStep(
 
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const sandboxedRequire = createSandboxedRequire();
-  const fn = new AsyncFunction('$', 'require', config.source);
-  const output = await fn(context, sandboxedRequire);
-  return { status: 'success', output, response: output };
+  // Tag the source with a sourceURL so V8 stack frames are attributable to
+  // this specific code step, then run it. On error, rewrite the stack so the
+  // line numbers reference the user's source (not the AsyncFunction wrapper)
+  // and prepend the offending line of code.
+  const sourceURL = `code:${step.id}`;
+  const taggedSource = `${config.source}\n//# sourceURL=${sourceURL}`;
+  const fn = new AsyncFunction('$', 'require', taggedSource);
+  try {
+    const output = await fn(context, sandboxedRequire);
+    return { status: 'success', output, response: output };
+  } catch (err) {
+    throw rewriteCodeStepError(err, step.id, config.source, sourceURL);
+  }
+}
+
+/**
+ * Rewrite an error thrown from inside a code step so the message points at
+ * the user's source line instead of the AsyncFunction wrapper. The
+ * `new AsyncFunction(...)` wrapper prepends 2 lines (`async function
+ * anonymous($, require\n) {`) before the user's body, so stack frame line
+ * numbers are off by 2.
+ */
+function rewriteCodeStepError(err: unknown, stepId: string, source: string, sourceURL: string): Error {
+  if (!(err instanceof Error)) return new Error(String(err));
+  const WRAPPER_LINE_OFFSET = 2;
+  const sourceLines = source.split('\n');
+  const stack = err.stack || '';
+  // Match frames like "at code:stepId:LINE:COL" or "at <anonymous> (code:stepId:LINE:COL)"
+  const re = new RegExp(`${sourceURL.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:(\\d+):(\\d+)`);
+  const match = stack.match(re);
+  if (!match) {
+    err.message = `Code step "${stepId}" failed: ${err.message}`;
+    return err;
+  }
+  const wrappedLine = parseInt(match[1], 10);
+  const col = parseInt(match[2], 10);
+  const userLine = wrappedLine - WRAPPER_LINE_OFFSET;
+  const lineContent = sourceLines[userLine - 1] ?? '';
+  const trimmed = lineContent.trim();
+  err.message = `Code step "${stepId}" failed at line ${userLine}:${col}\n  ${trimmed}\n  ${err.message}`;
+  // Also rewrite stack frames so further tooling sees user-relative lines.
+  err.stack = stack.replace(new RegExp(`(${sourceURL.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:)(\\d+)`, 'g'), (_m, prefix, l) =>
+    `${prefix}${parseInt(l, 10) - WRAPPER_LINE_OFFSET}`,
+  );
+  return err;
 }
 
 /**

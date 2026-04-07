@@ -108,6 +108,8 @@ Everything else — `fs`, `http`, `https`, `net`, `child_process`, `process`, `o
 
 If you need any of those (filesystem reads, network calls, timers, etc.), use a `code.module` step instead — modules run as a real child `node` process and have the full Node API surface.
 
+When an inline `code.source` step throws at runtime, the error message reports the user-relative line and column plus the offending line of source — e.g. `Code step "blowup" failed at line 3:34\n  const c = $.steps.mk.output.data.score;\n  Cannot read properties of null (reading 'score')`. No need to bisect the step manually.
+
 Whatever JSON a module writes to stdout becomes both `$.steps.<id>.output` and `$.steps.<id>.response` (aliases). Downstream steps can reference either.
 
 ### Migrating a legacy single-file flow
