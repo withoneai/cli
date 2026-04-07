@@ -249,6 +249,49 @@ Default TTL is 1 hour. Configure via `ONE_CACHE_TTL` environment variable or `ca
 
 Note: `actions execute` is never cached — it always hits the API fresh.
 
+### `one sync`
+
+Sync data from any connected platform into local SQLite for instant offline queries.
+
+```bash
+# Discover available models
+one sync models shopify
+
+# Create a sync profile (read actions knowledge first to understand response shape)
+one sync init shopify orders --config '{"platform":"shopify","model":"orders",...}'
+
+# Run sync
+one sync run shopify --models orders --since 90d
+
+# Query local data
+one sync query shopify/orders --where "status=unfulfilled" --limit 20
+
+# Full-text search (all platforms)
+one sync search "refund"
+
+# Raw SQL (SELECT only)
+one sync sql shopify "SELECT count(*) FROM orders"
+
+# Check sync status
+one sync list
+
+# Remove sync data
+one sync remove shopify --models orders
+```
+
+| Subcommand | What it does |
+|------------|-------------|
+| `models <platform>` | Discover available data models |
+| `init <platform> <model>` | Create or update a sync profile |
+| `run <platform>` | Sync data locally |
+| `query <platform>/<model>` | Query local data with filters |
+| `search <query>` | Full-text search across all synced data |
+| `sql <platform> <sql>` | Execute raw SQL (SELECT only) |
+| `list [platform]` | List sync profiles and status |
+| `remove <platform>` | Remove sync data and profiles |
+
+Run `one guide sync` for the full reference including pagination types, profile fields, and agent workflow.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
@@ -263,7 +306,7 @@ one --agent guide         # full guide as structured JSON
 one --agent guide flows   # single topic as JSON
 ```
 
-Topics: `overview`, `actions`, `flows`, `relay`, `cache`, `all` (default).
+Topics: `overview`, `actions`, `flows`, `relay`, `cache`, `sync`, `all` (default).
 
 In agent mode (`--agent`), the JSON response includes the guide content and an `availableTopics` array so agents can discover what sections exist.
 

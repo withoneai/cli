@@ -30,6 +30,7 @@ import {
   relayEventTypesCommand,
 } from './commands/relay.js';
 
+import { registerSyncCommands } from './lib/sync/index.js';
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
@@ -65,6 +66,16 @@ program
     one flow create [key]                 Create a workflow from JSON
     one flow execute <key>                Execute a workflow
     one flow validate <key>               Validate a flow
+
+  Data Sync:
+    one sync models <platform>            Discover available data models
+    one sync init <plat> <model>          Create a sync profile
+    one sync run <platform>               Sync data from a platform to local SQLite
+    one sync query <plat>/<model>         Query local synced data
+    one sync search "<query>"             Full-text search across all synced data
+    one sync sql <plat> "<sql>"           Execute raw SQL against local data
+    one sync list                         List sync profiles and status
+    one sync remove <platform>            Remove sync data
 
   Cache:
     one cache list                        List cached entries with age and status
@@ -383,6 +394,10 @@ relay
   });
 
 
+// ── Sync Commands ──
+
+registerSyncCommands(program);
+
 // ── Cache Commands ──
 
 const cache = program
@@ -414,7 +429,7 @@ cache
 
 program
   .command('guide [topic]')
-  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, all)')
+  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, cache, sync, all)')
   .action(async (topic?: string) => {
     await guideCommand(topic);
   });

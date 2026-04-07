@@ -112,6 +112,59 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 - Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
 - `actions execute` is NEVER cached — always fresh
 
+## Local Data Sync
+
+Sync data from any connected platform into local SQLite for instant queries without API calls.
+
+### Setup (one-time per model)
+```bash
+# 1. Discover models
+one --agent sync models shopify
+
+# 2. Read knowledge for the list action to understand response shape + pagination
+one --agent actions knowledge shopify "<listActionId>"
+
+# 3. Create sync profile
+one --agent sync init shopify orders --config '{
+  "platform": "shopify", "model": "orders",
+  "connectionKey": "<key>", "actionId": "<listActionId>",
+  "resultsPath": "orders", "idField": "id",
+  "pagination": {"type": "link", "nextPath": "link.next.page_info", "passAs": "query:page_info"},
+  "dateFilter": {"param": "created_at_min", "format": "iso8601"},
+  "defaultLimit": 250, "limitParam": "limit"
+}'
+
+# 4. Initial sync
+one --agent sync run shopify --models orders --since 90d
+```
+
+### Querying (ongoing)
+```bash
+# Query with filters
+one --agent sync query shopify/orders --where "status=unfulfilled" --limit 20
+
+# Full-text search (all platforms, or filter with --platform)
+one --agent sync search "refund acme"
+one --agent sync search "refund acme" --platform shopify
+
+# Refresh + query in one shot
+one --agent sync query shopify/orders --where "total_price>500" --refresh
+
+# Raw SQL
+one --agent sync sql shopify "SELECT count(*) FROM orders WHERE status = 'unfulfilled'"
+
+# Check freshness
+one --agent sync list shopify
+```
+
+### Key points
+- Always read `actions knowledge` before creating a sync profile — it tells you the response shape
+- Use `--dry-run` on `sync run` to verify the profile before committing to a full sync
+- Queries include `lastSync` and `syncAge` so you can judge data freshness
+- Use `--refresh` on queries to trigger incremental sync before querying
+- Pagination types: cursor, token, offset, id, link, none
+- Read `one guide sync` for the full reference
+
 ## Beyond Single Actions
 
 One also supports more advanced patterns. Read the relevant reference file before using these:

@@ -82,6 +82,18 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - \`--create-webhook\` auto-registers the webhook URL with the source platform
 - Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
 
+### 4. Sync — Local data sync for instant offline queries
+Sync data from any connected platform into local SQLite. Query instantly without network calls.
+
+**Quick start:**
+\`\`\`bash
+one --agent sync models shopify                                   # Discover models
+one --agent sync init shopify orders --config '{...}'             # Create sync profile
+one --agent sync run shopify --models orders --since 90d          # Sync data
+one --agent sync query shopify/orders --where "status=unfulfilled"  # Query locally
+one --agent sync search "refund"                                  # Full-text search (all platforms)
+\`\`\`
+
 ## Topics
 
 Request specific sections:
@@ -90,6 +102,7 @@ Request specific sections:
 - \`one guide flows\` — Workflow engine reference (step types, selectors, examples)
 - \`one guide relay\` — Webhook relay reference (templates, passthrough actions)
 - \`one guide cache\` — Cache management (TTL, flags, commands)
+- \`one guide sync\` — Data sync reference (profiles, pagination, queries)
 - \`one guide all\` — Everything
 
 ## Important Notes
@@ -329,7 +342,170 @@ All cache commands respect \`--agent\` for JSON output.
 | Default | — | 3600 (1 hour) |
 `;
 
-type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'all';
+export const GUIDE_SYNC = `# One Sync — Reference
+
+## Overview
+
+Sync data from any connected platform into a local SQLite database. Query instantly without network calls, pagination, or rate limits.
+
+## Concepts
+
+- **Model**: A data type on a platform (e.g., shopify/orders, attio/people, gmail/messages)
+- **Sync profile**: JSON config telling the CLI how to paginate and store a model's data
+- **Sync run**: The CLI pages through all results and writes them to local SQLite
+- **Sync state**: Checkpoint tracking so runs are incremental by default
+
+## Setup Workflow: models → knowledge → init → run → query
+
+\`\`\`bash
+# 1. Discover available models
+one --agent sync models shopify
+
+# 2. Read knowledge for the list action to understand pagination/response shape
+one --agent actions knowledge shopify "<actionId from step 1>"
+
+# 3. Create sync profile based on what you learned
+one --agent sync init shopify orders --config '{
+  "platform": "shopify",
+  "model": "orders",
+  "connectionKey": "<from one list>",
+  "actionId": "<from step 1>",
+  "resultsPath": "orders",
+  "idField": "id",
+  "pagination": {
+    "type": "link",
+    "nextPath": "link.next.page_info",
+    "passAs": "query:page_info"
+  },
+  "dateFilter": { "param": "created_at_min", "format": "iso8601" },
+  "defaultLimit": 250,
+  "limitParam": "limit"
+}'
+
+# 4. Run initial sync
+one --agent sync run shopify --models orders --since 90d
+
+# 5. Query local data
+one --agent sync query shopify/orders --where "status=unfulfilled" --limit 20
+\`\`\`
+
+## Commands
+
+### Discover Models
+\`\`\`bash
+one --agent sync models <platform>
+\`\`\`
+Lists data models with their list action IDs. Use these action IDs in sync profiles.
+
+### Initialize Sync Profile
+\`\`\`bash
+# Get a template (pre-populated with action ID if found)
+one --agent sync init <platform> <model>
+
+# Save a complete profile
+one --agent sync init <platform> <model> --config '<json>'
+\`\`\`
+
+### Run Sync
+\`\`\`bash
+one --agent sync run <platform> [--models m1,m2] [--since 90d] [--force] [--max-pages 10] [--dry-run]
+\`\`\`
+- Omit \`--models\` to sync all configured models for the platform
+- \`--since\`: Duration (90d, 30d, 7d) or ISO date. Default: last sync or 90 days
+- \`--force\`: Ignore checkpoints, start fresh
+- \`--dry-run\`: Fetch first page only, don't persist
+- State is saved after each page — interrupted syncs resume automatically
+
+### Query Local Data
+\`\`\`bash
+one --agent sync query <platform>/<model> [--where "field=value"] [--after date] [--before date] [--limit n] [--order-by field] [--order asc|desc]
+\`\`\`
+- \`--where\`: Comma-separated conditions: \`"status=active,plan=pro"\`
+- Operators: =, !=, >, <, >=, <=, like
+- \`--refresh\`: Trigger incremental sync before querying
+- \`--refresh-force\`: Full re-sync before querying
+- Response includes \`lastSync\` and \`syncAge\` so you can judge freshness
+
+### Full-Text Search
+\`\`\`bash
+one --agent sync search "<query>" [--platform <platform>] [--models m1,m2] [--limit 20]
+\`\`\`
+Uses SQLite FTS5 across all text fields. Searches all synced platforms by default, or filter with \`--platform\`. Results include rank scores.
+
+### Raw SQL
+\`\`\`bash
+one --agent sync sql <platform> "SELECT count(*) FROM orders WHERE status = 'unfulfilled'"
+\`\`\`
+SELECT only — sync databases are read-only.
+
+### List Syncs
+\`\`\`bash
+one --agent sync list [platform]
+\`\`\`
+
+### Remove Sync Data
+\`\`\`bash
+one --agent sync remove <platform> [--models m1,m2] [--yes]
+\`\`\`
+
+## Sync Profile Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| platform | yes | Platform slug |
+| model | yes | Model name |
+| connectionKey | yes | Connection key for API calls |
+| actionId | yes | The list action ID from sync models |
+| resultsPath | yes | Dot-path to results array (e.g., "orders", "data.items") |
+| idField | yes | Unique ID field on each record |
+| pagination | yes | Pagination config (see below) |
+| dateFilter | no | Date filter param and format |
+| defaultLimit | no | Page size (default: 100) |
+| limitParam | no | Query param for page size (default: "limit") |
+| pathVars | no | Static path variables (e.g., {"userId": "me"}) |
+| queryParams | no | Additional static query params |
+
+## Pagination Types
+
+**cursor** — cursor string at a response path:
+\`{"type": "cursor", "nextPath": "pagination.next_cursor", "passAs": "query:cursor"}\`
+
+**token** — Google-style nextPageToken:
+\`{"type": "token", "nextPath": "nextPageToken", "passAs": "query:pageToken"}\`
+
+**offset** — numeric offset incremented by page size:
+\`{"type": "offset", "passAs": "query:offset", "totalPath": "total"}\`
+
+**id** — Stripe-style starting_after:
+\`{"type": "id", "idField": "id", "passAs": "query:starting_after", "hasMorePath": "has_more"}\`
+
+**link** — cursor from Link header or response:
+\`{"type": "link", "nextPath": "link.next.page_info", "passAs": "query:page_info"}\`
+
+**none** — single request, no pagination:
+\`{"type": "none"}\`
+
+## File Layout
+
+\`\`\`
+.one/sync/
+  profiles/{platform}_{model}.json    # sync profiles
+  data/{platform}.db                  # SQLite databases
+  sync_state.json                     # checkpoint tracking
+\`\`\`
+
+Sync data is stored in the project directory (\`.one/sync/\`), not globally. This keeps data scoped per project.
+
+## Tips
+
+- Always read \`actions knowledge\` before creating a sync profile — it tells you the response shape and pagination
+- Use \`--dry-run\` first to verify your profile is correct
+- Incremental sync is automatic — just run \`sync run\` again
+- Use \`--refresh\` on queries to ensure fresh data without a separate sync command
+- FTS search works across all text fields — great for finding specific records
+`;
+
+type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'sync' | 'all';
 
 const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'overview', description: 'Setup, features, and quick start for each' },
@@ -337,6 +513,7 @@ const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'flows', description: 'Build and execute multi-step workflows' },
   { topic: 'relay', description: 'Receive webhooks and forward to other platforms' },
   { topic: 'cache', description: 'Local caching for knowledge and search responses' },
+  { topic: 'sync', description: 'Sync platform data locally for instant offline queries' },
   { topic: 'all', description: 'Complete guide (all topics combined)' },
 ];
 
@@ -352,10 +529,12 @@ export function getGuideContent(topic: GuideTopic): { title: string; content: st
       return { title: 'One CLI — Agent Guide: Relay', content: GUIDE_RELAY };
     case 'cache':
       return { title: 'One CLI — Agent Guide: Cache', content: GUIDE_CACHE };
+    case 'sync':
+      return { title: 'One CLI — Agent Guide: Sync', content: GUIDE_SYNC };
     case 'all':
       return {
         title: 'One CLI — Agent Guide: Complete',
-        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE].join('\n---\n\n'),
+        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE, GUIDE_SYNC].join('\n---\n\n'),
       };
   }
 }

@@ -110,6 +110,11 @@ export class OneApi {
     return allPlatforms;
   }
 
+  async listAvailableActions(platform: string, limit = 500): Promise<AvailableAction[]> {
+    const response = await this.request<{ rows: AvailableAction[] }>(`/available-actions/${platform}?limit=${limit}`);
+    return response.rows || [];
+  }
+
   async searchActions(
     platform: string,
     query: string,

@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
@@ -19,12 +19,14 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
+    "better-sqlite3": "^11.7.0",
     "commander": "^13.1.0",
     "open": "^10.1.0",
     "picocolors": "^1.1.1",
     "smol-toml": "^1.6.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.13.1",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3"

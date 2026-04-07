@@ -14,6 +14,7 @@ import type {
   FlowExecuteOptions,
   FlowActionConfig,
 } from './flow-types.js';
+import { getByDotPath, setByDotPath } from './dot-path.js';
 
 const execAsync = promisify(exec);
 
@@ -104,31 +105,7 @@ export function evaluateExpression(expr: string, context: FlowContext): unknown 
 
 // ── Dot-path Helpers (for pagination) ──
 
-function getByDotPath(obj: unknown, dotPath: string): unknown {
-  const parts = dotPath.split('.');
-  let current: unknown = obj;
-  for (const part of parts) {
-    if (current === null || current === undefined) return undefined;
-    if (typeof current === 'object') {
-      current = (current as Record<string, unknown>)[part];
-    } else {
-      return undefined;
-    }
-  }
-  return current;
-}
-
-function setByDotPath(obj: Record<string, unknown>, dotPath: string, value: unknown): void {
-  const parts = dotPath.split('.');
-  let current: Record<string, unknown> = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (current[parts[i]] === undefined || current[parts[i]] === null) {
-      current[parts[i]] = {};
-    }
-    current = current[parts[i]] as Record<string, unknown>;
-  }
-  current[parts[parts.length - 1]] = value;
-}
+// getByDotPath and setByDotPath imported from ./dot-path.js
 
 // ── Code Sandbox ──
 
