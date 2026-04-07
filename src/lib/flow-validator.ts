@@ -328,7 +328,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     return selectors;
   }
 
-  function checkSelectors(selectors: string[], path: string): void {
+  function checkSelectors(selectors: string[], path: string, precedingStepIds?: Set<string>): void {
     for (const selector of selectors) {
       const parts = selector.split('.');
       if (parts.length < 3) continue;
@@ -340,9 +340,14 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
           errors.push({ path, message: `Selector "${selector}" references undefined input "${inputName}"` });
         }
       } else if (root === 'steps') {
-        const stepId = parts[2];
+        const stepId = parts[2].replace(/[\[\]]/g, '').split(/[\[\]]/)[0];
         if (!allStepIds.has(stepId)) {
           errors.push({ path, message: `Selector "${selector}" references undefined step "${stepId}"` });
+        } else if (precedingStepIds && !precedingStepIds.has(stepId)) {
+          errors.push({
+            path,
+            message: `Selector "${selector}" references step "${stepId}" which is declared after the current step. Steps execute in declaration order, so this will always resolve to undefined at runtime — move the dependency earlier in the steps array.`,
+          });
         }
       }
     }
@@ -369,17 +374,16 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     }
   }
 
-  function checkStep(step: FlowStep, pathPrefix: string): void {
+  function checkStep(step: FlowStep, pathPrefix: string, preceding: Set<string>): void {
     // if/unless are JS expressions — validate selector references but allow operators
-    if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`);
-    if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`);
+    if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`, preceding);
+    if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`, preceding);
 
     // Check selectors in all config objects
     const descriptor = getStepTypeDescriptor(step.type);
     if (descriptor) {
       const config = (step as Record<string, unknown>)[descriptor.configKey];
       if (config && typeof config === 'object') {
-        // Skip deep checking for expressions (transform, code) — they use $ directly
         if (step.type !== 'transform' && step.type !== 'code') {
           for (const [fieldName, fd] of Object.entries(descriptor.fields)) {
             if (fd.stepsArray) continue; // steps are checked recursively below
@@ -387,31 +391,51 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
             if (value !== undefined) {
               const fieldKey = `${descriptor.configKey}.${fieldName}`;
               const fieldPath = `${pathPrefix}.${fieldKey}`;
-              checkSelectors(extractSelectors(value), fieldPath);
+              checkSelectors(extractSelectors(value), fieldPath, preceding);
               // For non-expression fields, detect operators that won't work at runtime
               if (!EXPRESSION_FIELDS.has(fieldKey)) {
                 checkOperatorsInSelectorField(value, fieldPath);
               }
             }
           }
+        } else {
+          // Code/transform steps: extract $.steps.X / $.input.X tokens directly
+          // from their source/expression so forward references and undefined
+          // step IDs are caught at load time (cli#44).
+          const c = config as Record<string, unknown>;
+          const codeSource = step.type === 'code' ? (c.source as string | undefined) : undefined;
+          const transformExpr = step.type === 'transform' ? (c.expression as string | undefined) : undefined;
+          const text = codeSource ?? transformExpr;
+          if (typeof text === 'string') {
+            const fieldName = step.type === 'code' ? 'source' : 'expression';
+            checkSelectors(extractSelectors(text), `${pathPrefix}.${descriptor.configKey}.${fieldName}`, preceding);
+          }
         }
       }
 
-      // Recurse into nested steps
+      // Recurse into nested steps. Inside a nested array, the parent's
+      // `preceding` set carries over (parent + earlier siblings) and we
+      // accumulate sibling IDs as we walk.
       for (const { configKey, fieldName } of nestedKeys) {
         if (configKey === descriptor.configKey) {
           const c = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
           if (c && Array.isArray(c[fieldName])) {
-            (c[fieldName] as FlowStep[]).forEach((s, i) =>
-              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`),
-            );
+            const childPreceding = new Set(preceding);
+            (c[fieldName] as FlowStep[]).forEach((s, i) => {
+              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`, childPreceding);
+              childPreceding.add(s.id);
+            });
           }
         }
       }
     }
   }
 
-  flow.steps.forEach((step, i) => checkStep(step, `steps[${i}]`));
+  const preceding = new Set<string>();
+  flow.steps.forEach((step, i) => {
+    checkStep(step, `steps[${i}]`, preceding);
+    preceding.add(step.id);
+  });
   return errors;
 }
 
