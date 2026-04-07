@@ -370,6 +370,14 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 }
 ```
 
+A sub-flow step exposes the sub-flow's **step results map** at both `.output` and `.response` (they are aliases — pick whichever reads better). Access a specific sub-step's data with:
+
+```
+$.steps.<parent>.output.<subStepId>.output.<field>
+```
+
+e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme" }`, the caller reads it as `$.steps.enrich.output.load.output.TEAM`. There is no longer any `.response.<subStepId>` vs `.output.<subStepId>` ambiguity.
+
 ### `paginate` — Auto-collect paginated results
 
 ```json

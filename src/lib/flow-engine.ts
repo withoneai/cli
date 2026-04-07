@@ -636,10 +636,15 @@ async function executeSubflowStep(
     [...flowStack, resolvedKey],
   );
 
+  // Canonicalise sub-flow output: both `.output` and `.response` expose the
+  // same value — the sub-flow's steps map, keyed by sub-step id. Previously
+  // `.response` returned the full sub-flow context (which also contained
+  // `.steps`, `.input`, `.env`), so callers saw two different shapes
+  // depending on which alias they used (cli#47).
   return {
     status: 'success',
     output: subContext.steps,
-    response: subContext,
+    response: subContext.steps,
   };
 }
 
