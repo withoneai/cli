@@ -95,6 +95,19 @@ process.stdout.write(JSON.stringify(items.filter(i => i.active)));
 
 The module runs as a child `node` process: the flow context `$` is piped to stdin as JSON, and stdout is parsed as JSON and used as the step's output. Modules have full Node APIs available (unlike inline `code.source`, which is sandboxed). Use `code.module` for anything non-trivial; keep `code.source` for one-liners.
 
+#### Inline `code.source` sandbox
+
+Inline `code.source` runs inside an async function with a restricted `require`. Only the following Node built-ins are importable:
+
+- `node:buffer`
+- `node:crypto`
+- `node:url`
+- `node:path`
+
+Everything else — `fs`, `http`, `https`, `net`, `child_process`, `process`, `os`, `cluster`, `dgram`, `tls`, `vm`, `worker_threads` — is **blocked** and will throw `Module "<name>" is blocked in code steps`. The runtime also does not expose `process`, `__dirname`, `__filename`, `setTimeout`, or `fetch`.
+
+If you need any of those (filesystem reads, network calls, timers, etc.), use a `code.module` step instead — modules run as a real child `node` process and have the full Node API surface.
+
 Whatever JSON a module writes to stdout becomes both `$.steps.<id>.output` and `$.steps.<id>.response` (aliases). Downstream steps can reference either.
 
 ### Migrating a legacy single-file flow
