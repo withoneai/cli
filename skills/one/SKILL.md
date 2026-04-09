@@ -22,9 +22,7 @@ description: |
 
 You have access to the One CLI which lets you interact with 250+ third-party platforms through their APIs. Always include the `--agent` flag right after `one` for structured JSON output.
 
-## Config scopes
-
-The CLI reads config in this order: env vars → `.onerc` in cwd → project config (`~/.one/projects/<slug>/config.json`) → global config (`~/.one/config.json`). `one init` is interactive and lets the user choose whether a new setup writes to global or project scope. Use `one --agent config path` to see which config is currently active and the full fallback chain.
+If the user wants a separate API key / connections for a specific project (vs. their default), walk them through running `one init` from that project folder and picking the "project" scope — see `references/scoping.md`.
 
 ## Core Workflow: search -> knowledge -> execute
 
