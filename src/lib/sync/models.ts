@@ -23,9 +23,9 @@ function parseActionType(actionKey: string): string | null {
  * Discover available data models for a platform by fetching all actions
  * and filtering to list/get_many operations.
  *
- * NOTE: The returned actionId uses the api:: format which is a discovery key.
- * To get the executable action ID (conn_mod_def:: format), use:
- *   one actions search <platform> "<title>" -t execute
+ * Resolves each discovered model's action to its executable ID
+ * (conn_mod_def:: format) so the returned actionId can be used directly
+ * in sync profiles.
  */
 export async function discoverModels(api: OneApi, platform: string): Promise<DiscoveredModel[]> {
   const actions = await api.listAvailableActions(platform) as unknown as RawAvailableAction[];
@@ -59,5 +59,23 @@ export async function discoverModels(api: OneApi, platform: string): Promise<Dis
     });
   }
 
-  return Array.from(modelMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+  // Resolve each discovered model's executable action ID in parallel.
+  const models = Array.from(modelMap.values());
+  await Promise.all(
+    models.map(async model => {
+      try {
+        const searchResults = await api.searchActions(platform, model.displayName, 'execute');
+        const resolved = searchResults.find(
+          a => a.path === model.listAction.path && a.method === model.listAction.method,
+        );
+        if (resolved?.systemId) {
+          model.listAction.actionId = resolved.systemId;
+        }
+      } catch {
+        // Leave the api:: key if resolution fails — the user can still resolve manually
+      }
+    }),
+  );
+
+  return models.sort((a, b) => a.name.localeCompare(b.name));
 }

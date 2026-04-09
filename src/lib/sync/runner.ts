@@ -5,7 +5,8 @@ import { isAgentMode } from '../output.js';
 import type { SyncProfile, SyncRunResult, SyncRunOptions, ModelSyncState } from './types.js';
 import { getNextPageParams } from './pagination.js';
 import { getModelState, updateModelState } from './state.js';
-import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords } from './db.js';
+import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
+import { acquireSyncLock } from './lock.js';
 import type Database from 'better-sqlite3';
 
 const MAX_RETRIES_PER_PAGE = 3;
@@ -50,12 +51,35 @@ export async function syncModel(
   const { platform, model } = profile;
   const startTime = Date.now();
 
-  // Check for concurrent sync
+  // Validate incompatible options
+  if (options.fullRefresh && options.since) {
+    throw new Error(
+      '--full-refresh and --since cannot be used together. --full-refresh always fetches the whole collection.'
+    );
+  }
+
+  // Acquire a cross-process lock so two concurrent syncs (e.g. cron tick +
+  // manual run) don't race on the same table. Dry-run skips the lock since
+  // it performs no writes.
+  const lock = options.dryRun ? null : acquireSyncLock(platform, model);
+
+  // Check in-process state too (cheap and gives a clearer error message)
   const existingState = getModelState(platform, model);
   if (existingState?.status === 'syncing' && !options.force) {
+    if (lock) lock.release();
     throw new Error(
-      `Sync already in progress for ${platform}/${model}. ` +
-      `Use --force to override (this may happen if a previous sync was interrupted).`
+      `Sync state says ${platform}/${model} is already syncing. ` +
+      `Use --force to override (this may happen if a previous sync crashed before cleanup).`
+    );
+  }
+
+  // Warn loudly when the profile has no dateFilter — every "incremental"
+  // sync will actually re-pull the entire collection. The upserts still
+  // work, but the user should know they're not saving API calls.
+  if (!profile.dateFilter && !options.dryRun && !options.fullRefresh && !isAgentMode()) {
+    process.stderr.write(
+      `⚠ ${platform}/${model} profile has no dateFilter — this sync will fetch the entire collection every run. ` +
+      `Add a dateFilter to the profile for true incremental sync, or accept the full-pull cost.\n`
     );
   }
 
@@ -68,13 +92,18 @@ export async function syncModel(
   let totalRecords = 0;
   let pagesProcessed = 0;
   let lastCursor: unknown = null;
+  // Track every id we saw across pages, for --full-refresh deletion reconciliation.
+  const seenIds = new Set<string | number>();
 
   try {
-    db = openDatabase(platform);
+    db = await openDatabase(platform);
 
-    // Determine the since date
+    // Determine the since date.
+    // --full-refresh forces a complete pull: no dateFilter, no lastSync fallback.
     let sinceDate: Date | null = null;
-    if (options.since) {
+    if (options.fullRefresh) {
+      sinceDate = null;
+    } else if (options.since) {
       sinceDate = parseSince(options.since);
     } else if (!options.force && existingState?.lastSync) {
       sinceDate = new Date(existingState.lastSync);
@@ -86,14 +115,28 @@ export async function syncModel(
     // Build initial params (query or body depending on profile config)
     const queryParams: Record<string, unknown> = { ...profile.queryParams };
     const bodyParams: Record<string, unknown> = { ...profile.body };
-    const limitParam = profile.limitParam || 'limit';
-    const pageSize = profile.defaultLimit || 100;
+    const pageSize = profile.defaultLimit ?? 100;
     const limitLocation = profile.limitLocation || 'query';
-
-    if (limitLocation === 'body') {
-      bodyParams[limitParam] = pageSize;
+    // Resolve the limit param name. Precedence:
+    //   1. Explicit profile.limitParam (including "" which means "no limit")
+    //   2. If pagination type is "none", default to "" — don't inject a page
+    //      size into a non-paginated request (strict APIs like Google reject it).
+    //   3. Otherwise default to "limit".
+    let limitParam: string;
+    if (profile.limitParam !== undefined) {
+      limitParam = profile.limitParam;
+    } else if (profile.pagination.type === 'none') {
+      limitParam = '';
     } else {
-      queryParams[limitParam] = pageSize;
+      limitParam = 'limit';
+    }
+
+    if (limitParam) {
+      if (limitLocation === 'body') {
+        bodyParams[limitParam] = pageSize;
+      } else {
+        queryParams[limitParam] = pageSize;
+      }
     }
 
     // Apply date filter
@@ -145,8 +188,9 @@ export async function syncModel(
         } catch (err) {
           if (err instanceof ApiError) {
             if (err.status === 429 && retries < MAX_RETRIES_PER_PAGE) {
-              // Rate limited — wait and retry
-              const retryAfter = 60; // Could parse Retry-After header if available
+              // Rate limited — honor Retry-After if the server provided it,
+              // otherwise use exponential backoff (30s, 60s, 120s).
+              const retryAfter = err.retryAfterSeconds ?? Math.min(30 * Math.pow(2, retries), 120);
               if (!isAgentMode()) {
                 process.stderr.write(`  Rate limited. Waiting ${retryAfter}s before retry...\n`);
               }
@@ -214,6 +258,16 @@ export async function syncModel(
         }
       }
 
+      // Track ids for --full-refresh reconciliation
+      if (options.fullRefresh) {
+        for (const rec of records as Record<string, unknown>[]) {
+          const id = rec[profile.idField];
+          if (typeof id === 'string' || typeof id === 'number') {
+            seenIds.add(id);
+          }
+        }
+      }
+
       // Upsert records
       const inserted = upsertRecords(
         db,
@@ -238,8 +292,12 @@ export async function syncModel(
         records,
       );
 
-      // Save state after each page for crash recovery
-      lastCursor = nextParams?.queryParams?.[Object.keys(nextParams?.queryParams ?? {})[0]] ?? null;
+      // Save state after each page for crash recovery.
+      // Capture the first value across query/body/header params as the cursor snapshot.
+      const cursorBag =
+        nextParams?.queryParams ?? nextParams?.bodyParams ?? nextParams?.headers;
+      const cursorKeys = cursorBag ? Object.keys(cursorBag) : [];
+      lastCursor = cursorKeys.length > 0 ? (cursorBag as Record<string, unknown>)[cursorKeys[0]] : null;
       updateModelState(platform, model, {
         totalRecords: countRecords(db, model),
         pagesProcessed,
@@ -254,6 +312,41 @@ export async function syncModel(
       currentPageBodyParams = { ...bodyParams, ...nextParams.bodyParams };
       if (nextParams.headers) {
         currentPageHeaders = { ...currentPageHeaders, ...nextParams.headers };
+      }
+    }
+
+    // --full-refresh: delete local rows whose ids weren't seen this run.
+    // Only runs if we actually fetched pages (paranoia against wiping data
+    // when the API returned an empty first page due to some transient issue).
+    let deletedStale = 0;
+    if (options.fullRefresh && pagesProcessed > 0 && tableCreated && seenIds.size > 0) {
+      const safeTable = sanitizeTableName(model);
+      const safeIdField = profile.idField.replace(/"/g, '""');
+      // Chunk the NOT IN clause to stay under SQLite's variable limit (~999)
+      const ids = Array.from(seenIds);
+      const CHUNK = 500;
+      const seenChunks: unknown[][] = [];
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        seenChunks.push(ids.slice(i, i + CHUNK));
+      }
+
+      // Build a temp table of seen ids and delete anything not in it
+      db.exec(`CREATE TEMP TABLE IF NOT EXISTS _seen_ids (id)`);
+      db.exec(`DELETE FROM _seen_ids`);
+      const insertStmt = db.prepare(`INSERT INTO _seen_ids (id) VALUES (?)`);
+      const tx = db.transaction((batch: unknown[]) => {
+        for (const id of batch) insertStmt.run(id as string | number);
+      });
+      for (const chunk of seenChunks) tx(chunk);
+
+      const delResult = db.prepare(
+        `DELETE FROM "${safeTable}" WHERE "${safeIdField}" NOT IN (SELECT id FROM _seen_ids)`
+      ).run();
+      deletedStale = delResult.changes;
+      db.exec(`DROP TABLE IF EXISTS _seen_ids`);
+
+      if (!isAgentMode() && deletedStale > 0) {
+        process.stderr.write(`Removed ${deletedStale} stale record(s) no longer in source.\n`);
       }
     }
 
@@ -279,7 +372,8 @@ export async function syncModel(
     });
 
     db.close();
-    return { model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete' };
+    if (lock) lock.release();
+    return { model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale };
 
   } catch (err) {
     // Save failed state
@@ -292,6 +386,7 @@ export async function syncModel(
     });
 
     if (db) db.close();
+    if (lock) lock.release();
 
     if (pagesProcessed > 0) {
       const msg = err instanceof Error ? err.message : String(err);

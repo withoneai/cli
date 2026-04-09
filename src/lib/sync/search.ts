@@ -16,10 +16,10 @@ export interface SearchResponse {
  * Full-text search across synced models using FTS5.
  * If platform is omitted, searches all synced platforms.
  */
-export function searchSyncedData(
+export async function searchSyncedData(
   query: string,
   options: { platform?: string; models?: string[]; limit?: number },
-): SearchResponse {
+): Promise<SearchResponse> {
   const limit = options.limit ?? 20;
   const platforms = options.platform ? [options.platform] : listSyncedPlatforms();
 
@@ -37,7 +37,7 @@ export function searchSyncedData(
   const allResults: SearchResult[] = [];
 
   for (const platform of platforms) {
-    const db = openDatabase(platform);
+    const db = await openDatabase(platform);
     try {
       const tables = options.models ?? listTables(db);
 

@@ -13,10 +13,23 @@ import type {
 } from './types.js';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public retryAfterSeconds?: number) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/** Parse a Retry-After header value (either delta-seconds or HTTP-date). */
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = parseInt(value, 10);
+  if (!isNaN(seconds)) return seconds;
+  const dateMs = Date.parse(value);
+  if (!isNaN(dateMs)) {
+    const delta = Math.ceil((dateMs - Date.now()) / 1000);
+    return delta > 0 ? delta : 0;
+  }
+  return undefined;
 }
 
 export class OneApi {
@@ -215,7 +228,8 @@ export class OneApi {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new ApiError(response.status, text || `HTTP ${response.status}`);
+      const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
+      throw new ApiError(response.status, text || `HTTP ${response.status}`, retryAfter);
     }
 
     const etag = response.headers.get('etag') ?? null;

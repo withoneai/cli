@@ -61,6 +61,8 @@ export interface SyncRunResult {
   pagesProcessed: number;
   duration: string;
   status: 'complete' | 'failed' | 'dry-run';
+  /** Rows removed by --full-refresh because they were no longer in the source. */
+  deletedStale?: number;
 }
 
 export interface SyncRunOptions {
@@ -69,6 +71,12 @@ export interface SyncRunOptions {
   force?: boolean;
   maxPages?: number;
   dryRun?: boolean;
+  /**
+   * Do a full-refresh sync: fetch ALL records (no since filter) and at the
+   * end delete any local rows whose ids weren't seen in this run. Only safe
+   * when pulling the whole collection. Cannot be combined with --since.
+   */
+  fullRefresh?: boolean;
 }
 
 export interface SyncQueryOptions {

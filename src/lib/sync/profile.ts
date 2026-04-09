@@ -35,6 +35,16 @@ export function writeProfile(profile: SyncProfile): void {
   fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
 }
 
+/**
+ * Write a partial/draft profile without validation. Used by `sync init`
+ * (no --config) so the user can later patch missing fields via --config.
+ */
+export function writeDraftProfile(platform: string, model: string, draft: Record<string, unknown>): void {
+  fs.mkdirSync(PROFILES_DIR, { recursive: true });
+  const filePath = profilePath(platform, model);
+  fs.writeFileSync(filePath, JSON.stringify(draft, null, 2));
+}
+
 export function listProfiles(platform?: string): SyncProfile[] {
   if (!fs.existsSync(PROFILES_DIR)) return [];
 
@@ -74,7 +84,13 @@ export function generateTemplate(platform: string, model: string, actionId?: str
     pagination: {
       type: 'FILL_IN (cursor | token | offset | id | link | none)',
       nextPath: 'FILL_IN',
-      passAs: 'FILL_IN',
+      passAs: 'FILL_IN (query:name | body:name | header:name)',
     },
+    // Optional. Set to "body" for POST-body list endpoints (e.g. Notion /v1/search).
+    // limitLocation: "query",
+    // Optional. Page size param name. Set to "" to disable sending any page size.
+    // limitParam: "limit",
+    // Optional. Default page size (100).
+    // defaultLimit: 100,
   };
 }

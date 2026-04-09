@@ -1,31 +1,10 @@
 import type Database from 'better-sqlite3';
-import { openDatabase, tableExists, getTableColumns } from './db.js';
+import { openDatabase, tableExists, getTableColumns, sanitizeTableName } from './db.js';
 import { getModelState } from './state.js';
+import { parseCondition, splitConditions } from './where-parser.js';
 import type { SyncQueryOptions } from './types.js';
 
 const COMMON_DATE_COLUMNS = ['created_at', 'createdAt', 'created', 'date', 'timestamp', 'updated_at', 'updatedAt'];
-
-interface ParsedCondition {
-  field: string;
-  operator: string;
-  value: string;
-}
-
-/** Parse a single where condition like "status=active" or "total_price>100" */
-function parseCondition(condition: string): ParsedCondition {
-  // Try operators in order of length (longest first to avoid partial matches)
-  const operators = ['>=', '<=', '!=', '>', '<', '=', ' like '];
-  for (const op of operators) {
-    const idx = condition.toLowerCase().indexOf(op.toLowerCase());
-    if (idx > 0) {
-      const field = condition.slice(0, idx).trim();
-      const value = condition.slice(idx + op.length).trim();
-      const sqlOp = op.trim().toUpperCase() === 'LIKE' ? 'LIKE' : op.trim();
-      return { field, operator: sqlOp, value };
-    }
-  }
-  throw new Error(`Cannot parse where condition: "${condition}". Expected format: field=value, field>value, field like %pattern`);
-}
 
 /** Auto-detect the date column from table columns */
 function detectDateColumn(columns: string[]): string | null {
@@ -63,12 +42,12 @@ export interface QueryResult {
 /**
  * Execute a query against local synced data.
  */
-export function executeQuery(
+export async function executeQuery(
   platform: string,
   model: string,
   options: SyncQueryOptions,
-): QueryResult {
-  const db = openDatabase(platform);
+): Promise<QueryResult> {
+  const db = await openDatabase(platform);
 
   try {
     if (!tableExists(db, model)) {
@@ -79,9 +58,9 @@ export function executeQuery(
     const whereClauses: string[] = [];
     const params: unknown[] = [];
 
-    // Parse --where conditions
+    // Parse --where conditions (splits on commas outside quoted sections)
     if (options.where) {
-      const conditions = options.where.split(',').map(c => c.trim());
+      const conditions = splitConditions(options.where);
       for (const cond of conditions) {
         const parsed = parseCondition(cond);
         if (!columns.includes(parsed.field)) {
@@ -117,8 +96,9 @@ export function executeQuery(
       }
     }
 
-    // Build SQL
-    let sql = `SELECT * FROM "${model}"`;
+    // Build SQL (sanitize model → table name to prevent injection from CLI arg)
+    const table = sanitizeTableName(model);
+    let sql = `SELECT * FROM "${table}"`;
     if (whereClauses.length > 0) {
       sql += ` WHERE ${whereClauses.join(' AND ')}`;
     }
@@ -178,13 +158,20 @@ export function executeQuery(
  * Execute raw SQL against a platform's database.
  * Only SELECT statements are allowed.
  */
-export function executeRawSql(platform: string, sql: string): { results: Record<string, unknown>[]; query: string } {
+export async function executeRawSql(platform: string, sql: string): Promise<{ results: Record<string, unknown>[]; query: string }> {
   const trimmed = sql.trim();
-  if (!trimmed.toUpperCase().startsWith('SELECT')) {
+  const upper = trimmed.toUpperCase();
+  if (!upper.startsWith('SELECT')) {
     throw new Error('Only SELECT statements are allowed. Sync databases are read-only.');
   }
+  // Block statements that can mutate state or exfiltrate data even when they
+  // start with SELECT (e.g. CTEs containing INSERT, PRAGMA, ATTACH).
+  const forbidden = /\b(PRAGMA|ATTACH|DETACH|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM)\b/;
+  if (forbidden.test(upper)) {
+    throw new Error('Only pure SELECT queries are allowed. PRAGMA/ATTACH/DDL/DML are blocked.');
+  }
 
-  const db = openDatabase(platform);
+  const db = await openDatabase(platform);
   try {
     const results = db.prepare(trimmed).all() as Record<string, unknown>[];
 

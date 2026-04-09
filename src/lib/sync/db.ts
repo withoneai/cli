@@ -1,6 +1,7 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadSqlite } from './sqlite-loader.js';
 
 const DATA_DIR = path.join('.one', 'sync', 'data');
 
@@ -14,7 +15,8 @@ export function listSyncedPlatforms(): string[] {
     .map(f => f.replace(/\.db$/, ''));
 }
 
-export function openDatabase(platform: string): Database.Database {
+export async function openDatabase(platform: string): Promise<Database.Database> {
+  const Database = await loadSqlite();
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const dbPath = path.join(DATA_DIR, `${platform}.db`);
 
@@ -63,7 +65,7 @@ function detectColumnType(value: unknown): string {
 }
 
 /** Sanitize a model name for use as a SQL table name */
-function sanitizeTableName(name: string): string {
+export function sanitizeTableName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, '_');
 }
 

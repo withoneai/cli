@@ -402,6 +402,29 @@ one --agent sync query shopify/orders --where "status=unfulfilled" --limit 20
 
 ## Commands
 
+### Install the Sync Engine (first time only)
+\`\`\`bash
+one sync install        # Installs better-sqlite3 native module
+one sync doctor         # Verifies everything is working
+\`\`\`
+Sync requires SQLite. It ships as an optional dependency, so the base CLI stays lightweight — you only install it if you use sync. Run \`one sync install\` once per machine, or run any \`one sync ...\` command and follow the hint.
+
+### Validate a Profile
+\`\`\`bash
+one --agent sync test <platform>/<model>
+\`\`\`
+Does a single-page fetch, verifies resultsPath → array, idField → present, and that pagination produces a next-page hint. No DB writes. Always run this after \`sync init\` before committing to a full \`sync run\`.
+
+### Scheduled Syncs (cron)
+\`\`\`bash
+one sync schedule add shopify --every 1h
+one sync schedule add hubspot --every 30m --models contacts,companies
+one sync schedule list
+one sync schedule status          # Show schedules + recent log output
+one sync schedule remove shopify
+\`\`\`
+Schedules are installed into your system crontab (macOS/Linux). Accepted intervals: \`<n>m\` (must divide 60), \`<n>h\` (must divide 24), or \`1d\`. Each run appends to \`.one/sync/logs/<platform>.log\`. Windows is not yet supported — use Task Scheduler manually.
+
 ### Discover Models
 \`\`\`bash
 one --agent sync models <platform>
@@ -410,12 +433,13 @@ Lists data models with their list action IDs. Use these action IDs in sync profi
 
 ### Initialize Sync Profile
 \`\`\`bash
-# Get a template (pre-populated with action ID if found)
+# Get a template (pre-populated with action ID + auto-inferred pagination/idField/resultsPath from knowledge)
 one --agent sync init <platform> <model>
 
 # Save a complete profile
 one --agent sync init <platform> <model> --config '<json>'
 \`\`\`
+When no \`--config\` is passed, \`sync init\` fetches the action's knowledge and tries to infer \`pagination\`, \`resultsPath\`, \`idField\`, and \`dateFilter\`. The response includes \`_inferred\` explaining each decision. Always run \`sync test\` afterwards to confirm.
 
 ### Run Sync
 \`\`\`bash
@@ -456,8 +480,9 @@ one --agent sync list [platform]
 
 ### Remove Sync Data
 \`\`\`bash
-one --agent sync remove <platform> [--models m1,m2] [--yes]
+one --agent sync remove <platform> [--models m1,m2] [--dry-run] [--yes]
 \`\`\`
+Use \`--dry-run\` to preview record counts and disk usage before deleting.
 
 ## Sync Profile Fields
 
@@ -509,9 +534,11 @@ Sync data is stored in the project directory (\`.one/sync/\`), not globally. Thi
 
 ## Tips
 
-- Always read \`actions knowledge\` before creating a sync profile — it tells you the response shape and pagination
-- Use \`--dry-run\` first to verify your profile is correct
+- \`sync init\` auto-infers most fields from action knowledge — always verify with \`sync test\` before the first full run
+- Use \`--dry-run\` on \`sync run\` to preview the first page without writing
+- Use \`--dry-run\` on \`sync remove\` to preview what would be deleted
 - Incremental sync is automatic — just run \`sync run\` again
+- Set up \`sync schedule add\` so syncs run unattended; check \`sync schedule status\` to audit logs
 - Use \`--refresh\` on queries to ensure fresh data without a separate sync command
 - FTS search works across all text fields — great for finding specific records
 `;

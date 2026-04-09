@@ -70,14 +70,20 @@ program
     one flow validate <key>               Validate a flow
 
   Data Sync:
+    one sync install                      Install the local sync engine (first run)
+    one sync doctor                       Verify the sync engine is healthy
     one sync models <platform>            Discover available data models
-    one sync init <plat> <model>          Create a sync profile
+    one sync init <plat> <model>          Create a sync profile (auto-fills from knowledge)
+    one sync test <plat>/<model>          Validate a profile with a single-page fetch
     one sync run <platform>               Sync data from a platform to local SQLite
     one sync query <plat>/<model>         Query local synced data
     one sync search "<query>"             Full-text search across all synced data
     one sync sql <plat> "<sql>"           Execute raw SQL against local data
     one sync list                         List sync profiles and status
-    one sync remove <platform>            Remove sync data
+    one sync schedule add <plat> --every  Run sync on a cron schedule (e.g. 1h)
+    one sync schedule list                List scheduled syncs
+    one sync schedule status              Show schedules + recent log tails
+    one sync remove <platform>            Remove sync data (--dry-run to preview)
 
   Cache:
     one cache list                        List cached entries with age and status

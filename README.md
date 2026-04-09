@@ -268,12 +268,23 @@ Note: `actions execute` is never cached — it always hits the API fresh.
 
 Sync data from any connected platform into local SQLite for instant offline queries.
 
+The sync engine uses `better-sqlite3`, which ships as an **optional dependency** to keep the base CLI lightweight. Install it once per machine before running any `sync` command:
+
+```bash
+one sync install      # Installs the native SQLite module
+one sync doctor       # Verifies the engine loads, FTS5 works, etc.
+```
+
 ```bash
 # Discover available models
 one sync models shopify
 
-# Create a sync profile (read actions knowledge first to understand response shape)
+# Create a sync profile — auto-infers pagination/resultsPath/idField from action knowledge
+one sync init shopify orders
 one sync init shopify orders --config '{"platform":"shopify","model":"orders",...}'
+
+# Validate the profile with a single-page fetch (no writes)
+one sync test shopify/orders
 
 # Run sync
 one sync run shopify --models orders --since 90d
@@ -287,23 +298,34 @@ one sync search "refund"
 # Raw SQL (SELECT only)
 one sync sql shopify "SELECT count(*) FROM orders"
 
+# Schedule unattended syncs via system cron
+one sync schedule add shopify --every 1h
+one sync schedule list
+one sync schedule status
+one sync schedule remove shopify
+
 # Check sync status
 one sync list
 
-# Remove sync data
+# Preview then remove sync data
+one sync remove shopify --models orders --dry-run
 one sync remove shopify --models orders
 ```
 
 | Subcommand | What it does |
 |------------|-------------|
+| `install` | Install the native SQLite engine (first-time setup) |
+| `doctor` | Verify the engine is installed and working |
 | `models <platform>` | Discover available data models |
-| `init <platform> <model>` | Create or update a sync profile |
+| `init <platform> <model>` | Create or update a sync profile (auto-infers from knowledge) |
+| `test <platform>/<model>` | Validate a profile with a single-page fetch |
 | `run <platform>` | Sync data locally |
 | `query <platform>/<model>` | Query local data with filters |
 | `search <query>` | Full-text search across all synced data |
 | `sql <platform> <sql>` | Execute raw SQL (SELECT only) |
 | `list [platform]` | List sync profiles and status |
-| `remove <platform>` | Remove sync data and profiles |
+| `schedule add/list/status/remove` | Manage scheduled syncs via system cron |
+| `remove <platform>` | Remove sync data and profiles (`--dry-run` to preview) |
 
 Run `one guide sync` for the full reference including pagination types, profile fields, and agent workflow.
 

@@ -124,15 +124,23 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 
 Sync data from any connected platform into local SQLite for instant queries without API calls.
 
+### First-time install
+```bash
+# Sync requires better-sqlite3 (optional dependency). Install once per machine:
+one sync install
+one sync doctor        # verify
+```
+
 ### Setup (one-time per model)
 ```bash
 # 1. Discover models
 one --agent sync models shopify
 
-# 2. Read knowledge for the list action to understand response shape + pagination
-one --agent actions knowledge shopify "<listActionId>"
+# 2. Get a template with auto-inferred pagination/resultsPath/idField from action knowledge
+one --agent sync init shopify orders
+# Response includes `_inferred` array explaining each auto-filled field.
+# Fill any remaining FILL_IN values, then save:
 
-# 3. Create sync profile
 one --agent sync init shopify orders --config '{
   "platform": "shopify", "model": "orders",
   "connectionKey": "<key>", "actionId": "<listActionId>",
@@ -142,9 +150,23 @@ one --agent sync init shopify orders --config '{
   "defaultLimit": 250, "limitParam": "limit"
 }'
 
+# 3. Validate with a single-page fetch (no DB writes)
+one --agent sync test shopify/orders
+
 # 4. Initial sync
 one --agent sync run shopify --models orders --since 90d
 ```
+
+### Scheduled syncs
+```bash
+# Run sync on a schedule via system cron (macOS/Linux)
+one sync schedule add shopify --every 1h
+one sync schedule add hubspot --every 30m --models contacts,companies
+one --agent sync schedule list
+one --agent sync schedule status    # schedules + recent log tails
+one sync schedule remove shopify
+```
+Intervals: `<n>m` (divides 60), `<n>h` (divides 24), or `1d`. Logs go to `.one/sync/logs/<platform>.log`.
 
 ### Querying (ongoing)
 ```bash
@@ -166,11 +188,13 @@ one --agent sync list shopify
 ```
 
 ### Key points
-- Always read `actions knowledge` before creating a sync profile — it tells you the response shape
-- Use `--dry-run` on `sync run` to verify the profile before committing to a full sync
+- `sync init` auto-infers pagination/resultsPath/idField from action knowledge — check the `_inferred` field in the response
+- ALWAYS run `sync test <platform>/<model>` before the first `sync run` — it validates the profile against a real single-page fetch without writing to disk
 - Queries include `lastSync` and `syncAge` so you can judge data freshness
 - Use `--refresh` on queries to trigger incremental sync before querying
+- Use `sync remove --dry-run` to preview deletions before committing
 - Pagination types: cursor, token, offset, id, link, none
+- Schedule unattended syncs with `sync schedule add <platform> --every 1h`
 - Read `one guide sync` for the full reference
 
 ## Beyond Single Actions
