@@ -15,6 +15,8 @@ export interface InferredProfileHints {
   limitLocation?: 'query' | 'body';
   /** Name of the page-size param, e.g. "page_size", "limit", "maxResults". */
   limitParam?: string;
+  /** Required path variables extracted from the URL template. */
+  pathVars?: Record<string, string>;
   reasoning: string[];
 }
 
@@ -76,15 +78,93 @@ const PAGINATION_PATTERNS: Array<{
   },
 ];
 
-/** Try to infer the results array path from knowledge (e.g. "data", "results", "items"). */
-function inferResultsPath(knowledge: string): string | undefined {
+/**
+ * Try to infer the results array path from knowledge.
+ * Checks generic keys first ("data", "results", etc.), then falls back to
+ * checking whether the model name itself appears as a response key — many
+ * platforms use the model name as the wrapper (Attio → "companies",
+ * Gmail → "threads", Shopify → "orders").
+ */
+function inferResultsPath(knowledge: string, modelName?: string, platform?: string): string | undefined {
   const candidates = ['data', 'results', 'items', 'records', 'rows', 'entries'];
   for (const key of candidates) {
-    // Look for JSON-like "data": [ or "results": [
     const re = new RegExp(`"${key}"\\s*:\\s*\\[`, 'i');
     if (re.test(knowledge)) return key;
   }
+
+  // Try the model name itself and common variations (singular, plural)
+  if (modelName) {
+    const namesToTry = new Set<string>();
+    namesToTry.add(modelName);
+    // CamelCase → lowercase: "balanceTransactions" → "balancetransactions"
+    namesToTry.add(modelName.toLowerCase());
+    // Strip platform prefix: "attioCompanies" → "Companies" → "companies"
+    if (platform) {
+      const lower = modelName.toLowerCase();
+      const platLower = platform.toLowerCase().replace(/-/g, '');
+      if (lower.startsWith(platLower)) {
+        const stripped = modelName.slice(platLower.length);
+        if (stripped.length > 0) {
+          // "Companies" → "companies"
+          namesToTry.add(stripped[0].toLowerCase() + stripped.slice(1));
+        }
+      }
+    }
+    // Simple plural/singular: "company" ↔ "companies", "thread" ↔ "threads"
+    if (modelName.endsWith('ies')) {
+      namesToTry.add(modelName.slice(0, -3) + 'y');
+    } else if (modelName.endsWith('s')) {
+      namesToTry.add(modelName.slice(0, -1));
+    } else {
+      namesToTry.add(modelName + 's');
+    }
+
+    for (const name of namesToTry) {
+      // Check for "name": [ (JSON array) or `| name |` (markdown table) or `name` as a heading
+      const reJson = new RegExp(`"${name}"\\s*:\\s*\\[`, 'i');
+      const reProse = new RegExp(`\\b${name}\\b.*\\barray\\b|\\barray\\b.*\\b${name}\\b`, 'i');
+      if (reJson.test(knowledge) || reProse.test(knowledge)) return name;
+    }
+  }
+
   return undefined;
+}
+
+/**
+ * Extract required path variables from the URL template in knowledge.
+ * Knowledge typically has a URL section like:
+ *   `https://api.example.com/v1/calendars/{{calendarId}}/events`
+ * or path-vars described in a table.
+ *
+ * Returns a map of { varName: "FILL_IN" } for each variable found,
+ * plus smart defaults for well-known variables.
+ */
+function inferPathVars(knowledge: string): Record<string, string> | undefined {
+  const vars: Record<string, string> = {};
+
+  // Match {{varName}} or {varName} in URL patterns
+  const urlMatches = knowledge.matchAll(/\{\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?\}/g);
+  for (const m of urlMatches) {
+    const name = m[1];
+    // Skip common template vars that aren't path params (Handlebars context, etc.)
+    if (['payload', 'timestamp', 'eventType', 'connectionId', 'relayEventId'].includes(name)) continue;
+    vars[name] = suggestDefault(name);
+  }
+
+  if (Object.keys(vars).length === 0) return undefined;
+  return vars;
+}
+
+/** Suggest a reasonable default value for well-known path variables. */
+function suggestDefault(varName: string): string {
+  const lower = varName.toLowerCase();
+  // Google Calendar
+  if (lower === 'calendarid') return 'primary';
+  // Google-style "me" user
+  if (lower === 'userid' || lower === 'user_id') return 'me';
+  // Generic owner/account self-reference
+  if (lower === 'accountid' || lower === 'account_id') return 'me';
+  return 'FILL_IN';
 }
 
 /** Try to infer the ID field from knowledge. */
@@ -105,7 +185,7 @@ function inferDateFilter(knowledge: string): string | undefined {
   return undefined;
 }
 
-export function inferProfileFromKnowledge(knowledge: string | undefined): InferredProfileHints {
+export function inferProfileFromKnowledge(knowledge: string | undefined, modelName?: string, platform?: string): InferredProfileHints {
   const hints: InferredProfileHints = { reasoning: [] };
   if (!knowledge) {
     hints.reasoning.push('No knowledge available; all fields left as FILL_IN.');
@@ -120,7 +200,7 @@ export function inferProfileFromKnowledge(knowledge: string | undefined): Inferr
     }
   }
 
-  const resultsPath = inferResultsPath(knowledge);
+  const resultsPath = inferResultsPath(knowledge, modelName, platform);
   if (resultsPath) {
     hints.resultsPath = resultsPath;
     hints.reasoning.push(`resultsPath: "${resultsPath}" (found in response schema)`);
@@ -136,6 +216,16 @@ export function inferProfileFromKnowledge(knowledge: string | undefined): Inferr
   if (dateFilter) {
     hints.dateFilterParam = dateFilter;
     hints.reasoning.push(`dateFilter candidate: "${dateFilter}" (for incremental sync)`);
+  }
+
+  // Extract required path variables from the URL template
+  const pathVars = inferPathVars(knowledge);
+  if (pathVars) {
+    hints.pathVars = pathVars;
+    const varList = Object.entries(pathVars)
+      .map(([k, v]) => v === 'FILL_IN' ? k : `${k}="${v}"`)
+      .join(', ');
+    hints.reasoning.push(`pathVars: {${varList}} (extracted from URL template)`);
   }
 
   // Detect POST-body list endpoints: if the knowledge says POST and mentions a body param

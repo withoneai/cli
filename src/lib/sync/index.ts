@@ -196,7 +196,7 @@ async function syncInitCommand(platform: string, model: string, options: { confi
       if (actionId) {
         try {
           const knowledgeResp = await api.getActionKnowledge(actionId);
-          inferred = inferProfileFromKnowledge(knowledgeResp?.knowledge);
+          inferred = inferProfileFromKnowledge(knowledgeResp?.knowledge, model, platform);
 
           if (inferred.pagination) template.pagination = { ...(template.pagination as object), ...inferred.pagination };
           if (inferred.resultsPath) template.resultsPath = inferred.resultsPath;
@@ -206,6 +206,7 @@ async function syncInitCommand(platform: string, model: string, options: { confi
           }
           if (inferred.limitLocation) template.limitLocation = inferred.limitLocation;
           if (inferred.limitParam) template.limitParam = inferred.limitParam;
+          if (inferred.pathVars) template.pathVars = inferred.pathVars;
         } catch {
           // Knowledge fetch failed — leave template as-is
         }
@@ -295,6 +296,21 @@ async function syncTestCommand(platformModel: string): Promise<void> {
 
   const api = getApi();
   const report = await testSyncProfile(api, profile!);
+
+  // If sync test auto-discovered fields (like resultsPath), patch the
+  // profile on disk so the agent can go straight to `sync run` without
+  // another `--config` round-trip.
+  if (report.autoFixed && Object.keys(report.autoFixed).length > 0) {
+    try {
+      const existing = readProfile(platform, model);
+      if (existing) {
+        const patched = { ...existing, ...report.autoFixed };
+        writeProfile(patched as SyncProfile);
+      }
+    } catch {
+      // Best-effort — agent can still manually --config
+    }
+  }
 
   if (output.isAgentMode()) {
     output.json(report);

@@ -19,6 +19,8 @@ export interface SyncTestReport {
   sample?: Record<string, unknown>;
   detectedColumns?: Array<{ name: string; type: string }>;
   paginationPreview?: Record<string, unknown>;
+  /** Fields that sync test auto-fixed from the real response (e.g. resultsPath). */
+  autoFixed?: Record<string, string>;
 }
 
 function detectColumnType(value: unknown): string {
@@ -99,20 +101,42 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     return report;
   }
 
-  // Check 3: resultsPath resolves to an array
-  const records = getByDotPath(responseData, profile.resultsPath);
+  // Check 3: resultsPath resolves to an array.
+  // If the profile still has FILL_IN (or the path fails), auto-discover by
+  // scanning top-level response keys for the first array — the agent shouldn't
+  // have to guess this when we have the real response sitting right here.
+  let resolvedResultsPath = profile.resultsPath;
+  let records = getByDotPath(responseData, resolvedResultsPath);
+
+  if (!Array.isArray(records) && typeof responseData === 'object' && responseData !== null) {
+    // Auto-discover: find the first top-level key whose value is an array
+    const topObj = responseData as Record<string, unknown>;
+    const arrayKey = Object.keys(topObj).find(k => Array.isArray(topObj[k]));
+    if (arrayKey) {
+      resolvedResultsPath = arrayKey;
+      records = topObj[arrayKey];
+      report.autoFixed = report.autoFixed ?? {};
+      report.autoFixed.resultsPath = arrayKey;
+      checks.push({
+        name: `resultsPath auto-discovered → "${arrayKey}"`,
+        ok: true,
+        detail: `Profile had "${profile.resultsPath}" which didn't resolve; found "${arrayKey}" in response`,
+      });
+    }
+  }
+
   if (!Array.isArray(records)) {
     const topKeys =
       typeof responseData === 'object' && responseData !== null ? Object.keys(responseData as object) : [];
     checks.push({
-      name: `resultsPath "${profile.resultsPath}" → array`,
+      name: `resultsPath "${resolvedResultsPath}" → array`,
       ok: false,
       detail: `Not an array. Response keys: [${topKeys.join(', ')}]`,
     });
     return report;
   }
   checks.push({
-    name: `resultsPath "${profile.resultsPath}" → array`,
+    name: `resultsPath "${resolvedResultsPath}" → array`,
     ok: true,
     detail: `${records.length} records`,
   });
@@ -125,17 +149,35 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
 
   const first = records[0] as Record<string, unknown>;
 
-  // Check 4: idField exists on sample
-  const idValue = first[profile.idField];
+  // Check 4: idField exists on sample. Auto-discover if FILL_IN or missing.
+  let resolvedIdField = profile.idField;
+  let idValue = first[resolvedIdField];
+  if ((idValue === undefined || idValue === null) && typeof first === 'object') {
+    // Auto-discover: try common id field names
+    const idCandidates = ['id', '_id', 'uuid', 'ID', 'Id'];
+    const found = idCandidates.find(c => first[c] !== undefined && first[c] !== null);
+    if (found) {
+      resolvedIdField = found;
+      idValue = first[found];
+      report.autoFixed = report.autoFixed ?? {};
+      report.autoFixed.idField = found;
+      checks.push({
+        name: `idField auto-discovered → "${found}"`,
+        ok: true,
+        detail: `Profile had "${profile.idField}" which wasn't on the record; found "${found}"`,
+      });
+    }
+  }
+
   if (idValue === undefined || idValue === null) {
     checks.push({
-      name: `idField "${profile.idField}" present`,
+      name: `idField "${resolvedIdField}" present`,
       ok: false,
       detail: `Not found. Available fields: [${Object.keys(first).slice(0, 20).join(', ')}]`,
     });
   } else {
     checks.push({
-      name: `idField "${profile.idField}" present`,
+      name: `idField "${resolvedIdField}" present`,
       ok: true,
       detail: `sample value: ${String(idValue).slice(0, 60)}`,
     });
