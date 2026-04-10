@@ -124,15 +124,22 @@ Set up your API key and install the MCP server into your AI agents.
 one init
 ```
 
-Supports Claude Code, Claude Desktop, Cursor, Windsurf, Codex, and Kiro. Installs globally by default, or per-project with `-p` so your team can share configs (each person uses their own API key).
+Supports Claude Code, Claude Desktop, Cursor, Windsurf, Codex, and Kiro.
 
-If you've already set up, `one init` shows your current status and lets you update your key, install to more agents, or reconfigure.
+**Global vs. project scope.** `one init` is interactive and asks where the setup should live:
+
+- **Global** (`~/.one/config.json`) — applies to every folder. Best when you only need one workspace / API key.
+- **Project** (`~/.one/projects/<slug>/config.json`) — scoped to the current project, stored under your home directory so secrets never land in git. Use this when different projects need different API keys, connections, or access control.
+
+When you run `one` in a project, it uses the project config if one exists and falls back to the global config otherwise. Use `one config path` to see which config is active and the full resolution order.
+
+If you've already set up, `one init` shows your current status for the active scope and lets you update your key, install to more agents, or reconfigure.
 
 | Flag | What it does |
 |------|-------------|
 | `-y` | Skip confirmations |
-| `-g` | Install globally (default) |
-| `-p` | Install for current project only |
+| `-g` | Non-interactive: write the One config globally (`~/.one/config.json`) |
+| `-p` | Non-interactive: write the One config for this project (`~/.one/projects/<slug>/config.json`) |
 
 ### `one add <platform>`
 
@@ -455,6 +462,30 @@ Settings propagate automatically to all installed agent configs.
 | `one config skills sync` | Force a re-copy of packaged skill files (for troubleshooting) |
 
 Auto-sync refuses to resurrect skills if you opted out of skill installation during `one init` — the canonical dir has to already exist.
+
+### Project config (`.onerc`)
+
+Drop a `.onerc` file in your project root to override global settings per-project. Simple `KEY=VALUE` format; `#` for comments. Read from the current working directory (no parent lookup).
+
+| Key | Purpose |
+|-----|---------|
+| `ONE_SECRET` | API key (also honored as env var) |
+| `ONE_API_BASE` | API base URL (also honored as env var) |
+| `ONE_PERMISSIONS` | `admin` / `write` / `read` |
+| `ONE_CONNECTION_KEYS` | Comma-separated connection-key allowlist |
+| `ONE_ACTION_IDS` | Comma-separated action-ID allowlist |
+| `ONE_KNOWLEDGE_AGENT` | `true` / `false` — knowledge-only mode |
+
+Precedence: env var > `.onerc` > `~/.one/config.json`.
+
+```bash
+# .onerc
+ONE_SECRET=sk_live_xxx
+ONE_API_BASE=https://development-api.withone.ai
+ONE_PERMISSIONS=read
+```
+
+> ⚠️ **Add `.onerc` to your `.gitignore`.** If you put `ONE_SECRET` in it, committing the file will leak your API key. Treat `.onerc` like `.env` — never check it in.
 
 ## The workflow
 
