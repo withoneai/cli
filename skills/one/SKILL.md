@@ -124,80 +124,72 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 
 ## Local Data Sync
 
-Sync data from any connected platform into local SQLite for instant queries without API calls.
+Sync platform data into local SQLite for instant queries, full-text search, and change-driven automation. Requires one-time `one sync install`.
 
-### First-time install
+### Setup: init → test → run
+
 ```bash
-# Sync requires better-sqlite3 (optional dependency). Install once per machine:
-one sync install
-one sync doctor        # verify
+# 1. Install engine (once per machine)
+one sync install && one sync doctor
+
+# 2. Discover models + create profile (auto-infers most fields)
+one --agent sync models stripe
+one --agent sync init stripe balanceTransactions
+# Only connectionKey is typically left as FILL_IN. Patch it:
+one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
+
+# 3. Validate (auto-fixes any remaining FILL_IN from real API response)
+one --agent sync test stripe/balanceTransactions
+
+# 4. Sync
+one --agent sync run stripe --models balanceTransactions --since 90d
 ```
 
-### Setup (one-time per model)
+### Querying
 ```bash
-# 1. Discover models
-one --agent sync models shopify
-
-# 2. Get a template with auto-inferred pagination/resultsPath/idField from action knowledge
-one --agent sync init shopify orders
-# Response includes `_inferred` array explaining each auto-filled field.
-# Fill any remaining FILL_IN values, then save:
-
-one --agent sync init shopify orders --config '{
-  "platform": "shopify", "model": "orders",
-  "connectionKey": "<key>", "actionId": "<listActionId>",
-  "resultsPath": "orders", "idField": "id",
-  "pagination": {"type": "link", "nextPath": "link.next.page_info", "passAs": "query:page_info"},
-  "dateFilter": {"param": "created_at_min", "format": "iso8601"},
-  "defaultLimit": 250, "limitParam": "limit"
-}'
-
-# 3. Validate with a single-page fetch (no DB writes)
-one --agent sync test shopify/orders
-
-# 4. Initial sync
-one --agent sync run shopify --models orders --since 90d
+one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
+one --agent sync search "refund" --platform stripe          # FTS across all text fields
+one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
+one --agent sync query stripe/balanceTransactions --refresh  # sync first, then query
+one --agent sync list stripe                                 # check freshness
 ```
 
 ### Scheduled syncs
 ```bash
-# Run sync on a schedule via system cron (macOS/Linux)
-one sync schedule add shopify --every 1h
-one sync schedule add hubspot --every 30m --models contacts,companies
-one --agent sync schedule list
-one --agent sync schedule status    # schedules + recent log tails
-one sync schedule remove shopify
+one sync schedule add stripe --every 1h
+one --agent sync schedule list       # works from any directory
+one --agent sync schedule status     # drift detection + log tails
+one sync schedule remove <id>        # by id from anywhere
 ```
-Intervals: `<n>m` (divides 60), `<n>h` (divides 24), or `1d`. Logs go to `.one/sync/logs/<platform>.log`.
 
-### Querying (ongoing)
+### Change hooks (CDC)
+Add hooks to a sync profile to trigger automation on new/changed records:
 ```bash
-# Query with filters
-one --agent sync query shopify/orders --where "status=unfulfilled" --limit 20
+one --agent sync init stripe balanceTransactions --config '{
+  "onInsert": "one flow execute process-new-transaction",
+  "onUpdate": "log"
+}'
+```
+- **Shell command**: record events piped as NDJSON to stdin
+- **`"log"`**: appends to `.one/sync/events/<platform>_<model>.jsonl`
+- **Flow execution**: `one flow execute <key>` with record as input
 
-# Full-text search (all platforms, or filter with --platform)
-one --agent sync search "refund acme"
-one --agent sync search "refund acme" --platform shopify
+Events fire per-page (real-time). Format: `{"type":"insert|update","record":{...},"timestamp":"..."}`
 
-# Refresh + query in one shot
-one --agent sync query shopify/orders --where "total_price>500" --refresh
-
-# Raw SQL
-one --agent sync sql shopify "SELECT count(*) FROM orders WHERE status = 'unfulfilled'"
-
-# Check freshness
-one --agent sync list shopify
+### Deletion detection
+```bash
+one --agent sync run stripe --full-refresh   # fetch ALL, delete stale local rows
 ```
 
 ### Key points
-- `sync init` auto-infers pagination/resultsPath/idField from action knowledge — check the `_inferred` field in the response
-- ALWAYS run `sync test <platform>/<model>` before the first `sync run` — it validates the profile against a real single-page fetch without writing to disk
-- Queries include `lastSync` and `syncAge` so you can judge data freshness
-- Use `--refresh` on queries to trigger incremental sync before querying
-- Use `sync remove --dry-run` to preview deletions before committing
-- Pagination types: cursor, token, offset, id, link, none
-- Schedule unattended syncs with `sync schedule add <platform> --every 1h`
-- Read `one guide sync` for the full reference
+- `sync init` auto-infers pagination, resultsPath, idField, pathVars, dateFilter, and limitLocation from action knowledge — check `_inferred` in the response
+- `sync test` auto-discovers remaining fields from the real API response and patches the profile — run it BEFORE the first `sync run`
+- Path variables (calendarId, userId) are auto-extracted from URL templates with smart defaults (e.g. calendarId="primary")
+- Every record has `_synced_at` — use it to track processing state
+- `--full-refresh` handles source-side deletions by diffing local vs remote IDs
+- Queries include `lastSync` and `syncAge` for freshness judgment
+- `sync remove --dry-run` previews deletions before committing
+- Read `one guide sync` for the full reference including pagination types and profile schema
 
 ## Beyond Single Actions
 

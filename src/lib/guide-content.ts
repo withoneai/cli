@@ -85,16 +85,7 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
 
 ### 4. Sync — Local data sync for instant offline queries
-Sync data from any connected platform into local SQLite. Query instantly without network calls.
-
-**Quick start:**
-\`\`\`bash
-one --agent sync models shopify                                   # Discover models
-one --agent sync init shopify orders --config '{...}'             # Create sync profile
-one --agent sync run shopify --models orders --since 90d          # Sync data
-one --agent sync query shopify/orders --where "status=unfulfilled"  # Query locally
-one --agent sync search "refund"                                  # Full-text search (all platforms)
-\`\`\`
+Sync platform data into local SQLite for instant queries, full-text search, and change-driven automation. Requires a one-time \`one sync install\`. Run \`one guide sync\` for the full reference.
 
 ## Topics
 
@@ -355,192 +346,145 @@ All cache commands respect \`--agent\` for JSON output.
 
 export const GUIDE_SYNC = `# One Sync — Reference
 
-## Overview
+Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation.
 
-Sync data from any connected platform into a local SQLite database. Query instantly without network calls, pagination, or rate limits.
-
-## Concepts
-
-- **Model**: A data type on a platform (e.g., shopify/orders, attio/people, gmail/messages)
-- **Sync profile**: JSON config telling the CLI how to paginate and store a model's data
-- **Sync run**: The CLI pages through all results and writes them to local SQLite
-- **Sync state**: Checkpoint tracking so runs are incremental by default
-
-## Setup Workflow: models → knowledge → init → run → query
+## Getting Started
 
 \`\`\`bash
-# 1. Discover available models
-one --agent sync models shopify
-
-# 2. Read knowledge for the list action to understand pagination/response shape
-one --agent actions knowledge shopify "<actionId from step 1>"
-
-# 3. Create sync profile based on what you learned
-one --agent sync init shopify orders --config '{
-  "platform": "shopify",
-  "model": "orders",
-  "connectionKey": "<from one list>",
-  "actionId": "<from step 1>",
-  "resultsPath": "orders",
-  "idField": "id",
-  "pagination": {
-    "type": "link",
-    "nextPath": "link.next.page_info",
-    "passAs": "query:page_info"
-  },
-  "dateFilter": { "param": "created_at_min", "format": "iso8601" },
-  "defaultLimit": 250,
-  "limitParam": "limit"
-}'
-
-# 4. Run initial sync
-one --agent sync run shopify --models orders --since 90d
-
-# 5. Query local data
-one --agent sync query shopify/orders --where "status=unfulfilled" --limit 20
+one sync install                    # One-time: install the SQLite engine
+one sync doctor                     # Verify it's working
 \`\`\`
 
-## Commands
+## Workflow: init → test → run → query
 
-### Install the Sync Engine (first time only)
 \`\`\`bash
-one sync install        # Installs better-sqlite3 native module
-one sync doctor         # Verifies everything is working
-\`\`\`
-Sync requires SQLite. It ships as an optional dependency, so the base CLI stays lightweight — you only install it if you use sync. Run \`one sync install\` once per machine, or run any \`one sync ...\` command and follow the hint.
+# 1. Discover models
+one --agent sync models stripe
 
-### Validate a Profile
+# 2. Create a profile (auto-infers pagination, resultsPath, idField, pathVars from knowledge)
+one --agent sync init stripe balanceTransactions
+# Patch in connection key (only FILL_IN left for most platforms):
+one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
+
+# 3. Validate (single-page fetch, no writes — auto-fixes remaining FILL_IN fields)
+one --agent sync test stripe/balanceTransactions
+
+# 4. Sync
+one --agent sync run stripe
+
+# 5. Query
+one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
+one --agent sync search "refund" --platform stripe
+one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
+\`\`\`
+
+## Auto-Inference
+
+\`sync init\` without \`--config\` reads the action's knowledge and auto-fills:
+- **Pagination** — Stripe id-pagination, Notion body-cursor, HubSpot/Google token, offset, link
+- **resultsPath** — generic keys (data, results, items) + platform-specific (model name stripped of platform prefix: attioCompanies → companies)
+- **idField** — id, _id, uuid
+- **pathVars** — extracted from URL template with smart defaults (calendarId="primary", userId="me")
+- **dateFilter** — updated_since, created_after, etc.
+- **limitLocation** — auto-detected as "body" for POST endpoints
+
+\`sync test\` goes further: it makes a real API call and auto-discovers resultsPath/idField from the actual response if inference missed them. It patches the profile on disk automatically.
+
+## Scheduled Syncs
+
 \`\`\`bash
-one --agent sync test <platform>/<model>
+one sync schedule add stripe --every 1h
+one sync schedule add notion --every 30m --models search
+one --agent sync schedule list            # Works from any directory
+one --agent sync schedule status          # Drift detection + log tails
+one sync schedule remove <id|platform>    # By id (any dir) or platform
+one sync schedule repair <id>             # Re-install broken cron line
 \`\`\`
-Does a single-page fetch, verifies resultsPath → array, idField → present, and that pagination produces a next-page hint. No DB writes. Always run this after \`sync init\` before committing to a full \`sync run\`.
+Backed by system cron (macOS/Linux). Schedules tracked in a global registry at \`~/.one/sync/schedules.json\`.
 
-### Scheduled Syncs (cron)
+## Change Hooks (CDC)
+
+Add \`onInsert\`, \`onUpdate\`, or \`onChange\` to a sync profile to fire hooks when records change:
+
+\`\`\`json
+{
+  "onInsert": "one flow execute enrich-new-contact",
+  "onUpdate": "log",
+  "onChange": "node ./scripts/handle-change.js"
+}
+\`\`\`
+
+**Hook modes:**
+- **Shell command** — record events piped as NDJSON to stdin
+- **\`"log"\`** — append to \`.one/sync/events/<platform>_<model>.jsonl\`
+- **Flow execution** — \`one flow execute <key>\` with record as input
+
+Hooks fire after each page (not end-of-sync) for real-time processing. Each event:
+\`{"type":"insert|update","platform":"...","model":"...","record":{...},"timestamp":"..."}\`
+
+Every record has a \`_synced_at\` timestamp so you can track when it was last pulled.
+
+## Full Refresh (deletion detection)
+
 \`\`\`bash
-one sync schedule add shopify --every 1h
-one sync schedule add hubspot --every 30m --models contacts,companies
-one sync schedule list
-one sync schedule status          # Show schedules + recent log output
-one sync schedule remove shopify
+one --agent sync run stripe --full-refresh
 \`\`\`
-Schedules are installed into your system crontab (macOS/Linux). Accepted intervals: \`<n>m\` (must divide 60), \`<n>h\` (must divide 24), or \`1d\`. Each run appends to \`.one/sync/logs/<platform>.log\`. Windows is not yet supported — use Task Scheduler manually.
+Fetches ALL records and deletes local rows whose IDs are no longer in the source. Cannot be combined with \`--since\`.
 
-### Discover Models
-\`\`\`bash
-one --agent sync models <platform>
-\`\`\`
-Lists data models with their list action IDs. Use these action IDs in sync profiles.
+## Commands Reference
 
-### Initialize Sync Profile
-\`\`\`bash
-# Get a template (pre-populated with action ID + auto-inferred pagination/idField/resultsPath from knowledge)
-one --agent sync init <platform> <model>
-
-# Save a complete profile
-one --agent sync init <platform> <model> --config '<json>'
-\`\`\`
-When no \`--config\` is passed, \`sync init\` fetches the action's knowledge and tries to infer \`pagination\`, \`resultsPath\`, \`idField\`, and \`dateFilter\`. The response includes \`_inferred\` explaining each decision. Always run \`sync test\` afterwards to confirm.
-
-### Run Sync
-\`\`\`bash
-one --agent sync run <platform> [--models m1,m2] [--since 90d] [--force] [--max-pages 10] [--dry-run]
-\`\`\`
-- Omit \`--models\` to sync all configured models for the platform
-- \`--since\`: Duration (90d, 30d, 7d) or ISO date. Default: last sync or 90 days
-- \`--force\`: Ignore checkpoints, start fresh
-- \`--dry-run\`: Fetch first page only, don't persist
-- State is saved after each page — interrupted syncs resume automatically
-
-### Query Local Data
-\`\`\`bash
-one --agent sync query <platform>/<model> [--where "field=value"] [--after date] [--before date] [--limit n] [--order-by field] [--order asc|desc]
-\`\`\`
-- \`--where\`: Comma-separated conditions: \`"status=active,plan=pro"\`
-- Operators: =, !=, >, <, >=, <=, like
-- \`--refresh\`: Trigger incremental sync before querying
-- \`--refresh-force\`: Full re-sync before querying
-- Response includes \`lastSync\` and \`syncAge\` so you can judge freshness
-
-### Full-Text Search
-\`\`\`bash
-one --agent sync search "<query>" [--platform <platform>] [--models m1,m2] [--limit 20]
-\`\`\`
-Uses SQLite FTS5 across all text fields. Searches all synced platforms by default, or filter with \`--platform\`. Results include rank scores.
-
-### Raw SQL
-\`\`\`bash
-one --agent sync sql <platform> "SELECT count(*) FROM orders WHERE status = 'unfulfilled'"
-\`\`\`
-SELECT only — sync databases are read-only.
-
-### List Syncs
-\`\`\`bash
-one --agent sync list [platform]
-\`\`\`
-
-### Remove Sync Data
-\`\`\`bash
-one --agent sync remove <platform> [--models m1,m2] [--dry-run] [--yes]
-\`\`\`
-Use \`--dry-run\` to preview record counts and disk usage before deleting.
+| Command | What it does |
+|---------|-------------|
+| \`sync install\` | Install SQLite engine (first time) |
+| \`sync doctor\` | Verify engine health |
+| \`sync models <platform>\` | Discover available models |
+| \`sync init <plat> <model>\` | Create profile (auto-infers from knowledge) |
+| \`sync test <plat>/<model>\` | Validate profile + auto-fix fields |
+| \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`) |
+| \`sync query <plat>/<model>\` | Query with \`--where\`, \`--after/before\`, \`--refresh\` |
+| \`sync search "<query>"\` | FTS5 across all synced data |
+| \`sync sql <plat> "<sql>"\` | Raw SELECT queries |
+| \`sync list [platform]\` | Show profiles, record counts, freshness |
+| \`sync schedule add/list/status/remove/repair\` | Manage cron schedules |
+| \`sync remove <platform>\` | Delete local data (\`--dry-run\` to preview) |
 
 ## Sync Profile Fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| platform | yes | Platform slug |
-| model | yes | Model name |
-| connectionKey | yes | Connection key for API calls |
-| actionId | yes | The list action ID from sync models |
-| resultsPath | yes | Dot-path to results array (e.g., "orders", "data.items") |
-| idField | yes | Unique ID field on each record |
-| pagination | yes | Pagination config (see below) |
-| dateFilter | no | Date filter param and format |
-| defaultLimit | no | Page size (default: 100) |
-| limitParam | no | Query param for page size (default: "limit") |
-| pathVars | no | Static path variables (e.g., {"userId": "me"}) |
-| queryParams | no | Additional static query params |
+| connectionKey | yes | From \`one list\` |
+| actionId | yes | Auto-resolved by \`sync init\` |
+| resultsPath | yes | Auto-inferred or auto-discovered by \`sync test\` |
+| idField | yes | Auto-inferred or auto-discovered by \`sync test\` |
+| pagination | yes | Auto-inferred (cursor/token/offset/id/link/none) |
+| pathVars | no | Auto-extracted from URL template |
+| dateFilter | no | For incremental sync (auto-detected when available) |
+| limitParam | no | Page size param name (empty string = don't send) |
+| limitLocation | no | "query" (default) or "body" for POST endpoints |
+| onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
 
 ## Pagination Types
 
-**cursor** — cursor string at a response path:
-\`{"type": "cursor", "nextPath": "pagination.next_cursor", "passAs": "query:cursor"}\`
-
-**token** — Google-style nextPageToken:
-\`{"type": "token", "nextPath": "nextPageToken", "passAs": "query:pageToken"}\`
-
-**offset** — numeric offset incremented by page size:
-\`{"type": "offset", "passAs": "query:offset", "totalPath": "total"}\`
-
-**id** — Stripe-style starting_after:
-\`{"type": "id", "idField": "id", "passAs": "query:starting_after", "hasMorePath": "has_more"}\`
-
-**link** — cursor from Link header or response:
-\`{"type": "link", "nextPath": "link.next.page_info", "passAs": "query:page_info"}\`
-
-**none** — single request, no pagination:
-\`{"type": "none"}\`
+- **cursor** — \`{"type":"cursor", "nextPath":"next_cursor", "passAs":"query:cursor"}\`
+- **token** — \`{"type":"token", "nextPath":"paging.next.after", "passAs":"query:after"}\`
+- **offset** — \`{"type":"offset", "passAs":"query:offset", "totalPath":"total"}\`
+- **id** — \`{"type":"id", "passAs":"query:starting_after", "hasMorePath":"has_more"}\`
+- **link** — \`{"type":"link", "nextPath":"link.next.page_info", "passAs":"query:page_info"}\`
+- **none** — single request, no pagination (no limit param injected)
 
 ## File Layout
 
 \`\`\`
 .one/sync/
   profiles/{platform}_{model}.json    # sync profiles
-  data/{platform}.db                  # SQLite databases
+  data/{platform}.db                  # SQLite databases (WAL mode)
   sync_state.json                     # checkpoint tracking
+  events/{platform}_{model}.jsonl     # change event logs (if onChange: "log")
+  logs/{platform}.log                 # cron run logs
+  locks/{platform}_{model}/           # cross-process sync locks
+~/.one/sync/
+  schedules.json                      # global schedule registry
 \`\`\`
-
-Sync data is stored in the project directory (\`.one/sync/\`), not globally. This keeps data scoped per project.
-
-## Tips
-
-- \`sync init\` auto-infers most fields from action knowledge — always verify with \`sync test\` before the first full run
-- Use \`--dry-run\` on \`sync run\` to preview the first page without writing
-- Use \`--dry-run\` on \`sync remove\` to preview what would be deleted
-- Incremental sync is automatic — just run \`sync run\` again
-- Set up \`sync schedule add\` so syncs run unattended; check \`sync schedule status\` to audit logs
-- Use \`--refresh\` on queries to ensure fresh data without a separate sync command
-- FTS search works across all text fields — great for finding specific records
 `;
 
 type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'sync' | 'all';

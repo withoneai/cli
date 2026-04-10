@@ -273,68 +273,47 @@ Note: `actions execute` is never cached — it always hits the API fresh.
 
 ### `one sync`
 
-Sync data from any connected platform into local SQLite for instant offline queries.
-
-The sync engine uses `better-sqlite3`, which ships as an **optional dependency** to keep the base CLI lightweight. Install it once per machine before running any `sync` command:
+Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation. The sync engine (`better-sqlite3`) is an optional dependency — install it once per machine:
 
 ```bash
-one sync install      # Installs the native SQLite module
-one sync doctor       # Verifies the engine loads, FTS5 works, etc.
+one sync install && one sync doctor
 ```
 
 ```bash
-# Discover available models
-one sync models shopify
+# Discover → init (auto-infers most fields) → test (auto-fixes the rest) → run
+one sync models stripe
+one sync init stripe balanceTransactions
+one sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
+one sync test stripe/balanceTransactions
+one sync run stripe --since 90d
 
-# Create a sync profile — auto-infers pagination/resultsPath/idField from action knowledge
-one sync init shopify orders
-one sync init shopify orders --config '{"platform":"shopify","model":"orders",...}'
-
-# Validate the profile with a single-page fetch (no writes)
-one sync test shopify/orders
-
-# Run sync
-one sync run shopify --models orders --since 90d
-
-# Query local data
-one sync query shopify/orders --where "status=unfulfilled" --limit 20
-
-# Full-text search (all platforms)
+# Query, search, SQL
+one sync query stripe/balanceTransactions --where "status=available" --limit 20
 one sync search "refund"
+one sync sql stripe "SELECT count(*) FROM balanceTransactions"
 
-# Raw SQL (SELECT only)
-one sync sql shopify "SELECT count(*) FROM orders"
+# Schedule unattended syncs + change hooks
+one sync schedule add stripe --every 1h
+one sync init stripe balanceTransactions --config '{"onInsert":"one flow execute handle-new-txn"}'
 
-# Schedule unattended syncs via system cron
-one sync schedule add shopify --every 1h
-one sync schedule list
-one sync schedule status
-one sync schedule remove shopify
-
-# Check sync status
-one sync list
-
-# Preview then remove sync data
-one sync remove shopify --models orders --dry-run
-one sync remove shopify --models orders
+# Deletion detection
+one sync run stripe --full-refresh
 ```
 
 | Subcommand | What it does |
 |------------|-------------|
-| `install` | Install the native SQLite engine (first-time setup) |
-| `doctor` | Verify the engine is installed and working |
+| `install` / `doctor` | Install + verify the SQLite engine |
 | `models <platform>` | Discover available data models |
-| `init <platform> <model>` | Create or update a sync profile (auto-infers from knowledge) |
-| `test <platform>/<model>` | Validate a profile with a single-page fetch |
-| `run <platform>` | Sync data locally |
-| `query <platform>/<model>` | Query local data with filters |
-| `search <query>` | Full-text search across all synced data |
-| `sql <platform> <sql>` | Execute raw SQL (SELECT only) |
-| `list [platform]` | List sync profiles and status |
-| `schedule add/list/status/remove` | Manage scheduled syncs via system cron |
-| `remove <platform>` | Remove sync data and profiles (`--dry-run` to preview) |
+| `init <platform> <model>` | Create profile (auto-infers pagination, resultsPath, idField, pathVars) |
+| `test <platform>/<model>` | Validate + auto-fix profile from real API response |
+| `run <platform>` | Sync data (`--full-refresh`, `--since`, `--dry-run`) |
+| `query <platform>/<model>` | Query with `--where`, `--after/before`, `--refresh` |
+| `search <query>` | FTS5 across all synced data |
+| `sql <platform> <sql>` | Raw SELECT queries |
+| `schedule add/list/status/remove/repair` | Cron-backed scheduled syncs with drift detection |
+| `remove <platform>` | Delete local data (`--dry-run` to preview) |
 
-Run `one guide sync` for the full reference including pagination types, profile fields, and agent workflow.
+Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Run `one guide sync` for the full reference.
 
 ### `one guide [topic]`
 
