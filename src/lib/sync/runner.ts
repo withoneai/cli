@@ -7,6 +7,7 @@ import { getNextPageParams } from './pagination.js';
 import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
+import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
 import type Database from 'better-sqlite3';
 
 const MAX_RETRIES_PER_PAGE = 3;
@@ -94,6 +95,10 @@ export async function syncModel(
   let lastCursor: unknown = null;
   // Track every id we saw across pages, for --full-refresh deletion reconciliation.
   const seenIds = new Set<string | number>();
+  // Hook counters
+  let hooksInserted = 0;
+  let hooksUpdated = 0;
+  const hasHooks = !!(profile.onInsert || profile.onUpdate || profile.onChange);
 
   try {
     db = await openDatabase(platform);
@@ -268,6 +273,17 @@ export async function syncModel(
         }
       }
 
+      // Classify records as insert vs update BEFORE upserting (for hooks)
+      let inserts: Record<string, unknown>[] = [];
+      let updates: Record<string, unknown>[] = [];
+      if (hasHooks) {
+        const classified = classifyRecords(
+          db, model, records as Record<string, unknown>[], profile.idField, tableCreated,
+        );
+        inserts = classified.inserts;
+        updates = classified.updates;
+      }
+
       // Upsert records
       const inserted = upsertRecords(
         db,
@@ -277,6 +293,27 @@ export async function syncModel(
       );
       totalRecords += inserted;
       pagesProcessed++;
+
+      // Fire hooks after each page (not at the end) so long syncs get real-time events
+      if (hasHooks) {
+        const now = new Date().toISOString();
+        const buildEvents = (type: 'insert' | 'update', recs: Record<string, unknown>[]): ChangeEvent[] =>
+          recs.map(record => ({ type, platform, model, record, timestamp: now }));
+
+        const insertEvents = buildEvents('insert', inserts);
+        const updateEvents = buildEvents('update', updates);
+        hooksInserted += inserts.length;
+        hooksUpdated += updates.length;
+
+        // Fire onInsert hook
+        if (inserts.length > 0 && (profile.onInsert || profile.onChange)) {
+          await fireHooks(profile.onInsert || profile.onChange!, insertEvents);
+        }
+        // Fire onUpdate hook
+        if (updates.length > 0 && (profile.onUpdate || profile.onChange)) {
+          await fireHooks(profile.onUpdate || profile.onChange!, updateEvents);
+        }
+      }
 
       // Progress output
       if (!isAgentMode()) {
@@ -373,7 +410,10 @@ export async function syncModel(
 
     db.close();
     if (lock) lock.release();
-    return { model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale };
+    return {
+      model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale,
+      ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
+    };
 
   } catch (err) {
     // Save failed state

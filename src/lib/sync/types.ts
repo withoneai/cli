@@ -42,6 +42,23 @@ export interface SyncProfile {
   body?: Record<string, unknown>;
   /** Where to send the limit param: "query" (default) or "body" */
   limitLocation?: 'query' | 'body';
+  /**
+   * Hook fired for each newly inserted record. Values:
+   * - shell command string: record piped as JSON to stdin
+   * - "log": append to `.one/sync/events/<platform>_<model>.jsonl`
+   */
+  onInsert?: string;
+  /**
+   * Hook fired for each updated record (id existed but data changed). Values:
+   * - shell command string: record piped as JSON to stdin
+   * - "log": append to `.one/sync/events/<platform>_<model>.jsonl`
+   */
+  onUpdate?: string;
+  /**
+   * Hook fired for any change (insert or update). Shorthand when you don't
+   * need to distinguish between the two. Same value format as onInsert/onUpdate.
+   */
+  onChange?: string;
 }
 
 export interface ModelSyncState {
@@ -63,6 +80,10 @@ export interface SyncRunResult {
   status: 'complete' | 'failed' | 'dry-run';
   /** Rows removed by --full-refresh because they were no longer in the source. */
   deletedStale?: number;
+  /** Count of records that triggered onInsert/onChange hooks. */
+  hooksInserted?: number;
+  /** Count of records that triggered onUpdate/onChange hooks. */
+  hooksUpdated?: number;
 }
 
 export interface SyncRunOptions {
