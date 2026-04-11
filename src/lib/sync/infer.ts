@@ -146,8 +146,9 @@ function inferPathVars(knowledge: string): Record<string, string> | undefined {
   const urlMatches = knowledge.matchAll(/\{\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?\}/g);
   for (const m of urlMatches) {
     const name = m[1];
-    // Skip common template vars that aren't path params (Handlebars context, etc.)
+    // Skip Handlebars template vars, internal keys, and record-level IDs
     if (['payload', 'timestamp', 'eventType', 'connectionId', 'relayEventId'].includes(name)) continue;
+    if (isExcludedPathVar(name)) continue;
     vars[name] = suggestDefault(name);
   }
 
@@ -155,16 +156,35 @@ function inferPathVars(knowledge: string): Record<string, string> | undefined {
   return vars;
 }
 
+/** Path variable names that are internal to the One API proxy and should never
+ *  appear in a sync profile — they leak implementation details to the user. */
+const INTERNAL_PATH_VARS = new Set([
+  'internal_signing_key', 'signing_key', 'api_key', 'apikey',
+  'secret', 'token', 'access_token', 'refresh_token',
+]);
+
+/** Path variable names that refer to a single record (not a list endpoint).
+ *  These show up in knowledge because the same model has get-one and get-many
+ *  actions, but they don't belong in a sync profile for the list action. */
+const RECORD_LEVEL_PATH_VARS = new Set([
+  'record_id', 'recordid', 'id', 'itemid', 'item_id',
+  'pageid', 'page_id', 'objectid', 'object_id',
+  'entryid', 'entry_id', 'resourceid', 'resource_id',
+]);
+
 /** Suggest a reasonable default value for well-known path variables. */
 function suggestDefault(varName: string): string {
   const lower = varName.toLowerCase();
-  // Google Calendar
   if (lower === 'calendarid') return 'primary';
-  // Google-style "me" user
   if (lower === 'userid' || lower === 'user_id') return 'me';
-  // Generic owner/account self-reference
   if (lower === 'accountid' || lower === 'account_id') return 'me';
   return 'FILL_IN';
+}
+
+/** Return true if this path var name should be excluded from sync profiles. */
+function isExcludedPathVar(varName: string): boolean {
+  const lower = varName.toLowerCase();
+  return INTERNAL_PATH_VARS.has(lower) || RECORD_LEVEL_PATH_VARS.has(lower);
 }
 
 /** Try to infer the ID field from knowledge. */
@@ -194,7 +214,19 @@ export function inferProfileFromKnowledge(knowledge: string | undefined, modelNa
 
   for (const pattern of PAGINATION_PATTERNS) {
     if (pattern.match.test(knowledge)) {
-      hints.pagination = pattern.config;
+      // Deep copy so we can strip inapplicable fields
+      hints.pagination = { ...pattern.config };
+      // Strip fields that don't apply to the detected type:
+      // - offset doesn't need nextPath (you just increment by pageSize)
+      // - none doesn't need nextPath or passAs
+      if (hints.pagination.type === 'offset') {
+        delete hints.pagination.nextPath;
+        delete hints.pagination.hasMorePath;
+      } else if (hints.pagination.type === 'none') {
+        delete hints.pagination.nextPath;
+        delete hints.pagination.passAs;
+        delete hints.pagination.hasMorePath;
+      }
       hints.reasoning.push(`Pagination: ${pattern.label}`);
       break;
     }

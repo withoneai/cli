@@ -198,7 +198,10 @@ async function syncInitCommand(platform: string, model: string, options: { confi
           const knowledgeResp = await api.getActionKnowledge(actionId);
           inferred = inferProfileFromKnowledge(knowledgeResp?.knowledge, model, platform);
 
-          if (inferred.pagination) template.pagination = { ...(template.pagination as object), ...inferred.pagination };
+          // Replace the template's default pagination entirely with the inferred
+          // one — merging would preserve stale FILL_IN keys that the inferred
+          // config deliberately omitted (e.g. nextPath for offset pagination).
+          if (inferred.pagination) template.pagination = inferred.pagination;
           if (inferred.resultsPath) template.resultsPath = inferred.resultsPath;
           if (inferred.idField) template.idField = inferred.idField;
           if (inferred.dateFilterParam) {
@@ -206,34 +209,92 @@ async function syncInitCommand(platform: string, model: string, options: { confi
           }
           if (inferred.limitLocation) template.limitLocation = inferred.limitLocation;
           if (inferred.limitParam) template.limitParam = inferred.limitParam;
-          if (inferred.pathVars) template.pathVars = inferred.pathVars;
+          if (inferred.pathVars && Object.keys(inferred.pathVars).length > 0) {
+            template.pathVars = inferred.pathVars;
+          }
         } catch {
           // Knowledge fetch failed — leave template as-is
         }
       }
 
-      const hint = actionId
-        ? `Action ID resolved. Next: verify with \`one sync test ${platform}/${model}\` after filling any remaining FILL_IN fields.`
-        : `Action ID not resolved. Run: one --agent actions search ${platform} "list ${model}" -t execute`;
+      // Auto-resolve connectionKey when there's exactly one connection for this platform
+      try {
+        const connections = await api.listConnections();
+        const platformConns = connections.filter(
+          (c: { platform: string; key: string }) => c.platform === platform
+        );
+        if (platformConns.length === 1) {
+          template.connectionKey = platformConns[0].key;
+          inferred?.reasoning.push(`connectionKey: auto-resolved (only one ${platform} connection)`);
+        } else if (platformConns.length > 1) {
+          inferred?.reasoning.push(
+            `connectionKey: ${platformConns.length} connections found — pick one from \`one list\``
+          );
+        }
+      } catch {
+        // Best-effort — leave as FILL_IN
+      }
 
-      // Persist as a draft so the agent can patch missing fields (like
-      // connectionKey) via a minimal --config without re-supplying everything.
+      // Persist as a draft
       try {
         writeDraftProfile(platform, model, template);
       } catch {
-        // Best-effort — ignore errors
+        // Best-effort
       }
 
+      // Check if the profile is complete (no FILL_IN values remaining)
+      const templateStr = JSON.stringify(template);
+      const isComplete = !templateStr.includes('FILL_IN');
+
+      // If complete, auto-run sync test so the agent gets immediate feedback
+      let testReport: Awaited<ReturnType<typeof testSyncProfile>> | null = null;
+      if (isComplete) {
+        try {
+          testReport = await testSyncProfile(api, template as unknown as SyncProfile);
+          // If test auto-fixed fields, persist them
+          if (testReport.autoFixed && Object.keys(testReport.autoFixed).length > 0) {
+            Object.assign(template, testReport.autoFixed);
+            try { writeDraftProfile(platform, model, template); } catch { /* best-effort */ }
+          }
+        } catch {
+          // Test failed — report will show the error
+        }
+      }
+
+      const hint = isComplete
+        ? (testReport?.ok
+            ? `Profile complete and validated. Run: one sync run ${platform} --models ${model}`
+            : `Profile complete but test had issues — check the test report below.`)
+        : (actionId
+            ? `Fill remaining FILL_IN fields, then: one sync test ${platform}/${model}`
+            : `Action ID not resolved. Run: one --agent actions search ${platform} "list ${model}" -t execute`);
+
       if (output.isAgentMode()) {
-        output.json({ ...template, _hint: hint, _inferred: inferred?.reasoning ?? [], _draft: true });
+        output.json({
+          ...template,
+          _hint: hint,
+          _inferred: inferred?.reasoning ?? [],
+          _draft: !isComplete,
+          _complete: isComplete,
+          ...(testReport ? { _test: { ok: testReport.ok, checks: testReport.checks, autoFixed: testReport.autoFixed } } : {}),
+        });
       } else {
         output.note(JSON.stringify(template, null, 2), 'Sync profile template');
         if (inferred && inferred.reasoning.length > 0) {
           console.log(`\n${pc.bold('Inferred from knowledge:')}`);
           for (const r of inferred.reasoning) console.log(`  ${pc.dim('•')} ${r}`);
         }
+        if (testReport) {
+          console.log(`\n${pc.bold('Test results:')}`);
+          for (const c of testReport.checks) {
+            const mark = c.ok ? pc.green('✓') : pc.red('✗');
+            console.log(`  ${mark} ${c.name}${c.detail ? pc.dim(` — ${c.detail}`) : ''}`);
+          }
+        }
         console.log(`\n${hint}`);
-        console.log(`\nRun with --config to save:\n  one sync init ${platform} ${model} --config '${JSON.stringify(template)}'`);
+        if (!isComplete) {
+          console.log(`\nRun with --config to save:\n  one sync init ${platform} ${model} --config '${JSON.stringify(template)}'`);
+        }
       }
     } catch (err) {
       spinner.stop('Failed');
