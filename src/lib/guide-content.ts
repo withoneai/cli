@@ -405,6 +405,35 @@ one sync schedule repair <id>             # Re-install broken cron line
 \`\`\`
 Backed by system cron (macOS/Linux). Schedules tracked in a global registry at \`~/.one/sync/schedules.json\`.
 
+## Record Enrichment
+
+When a list endpoint returns lightweight records (e.g. just IDs), add an \`enrich\` config to call a detail endpoint per record and merge the full data before storing:
+
+\`\`\`json
+{
+  "enrich": {
+    "actionId": "<get-message-action-id>",
+    "pathVars": { "messageId": "{{id}}" },
+    "concurrency": 3,
+    "delayMs": 200
+  }
+}
+\`\`\`
+
+- \`pathVars\` / \`queryParams\` / \`body\` support \`{{field}}\` interpolation from the list record
+- \`concurrency\` controls parallel detail requests per page (default: 3, lower = safer for rate limits)
+- \`delayMs\` is the pause between batches (default: 200ms)
+- \`resultsPath\` extracts a sub-object from the detail response before merging
+- \`merge: false\` replaces the record entirely instead of deep-merging
+
+**Rate limiting is first-class:**
+- Honors \`Retry-After\` headers from 429 responses
+- Exponential backoff (2s → 4s → 8s)
+- Adaptive throttle: if any request in a batch hits 429, concurrency halves automatically
+- Records that fail after 3 retries are skipped (sync continues, count reported in \`enrichSkipped\`)
+
+Enrichment runs after fetch but before hooks — so \`onInsert\`/\`onUpdate\` receive the full enriched record.
+
 ## Change Hooks (CDC)
 
 Add \`onInsert\`, \`onUpdate\`, or \`onChange\` to a sync profile to fire hooks when records change:
@@ -464,6 +493,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 | dateFilter | no | For incremental sync (auto-detected when available) |
 | limitParam | no | Page size param name (empty string = don't send) |
 | limitLocation | no | "query" (default) or "body" for POST endpoints |
+| enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
 | onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
 
 ## Pagination Types

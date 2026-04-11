@@ -43,6 +43,12 @@ export interface SyncProfile {
   /** Where to send the limit param: "query" (default) or "body" */
   limitLocation?: 'query' | 'body';
   /**
+   * Enrich each record by calling a detail endpoint after the list fetch.
+   * Useful when the list endpoint returns lightweight records (e.g. just IDs)
+   * and a second API call is needed for the full data.
+   */
+  enrich?: EnrichConfig;
+  /**
    * Hook fired for each newly inserted record. Values:
    * - shell command string: record piped as JSON to stdin
    * - "log": append to `.one/sync/events/<platform>_<model>.jsonl`
@@ -84,6 +90,12 @@ export interface SyncRunResult {
   hooksInserted?: number;
   /** Count of records that triggered onUpdate/onChange hooks. */
   hooksUpdated?: number;
+  /** Count of records successfully enriched via the detail endpoint. */
+  enriched?: number;
+  /** Count of records skipped during enrichment (errors/auth). */
+  enrichSkipped?: number;
+  /** Count of records that hit rate limits during enrichment. */
+  enrichRateLimited?: number;
 }
 
 export interface SyncRunOptions {
@@ -115,6 +127,25 @@ export interface SyncQueryOptions {
 export interface ParsedPassAs {
   location: 'query' | 'header' | 'body';
   paramName: string;
+}
+
+export interface EnrichConfig {
+  /** The action ID for the detail/get-one endpoint. */
+  actionId: string;
+  /** Path variables with {{field}} interpolation (e.g. {"messageId": "{{id}}"}). */
+  pathVars?: Record<string, string | number | boolean>;
+  /** Query parameters with {{field}} interpolation. */
+  queryParams?: Record<string, string | number | boolean>;
+  /** Request body with {{field}} interpolation (for POST detail endpoints). */
+  body?: Record<string, unknown>;
+  /** Dot-path to extract the detail data from the response (default: whole response). */
+  resultsPath?: string;
+  /** Deep-merge detail into list record (default: true). Set false to replace. */
+  merge?: boolean;
+  /** Max parallel detail requests per page (default: 3). Lower = safer for rate limits. */
+  concurrency?: number;
+  /** Delay in ms between batches of detail requests (default: 200). */
+  delayMs?: number;
 }
 
 export interface DiscoveredModel {

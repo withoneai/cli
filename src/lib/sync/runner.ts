@@ -8,6 +8,7 @@ import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
+import { enrichRecords, type EnrichResult } from './enrich.js';
 import type Database from 'better-sqlite3';
 
 const MAX_RETRIES_PER_PAGE = 3;
@@ -99,6 +100,10 @@ export async function syncModel(
   let hooksInserted = 0;
   let hooksUpdated = 0;
   const hasHooks = !!(profile.onInsert || profile.onUpdate || profile.onChange);
+  // Enrich counters
+  let enrichedTotal = 0;
+  let enrichSkipped = 0;
+  let enrichRateLimited = 0;
 
   try {
     db = await openDatabase(platform);
@@ -255,7 +260,22 @@ export async function syncModel(
         tableCreated = true;
       }
 
-      // Evolve schema if needed (check for new fields)
+      // Enrich records if configured (call detail endpoint per record)
+      if (profile.enrich) {
+        if (!isAgentMode()) {
+          process.stderr.write(`  Enriching ${(records as unknown[]).length} records...\r`);
+        }
+        const enrichResult = await enrichRecords(
+          api, profile.enrich, records as Record<string, unknown>[],
+          profile.connectionKey, platform,
+        );
+        enrichedTotal += enrichResult.enriched;
+        enrichSkipped += enrichResult.skipped;
+        enrichRateLimited += enrichResult.rateLimited;
+      }
+
+      // Evolve schema if needed (check for new fields — do this AFTER enrich
+      // because enrichment may have added new fields to the records)
       for (const record of records) {
         if (typeof record === 'object' && record !== null) {
           evolveSchema(db, model, record as Record<string, unknown>);
@@ -413,6 +433,7 @@ export async function syncModel(
     return {
       model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale,
       ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
+      ...(profile.enrich ? { enriched: enrichedTotal, enrichSkipped, enrichRateLimited } : {}),
     };
 
   } catch (err) {

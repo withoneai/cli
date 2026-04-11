@@ -161,6 +161,19 @@ one --agent sync schedule status     # drift detection + log tails
 one sync schedule remove <id>        # by id from anywhere
 ```
 
+### Record enrichment
+When a list endpoint returns lightweight records (just IDs), enrich with a detail endpoint:
+```bash
+one --agent sync init gmail messages --config '{
+  "enrich": {
+    "actionId": "<get-message-action-id>",
+    "pathVars": {"messageId": "{{id}}"},
+    "concurrency": 3
+  }
+}'
+```
+Uses `{{field}}` interpolation from the list record. Rate-limit-aware: honors Retry-After, exponential backoff, adaptive concurrency reduction on 429s. Enrichment runs before hooks — `onInsert` gets the full data.
+
 ### Change hooks (CDC)
 Add hooks to a sync profile to trigger automation on new/changed records:
 ```bash
