@@ -3,7 +3,7 @@ import { ApiError } from '../api.js';
 import { getByDotPath } from '../dot-path.js';
 import { isAgentMode } from '../output.js';
 import type { SyncProfile, SyncRunResult, SyncRunOptions, ModelSyncState } from './types.js';
-import { getNextPageParams } from './pagination.js';
+import { getNextPageParams, parsePassAs } from './pagination.js';
 import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
@@ -15,8 +15,74 @@ import type Database from 'better-sqlite3';
 const MAX_RETRIES_PER_PAGE = 3;
 const DEFAULT_SINCE_DAYS = 90;
 
+/** Check if an error is a retryable network-level failure (not an HTTP status). */
+function isNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EPIPE', 'UND_ERR_SOCKET'].includes(code)) {
+    return true;
+  }
+  // fetch() failures often have generic messages
+  const msg = err.message.toLowerCase();
+  return msg.includes('fetch failed') || msg.includes('network') || msg.includes('socket');
+}
+
+/** Truncate a string to maxLen chars, appending "…(truncated)" if clipped. */
+function truncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen) + '…(truncated)';
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Strip fields from a record by dot-path. Supports array notation:
+ *   "messages[].body"  → for each element in record.messages, delete .body
+ *   "payload.parts"    → delete record.payload.parts
+ *   "data"             → delete record.data
+ */
+function stripFields(record: Record<string, unknown>, paths: string[]): void {
+  for (const path of paths) {
+    stripOnePath(record, path.split('.'));
+  }
+}
+
+function stripOnePath(obj: Record<string, unknown>, parts: string[]): void {
+  if (parts.length === 0 || !obj || typeof obj !== 'object') return;
+
+  const current = parts[0];
+  const rest = parts.slice(1);
+
+  // Array notation: "messages[]"
+  if (current.endsWith('[]')) {
+    const key = current.slice(0, -2);
+    const arr = obj[key];
+    if (Array.isArray(arr)) {
+      if (rest.length === 0) {
+        // "messages[]" with no further path — delete the array itself
+        delete obj[key];
+      } else {
+        for (const item of arr) {
+          if (typeof item === 'object' && item !== null) {
+            stripOnePath(item as Record<string, unknown>, rest);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (rest.length === 0) {
+    delete obj[current];
+    return;
+  }
+
+  const child = obj[current];
+  if (typeof child === 'object' && child !== null && !Array.isArray(child)) {
+    stripOnePath(child as Record<string, unknown>, rest);
+  }
 }
 
 /** Parse --since flag: "90d", "30d", "2026-01-01", etc. */
@@ -175,8 +241,35 @@ export async function syncModel(
     let currentPageQueryParams = { ...queryParams };
     let currentPageBodyParams = { ...bodyParams };
     let currentPageHeaders: Record<string, string> | undefined;
+    let startPage = 0;
 
-    for (let page = 0; page < maxPages; page++) {
+    // Resume from saved cursor if the previous run failed mid-sync.
+    // Only applies when not forcing and the state has a cursor.
+    if (
+      !options.force &&
+      !options.fullRefresh &&
+      existingState?.status === 'failed' &&
+      existingState.lastCursor != null &&
+      profile.pagination.passAs
+    ) {
+      const { location, paramName } = parsePassAs(profile.pagination.passAs);
+      if (location === 'header') {
+        currentPageHeaders = { ...currentPageHeaders, [paramName]: String(existingState.lastCursor) };
+      } else if (location === 'body') {
+        currentPageBodyParams[paramName] = existingState.lastCursor;
+      } else {
+        currentPageQueryParams[paramName] = existingState.lastCursor;
+      }
+      startPage = existingState.pagesProcessed;
+      if (!isAgentMode()) {
+        process.stderr.write(
+          `Resuming ${platform}/${model} from page ${startPage + 1} ` +
+          `(cursor: ${String(existingState.lastCursor).slice(0, 40)})\n`
+        );
+      }
+    }
+
+    for (let page = startPage; page < maxPages + startPage; page++) {
       // Execute API request with retry logic
       let responseData: unknown;
       let retries = 0;
@@ -198,12 +291,16 @@ export async function syncModel(
           break;
         } catch (err) {
           if (err instanceof ApiError) {
-            if (err.status === 429 && retries < MAX_RETRIES_PER_PAGE) {
-              // Rate limited — honor Retry-After if the server provided it,
-              // otherwise use exponential backoff (30s, 60s, 120s).
-              const retryAfter = err.retryAfterSeconds ?? Math.min(30 * Math.pow(2, retries), 120);
+            // Rate limited (429) or server error (5xx) — retry with backoff
+            const isRateLimited = err.status === 429;
+            const isServerError = err.status >= 500 && err.status <= 504;
+            if ((isRateLimited || isServerError) && retries < MAX_RETRIES_PER_PAGE) {
+              const retryAfter = isRateLimited
+                ? (err.retryAfterSeconds ?? Math.min(30 * Math.pow(2, retries), 120))
+                : Math.min(5 * Math.pow(2, retries), 30); // 5xx: 5s → 10s → 20s
+              const label = isRateLimited ? 'Rate limited' : `Server error (${err.status})`;
               if (!isAgentMode()) {
-                process.stderr.write(`  Rate limited. Waiting ${retryAfter}s before retry...\n`);
+                process.stderr.write(`  ${label}. Waiting ${retryAfter}s before retry (${retries + 1}/${MAX_RETRIES_PER_PAGE})...\n`);
               }
               await sleep(retryAfter * 1000);
               retries++;
@@ -212,6 +309,16 @@ export async function syncModel(
             if (err.status === 401 || err.status === 403) {
               throw new Error(`Authentication failed. Connection key may be expired. Run 'one add ${platform}' to refresh.`);
             }
+          }
+          // Network errors (ECONNRESET, ETIMEDOUT, fetch failures) — retry with short backoff
+          if (isNetworkError(err) && retries < MAX_RETRIES_PER_PAGE) {
+            const backoff = Math.min(2 * Math.pow(2, retries), 16); // 2s → 4s → 8s
+            if (!isAgentMode()) {
+              process.stderr.write(`  Network error. Retrying in ${backoff}s (${retries + 1}/${MAX_RETRIES_PER_PAGE})...\n`);
+            }
+            await sleep(backoff * 1000);
+            retries++;
+            continue;
           }
           throw err;
         }
@@ -254,13 +361,6 @@ export async function syncModel(
         };
       }
 
-      // Create table on first page with actual data
-      if (!tableCreated) {
-        const firstRecord = records[0] as Record<string, unknown>;
-        ensureTable(db, model, firstRecord, profile.idField);
-        tableCreated = true;
-      }
-
       // Enrich records if configured (call detail endpoint per record)
       if (profile.enrich) {
         if (!isAgentMode()) {
@@ -276,19 +376,32 @@ export async function syncModel(
       }
 
       // Transform records through a shell command or flow if configured.
-      // Runs after enrich so the transform gets the full enriched data.
       if (profile.transform) {
         const transformed = await transformRecords(profile.transform, records as Record<string, unknown>[]);
         if (transformed) {
-          // Replace the records array with the transformed version
           records.length = 0;
           for (const r of transformed) (records as Record<string, unknown>[]).push(r);
         }
-        // If transform returned null, we continue with original records
       }
 
-      // Evolve schema if needed (check for new fields — do this AFTER enrich
-      // and transform because both may have added new fields to the records)
+      // Strip excluded fields (e.g. base64 attachments, large blobs).
+      // MUST run before ensureTable so excluded columns are never created.
+      if (profile.exclude && profile.exclude.length > 0) {
+        for (const record of records as Record<string, unknown>[]) {
+          stripFields(record, profile.exclude);
+        }
+      }
+
+      // Create table on first page with actual data — AFTER enrich/transform/exclude
+      // so the table schema reflects the final record shape.
+      if (!tableCreated) {
+        const firstRecord = records[0] as Record<string, unknown>;
+        ensureTable(db, model, firstRecord, profile.idField);
+        tableCreated = true;
+      }
+
+      // Evolve schema if needed (check for new fields — after the full
+      // pipeline: enrich, transform, exclude, and table creation)
       for (const record of records) {
         if (typeof record === 'object' && record !== null) {
           evolveSchema(db, model, record as Record<string, unknown>);
@@ -462,14 +575,27 @@ export async function syncModel(
     if (db) db.close();
     if (lock) lock.release();
 
+    // Build a descriptive but bounded error. The raw err.message can be
+    // multi-MB when a 5xx returns a full response body (e.g. Gmail threads
+    // with base64 attachments). Truncate to 500 chars.
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const shortMsg = truncate(rawMsg, 500);
+
     if (pagesProcessed > 0) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
+      const resumeErr = new Error(
         `Sync interrupted after page ${pagesProcessed} (${totalRecords} records). ` +
-        `Run again to resume. Error: ${msg}`
+        `Run again to resume. Error: ${shortMsg}`
       );
+      // Attach real counts so callers can report progress
+      (resumeErr as any)._recordsSynced = totalRecords;
+      (resumeErr as any)._pagesProcessed = pagesProcessed;
+      throw resumeErr;
     }
 
-    throw err;
+    // Even on page-0 failure, attach any available counts
+    const wrapped = new Error(shortMsg);
+    (wrapped as any)._recordsSynced = totalRecords;
+    (wrapped as any)._pagesProcessed = pagesProcessed;
+    throw wrapped;
   }
 }

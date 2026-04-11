@@ -43,6 +43,14 @@ export interface SyncProfile {
   /** Where to send the limit param: "query" (default) or "body" */
   limitLocation?: 'query' | 'body';
   /**
+   * Dot-path field names to strip from each record before storing.
+   * Supports array notation: "messages[].body" strips `body` from each
+   * element of the `messages` array.
+   *
+   * Example: ["messages[].body", "messages[].attachments[].data", "payload.parts"]
+   */
+  exclude?: string[];
+  /**
    * Transform records through a shell command or flow before storing.
    * The command receives the page of records as a JSON array on stdin and
    * must return a JSON array on stdout. Runs after enrich, before upsert.

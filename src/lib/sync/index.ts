@@ -426,10 +426,12 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
       const result = await syncModel(api, profile, options);
       results.push(result);
     } catch (err) {
+      // Use real counts attached by the runner (if available) instead of 0
+      const errObj = err as any;
       results.push({
         model: profile.model,
-        recordsSynced: 0,
-        pagesProcessed: 0,
+        recordsSynced: errObj?._recordsSynced ?? 0,
+        pagesProcessed: errObj?._pagesProcessed ?? 0,
         duration: '0s',
         status: 'failed',
         error: err instanceof Error ? err.message : String(err),
@@ -539,14 +541,14 @@ async function syncSqlCommand(platform: string, sql: string): Promise<void> {
 
 // ── sync delete ──
 
-async function syncDeleteCommand(platformModel: string, options: { where?: string; id?: string; yes?: boolean }): Promise<void> {
+async function syncDeleteCommand(platformModel: string, options: { where?: string; whereSql?: string; id?: string; yes?: boolean }): Promise<void> {
   const [platform, model] = platformModel.split('/');
   if (!platform || !model) {
     output.error('Usage: one sync delete <platform>/<model> --id <id> or --where "field=value"');
   }
 
-  if (!options.id && !options.where) {
-    output.error('Provide --id <value> or --where "field=value" to specify which records to delete.');
+  if (!options.id && !options.where && !options.whereSql) {
+    output.error('Provide --id <value>, --where "field=value", or --where-sql "SQL predicate" to specify which records to delete.');
   }
 
   const db = await openDatabase(platform);
@@ -566,6 +568,11 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
       const idField = profile?.idField || 'id';
       where = `"${idField}" = ?`;
       params = [options.id];
+    } else if (options.whereSql) {
+      // Raw SQL predicate — allows json_each(), subqueries, etc.
+      // Safe because the DB is local and user-owned.
+      where = options.whereSql;
+      params = [];
     } else {
       // Parse --where conditions (splits on commas outside quoted sections,
       // strips surrounding quotes from values)
@@ -993,8 +1000,9 @@ export function registerSyncCommands(program: Command): void {
     .description('Delete records from local sync data (e.g. one sync delete notion/pages --id "abc-123")')
     .option('--id <value>', 'Delete record by ID')
     .option('--where <conditions>', 'Delete records matching conditions (e.g. "status=archived")')
+    .option('--where-sql <predicate>', 'Delete using a raw SQL WHERE clause (e.g. "json_extract(data, \'$.type\') = \'promotion\'")')
     .option('--yes', 'Skip confirmation prompt')
-    .action(async (platformModel: string, options: { id?: string; where?: string; yes?: boolean }) => {
+    .action(async (platformModel: string, options: { id?: string; where?: string; whereSql?: string; yes?: boolean }) => {
       await syncDeleteCommand(platformModel, options);
     });
 
