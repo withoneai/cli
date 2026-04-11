@@ -355,24 +355,26 @@ one sync install                    # One-time: install the SQLite engine
 one sync doctor                     # Verify it's working
 \`\`\`
 
-## Workflow: init → test → run → query
+## Workflow: init → run → query
 
 \`\`\`bash
 # 1. Discover models
 one --agent sync models stripe
 
-# 2. Create a profile (auto-infers pagination, resultsPath, idField, pathVars from knowledge)
+# 2. Init — one command does everything:
+#    - resolves action ID
+#    - infers pagination, resultsPath, idField, pathVars from knowledge
+#    - auto-resolves connectionKey (when only one connection exists)
+#    - auto-runs sync test if profile is complete
 one --agent sync init stripe balanceTransactions
-# Patch in connection key (only FILL_IN left for most platforms):
+# Response includes _complete:true and _test results when fully resolved.
+# If connectionKey wasn't auto-resolved (multiple connections), patch it:
 one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
 
-# 3. Validate (single-page fetch, no writes — auto-fixes remaining FILL_IN fields)
-one --agent sync test stripe/balanceTransactions
-
-# 4. Sync
+# 3. Sync
 one --agent sync run stripe
 
-# 5. Query
+# 4. Query
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync search "refund" --platform stripe
 one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
@@ -380,15 +382,16 @@ one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
 
 ## Auto-Inference
 
-\`sync init\` without \`--config\` reads the action's knowledge and auto-fills:
-- **Pagination** — Stripe id-pagination, Notion body-cursor, HubSpot/Google token, offset, link
+\`sync init\` without \`--config\` does all of this automatically:
+- **connectionKey** — auto-resolved when there's exactly one connection for the platform
+- **Pagination** — Stripe id-pagination, Notion body-cursor, HubSpot/Google token, offset, link. Inapplicable fields stripped (no nextPath for offset, no passAs for none)
 - **resultsPath** — generic keys (data, results, items) + platform-specific (model name stripped of platform prefix: attioCompanies → companies)
 - **idField** — id, _id, uuid
-- **pathVars** — extracted from URL template with smart defaults (calendarId="primary", userId="me")
+- **pathVars** — extracted from URL template with smart defaults (calendarId="primary", userId="me"). Internal keys (INTERNAL_SIGNING_KEY) and record-level IDs (record_id) are stripped automatically
 - **dateFilter** — updated_since, created_after, etc.
 - **limitLocation** — auto-detected as "body" for POST endpoints
 
-\`sync test\` goes further: it makes a real API call and auto-discovers resultsPath/idField from the actual response if inference missed them. It patches the profile on disk automatically.
+When the profile is complete (no FILL_IN values remain), \`sync init\` automatically runs \`sync test\` and includes the results in the response (\`_test: {ok, checks, autoFixed}\`). If test auto-discovers fields the inference missed, it patches the profile on disk.
 
 ## Scheduled Syncs
 

@@ -280,11 +280,9 @@ one sync install && one sync doctor
 ```
 
 ```bash
-# Discover → init (auto-infers most fields) → test (auto-fixes the rest) → run
+# Discover → init (one command: infer + auto-resolve key + auto-test) → run
 one sync models stripe
-one sync init stripe balanceTransactions
-one sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
-one sync test stripe/balanceTransactions
+one sync init stripe balanceTransactions    # connectionKey auto-resolved, test auto-run
 one sync run stripe --since 90d
 
 # Query, search, SQL
@@ -304,8 +302,8 @@ one sync run stripe --full-refresh
 |------------|-------------|
 | `install` / `doctor` | Install + verify the SQLite engine |
 | `models <platform>` | Discover available data models |
-| `init <platform> <model>` | Create profile (auto-infers pagination, resultsPath, idField, pathVars) |
-| `test <platform>/<model>` | Validate + auto-fix profile from real API response |
+| `init <platform> <model>` | Create profile (auto-infers all fields, auto-resolves key, auto-runs test) |
+| `test <platform>/<model>` | Validate + auto-fix profile from real API response (also runs inside init) |
 | `run <platform>` | Sync data (`--full-refresh`, `--since`, `--dry-run`) |
 | `query <platform>/<model>` | Query with `--where`, `--after/before`, `--refresh` |
 | `search <query>` | FTS5 across all synced data |

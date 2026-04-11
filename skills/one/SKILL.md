@@ -126,22 +126,21 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 
 Sync platform data into local SQLite for instant queries, full-text search, and change-driven automation. Requires one-time `one sync install`.
 
-### Setup: init → test → run
+### Setup: init → run
 
 ```bash
 # 1. Install engine (once per machine)
 one sync install && one sync doctor
 
-# 2. Discover models + create profile (auto-infers most fields)
+# 2. Discover models + create profile (one command does everything)
 one --agent sync models stripe
 one --agent sync init stripe balanceTransactions
-# Only connectionKey is typically left as FILL_IN. Patch it:
+# Init auto-resolves connectionKey (if one connection), infers all fields,
+# and runs sync test automatically. Check _complete and _test in response.
+# If multiple connections exist, patch just the key:
 one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
 
-# 3. Validate (auto-fixes any remaining FILL_IN from real API response)
-one --agent sync test stripe/balanceTransactions
-
-# 4. Sync
+# 3. Sync
 one --agent sync run stripe --models balanceTransactions --since 90d
 ```
 
@@ -182,9 +181,9 @@ one --agent sync run stripe --full-refresh   # fetch ALL, delete stale local row
 ```
 
 ### Key points
-- `sync init` auto-infers pagination, resultsPath, idField, pathVars, dateFilter, and limitLocation from action knowledge — check `_inferred` in the response
-- `sync test` auto-discovers remaining fields from the real API response and patches the profile — run it BEFORE the first `sync run`
-- Path variables (calendarId, userId) are auto-extracted from URL templates with smart defaults (e.g. calendarId="primary")
+- `sync init` is a single command: resolves action ID, infers all profile fields, auto-resolves connectionKey when there's one connection, and auto-runs `sync test` when the profile is complete — check `_complete`, `_test`, and `_inferred` in the response
+- If `_complete: true` and `_test.ok: true`, go straight to `sync run` — no manual steps needed
+- Path variables (calendarId, userId) are auto-extracted with smart defaults; internal keys (INTERNAL_SIGNING_KEY) are stripped automatically
 - Every record has `_synced_at` — use it to track processing state
 - `--full-refresh` handles source-side deletions by diffing local vs remote IDs
 - Queries include `lastSync` and `syncAge` for freshness judgment
