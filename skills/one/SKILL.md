@@ -174,6 +174,15 @@ one --agent sync init gmail messages --config '{
 ```
 Uses `{{field}}` interpolation from the list record. Rate-limit-aware: honors Retry-After, exponential backoff, adaptive concurrency reduction on 429s. Enrichment runs before hooks — `onInsert` gets the full data.
 
+### Record transform
+Pipe records through any shell command before storing — flatten nested fields, filter, reshape:
+```bash
+one --agent sync init notion search --config '{
+  "transform": "jq '\''[.[] | . + {flat_title: (.properties.title.title[0].plain_text // null)}]'\''",
+}'
+```
+Receives JSON array on stdin, returns JSON array on stdout. Supports `jq`, `python3`, bash scripts, or `one flow execute <key>`. Falls back to original records on failure.
+
 ### Change hooks (CDC)
 Add hooks to a sync profile to trigger automation on new/changed records:
 ```bash

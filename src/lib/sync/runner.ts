@@ -9,6 +9,7 @@ import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
 import { enrichRecords, type EnrichResult } from './enrich.js';
+import { transformRecords } from './transform.js';
 import type Database from 'better-sqlite3';
 
 const MAX_RETRIES_PER_PAGE = 3;
@@ -274,8 +275,20 @@ export async function syncModel(
         enrichRateLimited += enrichResult.rateLimited;
       }
 
+      // Transform records through a shell command or flow if configured.
+      // Runs after enrich so the transform gets the full enriched data.
+      if (profile.transform) {
+        const transformed = await transformRecords(profile.transform, records as Record<string, unknown>[]);
+        if (transformed) {
+          // Replace the records array with the transformed version
+          records.length = 0;
+          for (const r of transformed) (records as Record<string, unknown>[]).push(r);
+        }
+        // If transform returned null, we continue with original records
+      }
+
       // Evolve schema if needed (check for new fields — do this AFTER enrich
-      // because enrichment may have added new fields to the records)
+      // and transform because both may have added new fields to the records)
       for (const record of records) {
         if (typeof record === 'object' && record !== null) {
           evolveSchema(db, model, record as Record<string, unknown>);

@@ -432,7 +432,27 @@ When a list endpoint returns lightweight records (e.g. just IDs), add an \`enric
 - Adaptive throttle: if any request in a batch hits 429, concurrency halves automatically
 - Records that fail after 3 retries are skipped (sync continues, count reported in \`enrichSkipped\`)
 
-Enrichment runs after fetch but before hooks — so \`onInsert\`/\`onUpdate\` receive the full enriched record.
+Enrichment runs after fetch but before transform and hooks.
+
+## Record Transform
+
+Pipe records through any shell command or flow between fetch and store. The command receives a JSON array on stdin and must return a JSON array on stdout.
+
+\`\`\`json
+{
+  "transform": "jq '[.[] | . + {flat_title: (.properties.title.title[0].plain_text // null)}]'"
+}
+\`\`\`
+
+Use cases:
+- Flatten nested fields into queryable top-level columns
+- Add computed fields (tags, categories, scores)
+- Filter out records you don't want to store
+- Reshape API responses into a cleaner schema
+
+The transform can be any command: \`jq\`, \`python3\`, a bash script, or \`one flow execute <key>\`. If the command fails, times out (60s), or returns invalid JSON, the original records are used (warning printed, sync continues).
+
+**Pipeline order:** fetch → enrich → **transform** → schema evolution → upsert → hooks
 
 ## Change Hooks (CDC)
 
@@ -494,6 +514,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 | limitParam | no | Page size param name (empty string = don't send) |
 | limitLocation | no | "query" (default) or "body" for POST endpoints |
 | enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
+| transform | no | Shell command to transform records (stdin: JSON array, stdout: JSON array) |
 | onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
 
 ## Pagination Types

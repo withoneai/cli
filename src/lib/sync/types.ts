@@ -43,6 +43,17 @@ export interface SyncProfile {
   /** Where to send the limit param: "query" (default) or "body" */
   limitLocation?: 'query' | 'body';
   /**
+   * Transform records through a shell command or flow before storing.
+   * The command receives the page of records as a JSON array on stdin and
+   * must return a JSON array on stdout. Runs after enrich, before upsert.
+   *
+   * Examples:
+   *   "node ./scripts/flatten-properties.js"
+   *   "one flow execute transform-contacts"
+   *   "jq '[.[] | {id, email: .properties.email}]'"
+   */
+  transform?: string;
+  /**
    * Enrich each record by calling a detail endpoint after the list fetch.
    * Useful when the list endpoint returns lightweight records (e.g. just IDs)
    * and a second API call is needed for the full data.
