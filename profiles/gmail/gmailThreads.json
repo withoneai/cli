@@ -1,5 +1,5 @@
 {
-  "description": "Gmail email threads — lightweight list with optional enrichment for full message content, headers, and metadata",
+  "description": "Gmail email threads — primary inbox with optional enrichment for full message headers and metadata",
   "platform": "gmail",
   "model": "gmailThreads",
   "connectionKey": "AUTO",
@@ -8,12 +8,13 @@
   "idField": "id",
   "pagination": {
     "type": "token",
-    "nextPath": "paging.next.after",
-    "passAs": "query:after"
+    "nextPath": "nextPageToken",
+    "passAs": "query:pageToken"
   },
   "limitParam": "maxResults",
   "defaultLimit": 50,
   "pathVars": { "userId": "me" },
+  "queryParams": { "q": "category:primary" },
   "enrich": {
     "actionId": "conn_mod_def::GJ3ok0Eq0R8::AAzgZVLqTg2iBuITKpJLZg",
     "pathVars": { "userId": "me", "id": "{id}" },
