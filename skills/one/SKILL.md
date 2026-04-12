@@ -145,7 +145,7 @@ one --agent sync list stripe                     # progress + freshness
 one sync schedule add stripe --every 1h
 ```
 
-**Advanced features** (enrich, transform, exclude, hooks, --full-refresh, --where-sql delete, cursor resume): run `one guide sync` for the full reference.
+**Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, --where-sql delete, cursor resume): run `one guide sync` for the full reference.
 
 ## Beyond Single Actions
 

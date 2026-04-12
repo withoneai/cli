@@ -456,6 +456,22 @@ The transform can be any command: \`jq\`, \`python3\`, a bash script, or \`one f
 
 **Pipeline order:** fetch → enrich → transform → **exclude** → create table → schema evolution → upsert → hooks
 
+## Cross-Platform Identity
+
+Add \`identityKey\` to a sync profile to extract a stable cross-platform identifier (e.g. email) into a normalized \`_identity\` column:
+
+\`\`\`json
+{"platform": "hubspot", "model": "contacts", "identityKey": "properties.email"}
+{"platform": "stripe",  "model": "customers", "identityKey": "email"}
+{"platform": "attio",   "model": "attioPeople", "identityKey": "email_addresses[0].email_address"}
+\`\`\`
+
+The value is lowercased and trimmed. Query across platforms:
+\`\`\`bash
+one --agent sync sql hubspot "SELECT * FROM contacts WHERE _identity = 'jane@acme.com'"
+one --agent sync sql stripe "SELECT * FROM customers WHERE _identity = 'jane@acme.com'"
+\`\`\`
+
 ## Exclude Fields
 
 Strip large or unwanted fields from records before storing (e.g. base64 attachments, raw HTML bodies):
@@ -538,6 +554,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 | limitLocation | no | "query" (default) or "body" for POST endpoints |
 | enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
 | transform | no | Shell command to transform records (stdin: JSON array, stdout: JSON array) |
+| identityKey | no | Dot-path to cross-platform identifier (e.g. email) → stored as \`_identity\` column |
 | exclude | no | Dot-path fields to strip before storing (e.g. \`["messages[].body"]\`) |
 | onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
 
