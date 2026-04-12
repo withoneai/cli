@@ -1,0 +1,17 @@
+{
+  "description": "Fathom meetings — recorded meetings with transcripts, summaries, action items, and attendees",
+  "platform": "fathom",
+  "model": "meetings",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::fathom::meetings-list",
+  "resultsPath": "items",
+  "idField": "recording_id",
+  "pagination": {
+    "type": "cursor",
+    "nextPath": "next_cursor",
+    "passAs": "query:cursor",
+    "hasMorePath": "has_more"
+  },
+  "dateFilter": { "param": "created_after", "format": "iso8601" },
+  "defaultLimit": 50
+}

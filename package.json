@@ -1,12 +1,13 @@
 {
   "name": "@withone/cli",
-  "version": "1.29.0",
+  "version": "1.30.0",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
     "bin",
     "dist",
-    "skills"
+    "skills",
+    "profiles"
   ],
   "bin": {
     "one": "./bin/cli.js"

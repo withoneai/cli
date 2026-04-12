@@ -7,6 +7,7 @@ import { readProfile, writeProfile, writeDraftProfile, listProfiles, removeProfi
 import { syncModel } from './runner.js';
 import { testSyncProfile } from './test.js';
 import { inferProfileFromKnowledge } from './infer.js';
+import { loadBuiltinProfile, listBuiltinProfiles } from './builtin-profiles.js';
 import { addSchedule, listSchedules, removeSchedule, scheduleStatus, repairSchedule } from './schedule.js';
 import { parseCondition, splitConditions } from './where-parser.js';
 import { readSyncState, removeModelState, getModelState } from './state.js';
@@ -124,6 +125,49 @@ function getApi(): OneApi {
   return new OneApi(apiKey);
 }
 
+// ── sync profiles (built-in) ──
+
+async function syncProfilesCommand(platform?: string): Promise<void> {
+  const profiles = listBuiltinProfiles(platform);
+
+  if (output.isAgentMode()) {
+    output.json({
+      profiles: profiles.map(p => ({
+        platform: p.platform,
+        model: p.model,
+        description: p.description,
+        hasEnrich: !!(p as any).enrich,
+        hasIdentityKey: !!(p as any).identityKey,
+      })),
+      total: profiles.length,
+      _hint: profiles.length > 0
+        ? 'Use a built-in profile: one --agent sync init <platform> <model>'
+        : 'No built-in profiles found. Use sync init to auto-infer from action knowledge.',
+    });
+    return;
+  }
+
+  if (profiles.length === 0) {
+    output.note(
+      platform
+        ? `No built-in profiles for ${platform}. Use sync init to auto-infer from action knowledge.`
+        : 'No built-in profiles found.',
+      'Profiles'
+    );
+    return;
+  }
+
+  for (const p of profiles) {
+    const extras: string[] = [];
+    if ((p as any).enrich) extras.push('enrich');
+    if ((p as any).identityKey) extras.push('identity');
+    if ((p as any).dateFilter) extras.push('incremental');
+    const tags = extras.length > 0 ? ` ${pc.dim(`[${extras.join(', ')}]`)}` : '';
+    console.log(`  ${pc.bold(`${p.platform}/${p.model}`.padEnd(35))} ${p.description}${tags}`);
+  }
+  console.log(`\n${profiles.length} built-in profile(s). Run ${pc.bold('one sync init <platform> <model>')} to use one.`);
+}
+
 // ── sync models ──
 
 async function syncModelsCommand(platform: string): Promise<void> {
@@ -189,11 +233,23 @@ async function syncInitCommand(platform: string, model: string, options: { confi
         spinner.stop('Model not found in available actions');
       }
 
-      const template = generateTemplate(platform, model, actionId) as Record<string, unknown>;
-
-      // Try to infer pagination/resultsPath/idField from the action's knowledge
+      // Check for a built-in profile first — pre-validated configs that skip inference
+      const builtin = loadBuiltinProfile(platform, model);
+      let template: Record<string, unknown>;
       let inferred: ReturnType<typeof inferProfileFromKnowledge> | null = null;
-      if (actionId) {
+
+      if (builtin) {
+        // Use the built-in profile as the base, overriding actionId if we resolved one
+        template = { ...builtin };
+        if (actionId) template.actionId = actionId;
+        delete template.description; // don't persist the description into the profile
+        inferred = { reasoning: [`Built-in profile found for ${platform}/${model}: "${builtin.description}"`] };
+      } else {
+        template = generateTemplate(platform, model, actionId) as Record<string, unknown>;
+      }
+
+      // Try to infer from knowledge if no built-in was found
+      if (actionId && !builtin) {
         try {
           const knowledgeResp = await api.getActionKnowledge(actionId);
           inferred = inferProfileFromKnowledge(knowledgeResp?.knowledge, model, platform);
@@ -909,6 +965,13 @@ export function registerSyncCommands(program: Command): void {
     .description('Verify the local sync engine is installed and working')
     .action(async () => {
       await syncDoctorCommand();
+    });
+
+  sync
+    .command('profiles [platform]')
+    .description('List built-in sync profiles (pre-validated configs for common platforms)')
+    .action(async (platform?: string) => {
+      await syncProfilesCommand(platform);
     });
 
   sync
