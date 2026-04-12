@@ -432,7 +432,9 @@ When a list endpoint returns lightweight records (e.g. just IDs), add an \`enric
 - Adaptive throttle: if any request in a batch hits 429, concurrency halves automatically
 - Records that fail after 3 retries are skipped (sync continues, count reported in \`enrichSkipped\`)
 
-Enrichment runs after fetch but before transform and hooks.
+**Important:** \`enrich.resultsPath\` operates on the raw API response, NOT the CLI's \`{dryRun, request, response}\` wrapper you see when testing with \`one --agent actions execute\`. If the CLI shows your data at \`response.thread\`, the enrich resultsPath is just \`"thread"\` (no \`response.\` prefix).
+
+Enrichment runs after list sync completes (Phase 2), not inline. It's inherently resumable — records track an \`_enriched_at\` timestamp, and re-running skips already-enriched rows.
 
 ## Record Transform
 
