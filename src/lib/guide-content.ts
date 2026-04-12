@@ -452,7 +452,28 @@ Use cases:
 
 The transform can be any command: \`jq\`, \`python3\`, a bash script, or \`one flow execute <key>\`. If the command fails, times out (60s), or returns invalid JSON, the original records are used (warning printed, sync continues).
 
-**Pipeline order:** fetch → enrich → **transform** → schema evolution → upsert → hooks
+**Pipeline order:** fetch → enrich → transform → **exclude** → create table → schema evolution → upsert → hooks
+
+## Exclude Fields
+
+Strip large or unwanted fields from records before storing (e.g. base64 attachments, raw HTML bodies):
+
+\`\`\`json
+{ "exclude": ["messages[].body", "messages[].attachments[].data", "payload.parts"] }
+\`\`\`
+
+Supports dot-path notation and array iteration (\`messages[].body\` strips \`body\` from each element of the \`messages\` array). Runs before table creation so excluded columns never exist in the schema.
+
+## Monitoring Progress
+
+\`sync list\` doubles as a progress monitor. The state file is updated after every page, so while a sync is running you can check progress from another context:
+
+\`\`\`bash
+one --agent sync list gmail
+# → {"syncs":[{"model":"gmailThreads","totalRecords":400,"pagesProcessed":8,"status":"syncing",...}]}
+\`\`\`
+
+When \`status\` is \`"syncing"\`, \`totalRecords\` and \`pagesProcessed\` reflect real-time progress. When it flips to \`"idle"\`, the sync is done. No need to babysit — especially when using \`sync schedule\` for unattended runs.
 
 ## Change Hooks (CDC)
 
@@ -515,6 +536,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 | limitLocation | no | "query" (default) or "body" for POST endpoints |
 | enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
 | transform | no | Shell command to transform records (stdin: JSON array, stdout: JSON array) |
+| exclude | no | Dot-path fields to strip before storing (e.g. \`["messages[].body"]\`) |
 | onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
 
 ## Pagination Types

@@ -647,6 +647,7 @@ async function syncListCommand(platform?: string): Promise<void> {
       model: p.model,
       lastSync: modelState?.lastSync ?? null,
       totalRecords: modelState?.totalRecords ?? 0,
+      pagesProcessed: modelState?.pagesProcessed ?? 0,
       dbSize: getDatabaseSize(p.platform),
       status: modelState?.status ?? 'idle',
     };
@@ -666,7 +667,7 @@ async function syncListCommand(platform?: string): Promise<void> {
     const status = s.status === 'idle'
       ? pc.green('idle')
       : s.status === 'syncing'
-        ? pc.yellow('syncing')
+        ? pc.yellow(`syncing — page ${s.pagesProcessed}`)
         : pc.red('failed');
     console.log(
       `  ${pc.bold(`${s.platform}/${s.model}`.padEnd(35))} ` +

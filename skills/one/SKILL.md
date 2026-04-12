@@ -174,6 +174,20 @@ one --agent sync init gmail messages --config '{
 ```
 Uses `{{field}}` interpolation from the list record. Rate-limit-aware: honors Retry-After, exponential backoff, adaptive concurrency reduction on 429s. Enrichment runs before hooks — `onInsert` gets the full data.
 
+### Exclude fields
+Strip large/unwanted fields before storing (e.g. base64 attachments):
+```bash
+one --agent sync init gmail gmailThreads --config '{"exclude": ["messages[].body", "messages[].attachments[].data"]}'
+```
+
+### Monitoring progress
+`sync list` is your progress monitor — state updates after every page:
+```bash
+one --agent sync list gmail
+# While syncing: {"status":"syncing","totalRecords":400,"pagesProcessed":8,...}
+# When done:     {"status":"idle","totalRecords":1200,"pagesProcessed":24,...}
+```
+
 ### Record transform
 Pipe records through any shell command before storing — flatten nested fields, filter, reshape:
 ```bash
