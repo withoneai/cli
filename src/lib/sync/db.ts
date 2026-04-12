@@ -222,7 +222,19 @@ export function upsertRecords(
       const placeholders = cols.map(() => '?').join(', ');
       const values = cols.map(c => prepareValue(fullRecord[c]));
 
-      db.prepare(`INSERT OR REPLACE INTO "${table}" (${quotedCols}) VALUES (${placeholders})`).run(...values);
+      // Use INSERT ... ON CONFLICT DO UPDATE instead of INSERT OR REPLACE.
+      // REPLACE drops the entire row and re-inserts, which wipes columns
+      // that aren't in the new data (e.g. _enriched_at from Phase 2).
+      // ON CONFLICT DO UPDATE only touches the columns we're providing,
+      // preserving any enrichment columns.
+      const safeIdField = idField.replace(/"/g, '""');
+      const updateCols = cols.filter(c => c !== idField)
+        .map(c => `"${c}" = excluded."${c}"`)
+        .join(', ');
+      db.prepare(
+        `INSERT INTO "${table}" (${quotedCols}) VALUES (${placeholders}) ` +
+        `ON CONFLICT("${safeIdField}") DO UPDATE SET ${updateCols}`
+      ).run(...values);
       count++;
     }
     return count;

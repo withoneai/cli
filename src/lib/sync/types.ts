@@ -151,20 +151,27 @@ export interface ParsedPassAs {
 export interface EnrichConfig {
   /** The action ID for the detail/get-one endpoint. */
   actionId: string;
-  /** Path variables with {{field}} interpolation (e.g. {"messageId": "{{id}}"}). */
+  /** Path variables — supports {field} and {{field}} interpolation from the synced record. */
   pathVars?: Record<string, string | number | boolean>;
-  /** Query parameters with {{field}} interpolation. */
+  /** Query parameters — supports {field} and {{field}} interpolation. */
   queryParams?: Record<string, string | number | boolean>;
-  /** Request body with {{field}} interpolation (for POST detail endpoints). */
+  /** Request body with {field}/{{field}} interpolation (for POST detail endpoints). */
   body?: Record<string, unknown>;
   /** Dot-path to extract the detail data from the response (default: whole response). */
   resultsPath?: string;
+  /** Specific fields to extract from the enriched response. If omitted, merge all top-level fields. */
+  fields?: string[];
+  /** Fields to exclude from the enriched response before merging (e.g. strip base64 attachments).
+   *  Supports array wildcard notation: "messages[].payload.parts[].body.data" */
+  exclude?: string[];
   /** Deep-merge detail into list record (default: true). Set false to replace. */
   merge?: boolean;
-  /** Max parallel detail requests per page (default: 3). Lower = safer for rate limits. */
+  /** Max concurrent enrich requests (default: 5). Lower = safer for rate limits. */
   concurrency?: number;
   /** Delay in ms between batches of detail requests (default: 200). */
   delayMs?: number;
+  /** Column name for enrichment timestamp (default: "_enriched_at"). */
+  timestampField?: string;
 }
 
 export interface DiscoveredModel {

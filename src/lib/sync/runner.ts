@@ -8,7 +8,7 @@ import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
-import { enrichRecords, type EnrichResult } from './enrich.js';
+import { enrichPhase, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
 import type Database from 'better-sqlite3';
 
@@ -361,20 +361,6 @@ export async function syncModel(
         };
       }
 
-      // Enrich records if configured (call detail endpoint per record)
-      if (profile.enrich) {
-        if (!isAgentMode()) {
-          process.stderr.write(`  Enriching ${(records as unknown[]).length} records...\r`);
-        }
-        const enrichResult = await enrichRecords(
-          api, profile.enrich, records as Record<string, unknown>[],
-          profile.connectionKey, platform,
-        );
-        enrichedTotal += enrichResult.enriched;
-        enrichSkipped += enrichResult.skipped;
-        enrichRateLimited += enrichResult.rateLimited;
-      }
-
       // Transform records through a shell command or flow if configured.
       if (profile.transform) {
         const transformed = await transformRecords(profile.transform, records as Record<string, unknown>[]);
@@ -533,14 +519,33 @@ export async function syncModel(
       }
     }
 
-    // Rebuild FTS index after all data is written
+    // Rebuild FTS index after all list data is written
     if (pagesProcessed > 0 && tableCreated) {
       rebuildFtsIndex(db, model);
     }
 
-    // Finalize
+    // Phase 1 done
     if (!isAgentMode() && pagesProcessed > 0) {
       process.stderr.write(`Syncing ${platform}/${model}... page ${pagesProcessed} (${totalRecords} records) done\n`);
+    }
+
+    // Phase 2: Enrich unenriched rows (runs after list sync completes).
+    // Queries _enriched_at IS NULL so it's inherently resumable — if the
+    // process dies mid-enrichment, re-running picks up where it left off.
+    let enrichResult: EnrichResult | null = null;
+    if (profile.enrich && tableCreated && !options.dryRun) {
+      enrichResult = await enrichPhase(
+        api, db, profile.enrich, model, profile.idField,
+        profile.connectionKey, platform,
+      );
+      enrichedTotal = enrichResult.enriched;
+      enrichSkipped = enrichResult.skipped;
+      enrichRateLimited = enrichResult.rateLimited;
+
+      // Rebuild FTS after enrichment added new text content
+      if (enrichResult.enriched > 0) {
+        rebuildFtsIndex(db, model);
+      }
     }
 
     const duration = formatDuration(Date.now() - startTime);
