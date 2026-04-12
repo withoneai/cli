@@ -43,6 +43,10 @@ one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 - \`--query-params <json>\` — Query parameters (arrays expand to repeated params)
 - \`--form-url-encoded\` — Send as form data instead of JSON
 - \`--dry-run\` — Preview request without executing
+- \`--mock\` — Return example response without making an API call (useful for building UI against a response shape)
+- \`--skip-validation\` — Skip input validation against the action schema
+
+The CLI validates required parameters against the action schema before executing. If you're missing a required path variable, query param, or body field, you'll get a clear error listing what's missing and which flag to use. Pass \`--skip-validation\` to bypass.
 
 Do NOT pass path or query parameters in \`-d\` — use the correct flags.
 
@@ -63,7 +67,8 @@ one --agent flow list                                 # List all workflows
 - 12 step types: action, transform, code, condition, loop, parallel, file-read, file-write, while, flow, paginate, bash
 - Data wiring via selectors: \`$.input.param\`, \`$.steps.stepId.response\`, \`$.loop.item\`
 - AI analysis via bash steps: \`claude --print\` with \`parseJson: true\`
-- Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with mock responses
+- Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with realistic mock responses (uses example data from action schemas)
+- Use \`--skip-validation\` to bypass input validation on action steps
 
 ### 3. Relay — Webhook event forwarding between platforms
 Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calendar) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.
@@ -162,8 +167,17 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--headers <json>\` — Additional headers
 - \`--form-data\` / \`--form-url-encoded\` — Alternative content types
 - \`--dry-run\` — Preview without executing
+- \`--mock\` — Return example response without making an API call
+- \`--skip-validation\` — Skip input validation against the action schema
 
 **Do NOT** pass path or query parameters in \`-d\`. Use the correct flags.
+
+## Input Validation
+
+The CLI validates required parameters before executing. Missing params return a structured error:
+\`\`\`json
+{"error": "Validation failed: missing required parameters", "validation": {"missing": [{"flag": "--path-vars", "param": "userId", "description": "..."}]}, "hint": "...pass --skip-validation to bypass..."}
+\`\`\`
 
 ## Error Handling
 
@@ -355,6 +369,17 @@ one sync install                    # One-time: install the SQLite engine
 one sync doctor                     # Verify it's working
 \`\`\`
 
+## Built-in Profiles
+
+Pre-validated sync configs ship with the CLI for common platforms. Discover them:
+
+\`\`\`bash
+one --agent sync profiles              # list all built-in profiles
+one --agent sync profiles stripe       # filter by platform
+\`\`\`
+
+When a built-in exists, \`sync init\` uses it automatically — no inference needed, no manual config. The agent just needs to match the user's intent to a profile description.
+
 ## Workflow: init → run → query
 
 \`\`\`bash
@@ -526,6 +551,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 
 | Command | What it does |
 |---------|-------------|
+| \`sync profiles [platform]\` | List built-in pre-validated profiles |
 | \`sync install\` | Install SQLite engine (first time) |
 | \`sync doctor\` | Verify engine health |
 | \`sync models <platform>\` | Discover available models |

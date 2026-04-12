@@ -76,6 +76,10 @@ Options:
 - `--form-data` — Send as multipart/form-data
 - `--form-url-encoded` — Send as application/x-www-form-urlencoded
 - `--dry-run` — Preview the request without executing
+- `--mock` — Return example response without making an API call (useful for building UI)
+- `--skip-validation` — Skip input validation against the action schema
+
+The CLI validates required parameters before executing. Missing params return a structured error with the flag name, parameter name, and description. Pass `--skip-validation` to bypass.
 
 Examples:
 ```bash
@@ -130,8 +134,10 @@ Sync platform data into local SQLite for instant queries, full-text search, sche
 # First time only
 one sync install
 
-# Setup (one command — auto-infers everything, auto-tests)
-one --agent sync models stripe
+# Check built-in profiles (pre-validated configs for common platforms)
+one --agent sync profiles
+
+# Setup (uses built-in if available, otherwise auto-infers + auto-tests)
 one --agent sync init stripe balanceTransactions
 # If _complete: true and _test.ok: true → go straight to sync run
 
