@@ -213,22 +213,16 @@ async function syncInitCommand(platform: string, model: string, options: { confi
       const models = await discoverModels(api, platform);
       const match = models.find(m => m.name === model || m.name.toLowerCase() === model.toLowerCase());
 
-      // Try to resolve the executable action ID via search
+      // Use the actionId already resolved by discoverModels (which does
+      // the searchActions resolution internally). No need for a second search.
       let actionId: string | undefined;
       if (match) {
-        spinner.stop('Found model, resolving action...');
-        const searchSpinner = output.createSpinner();
-        searchSpinner.start('Searching for executable action...');
-        try {
-          const searchResults = await api.searchActions(platform, match.displayName, 'execute');
-          const resolved = searchResults.find(
-            a => a.path === match.listAction.path && a.method === match.listAction.method
-          );
-          actionId = resolved?.systemId;
-          searchSpinner.stop(actionId ? 'Found executable action' : 'Could not auto-resolve action ID');
-        } catch {
-          searchSpinner.stop('Search failed — fill in actionId manually');
+        actionId = match.listAction.actionId;
+        // Only trust it if it's the executable format (conn_mod_def::)
+        if (actionId && !actionId.startsWith('conn_mod_def::')) {
+          actionId = undefined;
         }
+        spinner.stop(actionId ? 'Found model + action ID' : 'Found model (action ID not resolved)');
       } else {
         spinner.stop('Model not found in available actions');
       }
