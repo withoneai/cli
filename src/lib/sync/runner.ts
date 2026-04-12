@@ -378,6 +378,16 @@ export async function syncModel(
         }
       }
 
+      // Extract cross-platform identity key if configured
+      if (profile.identityKey) {
+        for (const record of records as Record<string, unknown>[]) {
+          const raw = getByDotPath(record, profile.identityKey);
+          if (raw !== null && raw !== undefined) {
+            (record as Record<string, unknown>)._identity = String(raw).toLowerCase().trim();
+          }
+        }
+      }
+
       // Create table on first page with actual data — AFTER enrich/transform/exclude
       // so the table schema reflects the final record shape.
       if (!tableCreated) {

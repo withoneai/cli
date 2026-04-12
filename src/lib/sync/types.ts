@@ -43,6 +43,14 @@ export interface SyncProfile {
   /** Where to send the limit param: "query" (default) or "body" */
   limitLocation?: 'query' | 'body';
   /**
+   * Dot-path to a field that identifies this record across platforms.
+   * The value is extracted, lowercased, and stored as `_identity` on every
+   * record. Use a stable cross-platform identifier like email address.
+   *
+   * Example: "properties.email", "email", "email_addresses[0].email_address"
+   */
+  identityKey?: string;
+  /**
    * Dot-path field names to strip from each record before storing.
    * Supports array notation: "messages[].body" strips `body` from each
    * element of the `messages` array.
