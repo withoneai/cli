@@ -124,107 +124,28 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 
 ## Local Data Sync
 
-Sync platform data into local SQLite for instant queries, full-text search, and change-driven automation. Requires one-time `one sync install`.
-
-### Setup: init → run
+Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation.
 
 ```bash
-# 1. Install engine (once per machine)
-one sync install && one sync doctor
+# First time only
+one sync install
 
-# 2. Discover models + create profile (one command does everything)
+# Setup (one command — auto-infers everything, auto-tests)
 one --agent sync models stripe
 one --agent sync init stripe balanceTransactions
-# Init auto-resolves connectionKey (if one connection), infers all fields,
-# and runs sync test automatically. Check _complete and _test in response.
-# If multiple connections exist, patch just the key:
-one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
+# If _complete: true and _test.ok: true → go straight to sync run
 
-# 3. Sync
-one --agent sync run stripe --models balanceTransactions --since 90d
-```
-
-### Querying
-```bash
+# Sync + query
+one --agent sync run stripe
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
-one --agent sync search "refund" --platform stripe          # FTS across all text fields
-one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
-one --agent sync query stripe/balanceTransactions --refresh  # sync first, then query
-one --agent sync list stripe                                 # check freshness
-```
+one --agent sync search "refund"                 # FTS across all synced platforms
+one --agent sync list stripe                     # progress + freshness
 
-### Scheduled syncs
-```bash
+# Schedule unattended syncs
 one sync schedule add stripe --every 1h
-one --agent sync schedule list       # works from any directory
-one --agent sync schedule status     # drift detection + log tails
-one sync schedule remove <id>        # by id from anywhere
 ```
 
-### Record enrichment
-When a list endpoint returns lightweight records (just IDs), enrich with a detail endpoint:
-```bash
-one --agent sync init gmail messages --config '{
-  "enrich": {
-    "actionId": "<get-message-action-id>",
-    "pathVars": {"messageId": "{{id}}"},
-    "concurrency": 3
-  }
-}'
-```
-Uses `{{field}}` interpolation from the list record. Rate-limit-aware: honors Retry-After, exponential backoff, adaptive concurrency reduction on 429s. Enrichment runs before hooks — `onInsert` gets the full data.
-
-### Exclude fields
-Strip large/unwanted fields before storing (e.g. base64 attachments):
-```bash
-one --agent sync init gmail gmailThreads --config '{"exclude": ["messages[].body", "messages[].attachments[].data"]}'
-```
-
-### Monitoring progress
-`sync list` is your progress monitor — state updates after every page:
-```bash
-one --agent sync list gmail
-# While syncing: {"status":"syncing","totalRecords":400,"pagesProcessed":8,...}
-# When done:     {"status":"idle","totalRecords":1200,"pagesProcessed":24,...}
-```
-
-### Record transform
-Pipe records through any shell command before storing — flatten nested fields, filter, reshape:
-```bash
-one --agent sync init notion search --config '{
-  "transform": "jq '\''[.[] | . + {flat_title: (.properties.title.title[0].plain_text // null)}]'\''",
-}'
-```
-Receives JSON array on stdin, returns JSON array on stdout. Supports `jq`, `python3`, bash scripts, or `one flow execute <key>`. Falls back to original records on failure.
-
-### Change hooks (CDC)
-Add hooks to a sync profile to trigger automation on new/changed records:
-```bash
-one --agent sync init stripe balanceTransactions --config '{
-  "onInsert": "one flow execute process-new-transaction",
-  "onUpdate": "log"
-}'
-```
-- **Shell command**: record events piped as NDJSON to stdin
-- **`"log"`**: appends to `.one/sync/events/<platform>_<model>.jsonl`
-- **Flow execution**: `one flow execute <key>` with record as input
-
-Events fire per-page (real-time). Format: `{"type":"insert|update","record":{...},"timestamp":"..."}`
-
-### Deletion detection
-```bash
-one --agent sync run stripe --full-refresh   # fetch ALL, delete stale local rows
-```
-
-### Key points
-- `sync init` is a single command: resolves action ID, infers all profile fields, auto-resolves connectionKey when there's one connection, and auto-runs `sync test` when the profile is complete — check `_complete`, `_test`, and `_inferred` in the response
-- If `_complete: true` and `_test.ok: true`, go straight to `sync run` — no manual steps needed
-- Path variables (calendarId, userId) are auto-extracted with smart defaults; internal keys (INTERNAL_SIGNING_KEY) are stripped automatically
-- Every record has `_synced_at` — use it to track processing state
-- `--full-refresh` handles source-side deletions by diffing local vs remote IDs
-- Queries include `lastSync` and `syncAge` for freshness judgment
-- `sync remove --dry-run` previews deletions before committing
-- Read `one guide sync` for the full reference including pagination types and profile schema
+**Advanced features** (enrich, transform, exclude, hooks, --full-refresh, --where-sql delete, cursor resume): run `one guide sync` for the full reference.
 
 ## Beyond Single Actions
 
