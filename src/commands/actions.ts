@@ -10,7 +10,8 @@ import {
 } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { PermissionLevel, ActionKnowledgeResponse } from '../lib/types.js';
+import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails } from '../lib/types.js';
+import { validateActionInput } from '../lib/validate.js';
 import {
   knowledgeCachePath,
   searchCachePath,
@@ -345,6 +346,8 @@ export async function actionsExecuteCommand(
     formData?: boolean;
     formUrlEncoded?: boolean;
     dryRun?: boolean;
+    mock?: boolean;
+    skipValidation?: boolean;
   }
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
@@ -398,6 +401,57 @@ export async function actionsExecuteCommand(
     const headers = options.headers
       ? parseJsonArg(options.headers, '--headers')
       : undefined;
+
+    // Validate input against action schema
+    if (!options.skipValidation) {
+      const validation = validateActionInput(actionDetails, { data, pathVariables, queryParams });
+      if (!validation.valid) {
+        spinner.stop('Validation failed');
+        if (output.isAgentMode()) {
+          output.json({
+            error: 'Validation failed: missing required parameters',
+            validation: { missing: validation.missing },
+            hint: 'Add the missing parameters, or pass --skip-validation to bypass this check.',
+          });
+          process.exit(1);
+        }
+        console.log();
+        for (const m of validation.missing) {
+          console.log(pc.red(`  ${m.flag} is missing "${m.param}"`));
+          if (m.description) {
+            console.log(pc.dim(`    ${m.description}`));
+          }
+        }
+        console.log();
+        output.error('Validation failed: missing required parameters. Pass --skip-validation to bypass.');
+      }
+    }
+
+    // Mock mode — return example response without making an API call
+    if (options.mock) {
+      spinner.stop('Mock — returning example response');
+      const mockResponse = actionDetails.ioSchema?.ioExample?.output ?? null;
+      if (output.isAgentMode()) {
+        output.json({
+          mock: true,
+          request: {
+            method: actionDetails.method,
+            url: actionDetails.path,
+          },
+          response: mockResponse,
+          ...(mockResponse === null ? { message: 'No example output available for this action' } : {}),
+        });
+        return;
+      }
+      console.log();
+      if (mockResponse) {
+        console.log(pc.bold('Mock Response:'));
+        console.log(JSON.stringify(mockResponse, null, 2));
+      } else {
+        output.note('No example output available for this action', 'Mock');
+      }
+      return;
+    }
 
     const execSpinner = output.createSpinner();
     execSpinner.start(options.dryRun ? 'Building request...' : 'Executing action...');

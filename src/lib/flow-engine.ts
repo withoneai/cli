@@ -5,7 +5,8 @@ import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { OneApi } from './api.js';
 import { isMethodAllowed, isActionAllowed } from './api.js';
-import type { PermissionLevel } from './types.js';
+import type { PermissionLevel, ActionDetails } from './types.js';
+import { validateActionInput } from './validate.js';
 import type {
   Flow,
   FlowStep,
@@ -313,6 +314,7 @@ async function executeActionStep(
   api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
+  options: FlowExecuteOptions,
 ): Promise<StepResult> {
   const action = step.action!;
   const platform = resolveValue(action.platform, context) as string;
@@ -331,6 +333,17 @@ async function executeActionStep(
   const actionDetails = await api.getActionDetails(actionId);
   if (!isMethodAllowed(actionDetails.method, permissions)) {
     throw new Error(`Method "${actionDetails.method}" is not allowed under "${permissions}" permission level`);
+  }
+
+  // Validate input against action schema
+  if (!options.skipValidation) {
+    const validation = validateActionInput(actionDetails, { data, pathVariables: pathVars, queryParams });
+    if (!validation.valid) {
+      const details = validation.missing
+        .map(m => `${m.flag} is missing "${m.param}"`)
+        .join('; ');
+      throw new Error(`Validation failed for step "${step.id}": ${details}. Pass --skip-validation to bypass.`);
+    }
   }
 
   const result = await api.executePassthroughRequest({
@@ -846,7 +859,7 @@ async function executePaginateStep(
         type: 'action',
         action: resolved as any,
       };
-      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds);
+      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds, options);
       const response = result.response as Record<string, unknown>;
       const pageResults = getByDotPath(response, config.resultsField);
       if (Array.isArray(pageResults)) allResults.push(...pageResults);
@@ -865,7 +878,7 @@ async function executePaginateStep(
         type: 'action',
         action: resolvedAction,
       };
-      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds);
+      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds, options);
       const response = result.response as Record<string, unknown>;
       const pageResults = getByDotPath(response, config.resultsField);
       if (Array.isArray(pageResults)) allResults.push(...pageResults);
@@ -1091,10 +1104,38 @@ export async function executeSingleStep(
       // Feature 7: Mock mode — mock external steps, run logic steps normally
       if (options.mock && (step.type === 'action' || step.type === 'paginate' || step.type === 'bash')) {
         const resolvedConfig = step[step.type] ? resolveValue(step[step.type], context) : {};
+
+        // For action steps, try to return ioExample.output for realistic mock data
+        let mockOutput: Record<string, unknown> = { _mock: true, ...resolvedConfig as Record<string, unknown> };
+        if (step.type === 'action' && step.action) {
+          const actionId = resolveValue(step.action.actionId, context) as string;
+          try {
+            const actionDetails = await api.getActionDetails(actionId);
+            // Validate even in mock mode (unless skipped)
+            if (!options.skipValidation) {
+              const data = step.action.data ? resolveValue(step.action.data, context) as Record<string, unknown> : undefined;
+              const pathVars = step.action.pathVars ? resolveValue(step.action.pathVars, context) as Record<string, unknown> : undefined;
+              const queryParams = step.action.queryParams ? resolveValue(step.action.queryParams, context) as Record<string, unknown> : undefined;
+              const validation = validateActionInput(actionDetails, { data, pathVariables: pathVars, queryParams });
+              if (!validation.valid) {
+                const details = validation.missing.map(m => `${m.flag} is missing "${m.param}"`).join('; ');
+                throw new Error(`Validation failed for step "${step.id}": ${details}. Pass --skip-validation to bypass.`);
+              }
+            }
+            if (actionDetails.ioSchema?.ioExample?.output) {
+              mockOutput = actionDetails.ioSchema.ioExample.output as Record<string, unknown>;
+            }
+          } catch (e) {
+            // If it's a validation error, rethrow
+            if (e instanceof Error && e.message.startsWith('Validation failed')) throw e;
+            // Otherwise fall back to default mock (e.g. action not found)
+          }
+        }
+
         options.onEvent?.({ event: 'step:mock', stepId: step.id, type: step.type, config: resolvedConfig });
         const result: StepResult = {
           status: 'success',
-          output: { _mock: true, ...resolvedConfig as Record<string, unknown> },
+          output: mockOutput,
           response: { _mock: true },
           durationMs: Date.now() - startTime,
         };
@@ -1105,7 +1146,7 @@ export async function executeSingleStep(
       const dispatch = async (): Promise<StepResult> => {
         switch (step.type) {
           case 'action':
-            return await executeActionStep(step, context, api, permissions, allowedActionIds);
+            return await executeActionStep(step, context, api, permissions, allowedActionIds, options);
           case 'transform':
             return executeTransformStep(step, context);
           case 'code':

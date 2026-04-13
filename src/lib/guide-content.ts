@@ -380,6 +380,24 @@ one --agent sync profiles stripe       # filter by platform
 
 When a built-in exists, \`sync init\` uses it automatically — no inference needed, no manual config. The agent just needs to match the user's intent to a profile description.
 
+## Action Resolution
+
+Sync profiles MUST prefer passthrough actions over custom actions.
+Custom actions add server-side fan-out and transformation that causes timeouts
+and payload size failures at scale. The sync engine handles pagination, retries,
+rate limiting, and enrichment locally — a server-side middleware layer on top
+of that creates problems, not value.
+
+When resolving actions for sync profiles:
+1. Search with knowledge mode (not execute mode) to include passthrough actions
+2. Prefer GET passthrough endpoints (e.g. /gmail/v1/users/{userId}/threads)
+   over POST custom endpoints (e.g. /gmail/get-threads)
+3. Use enrich config for per-record detail fetching instead of relying on
+   custom actions that fan out server-side
+4. Only fall back to custom actions when no passthrough equivalent exists
+
+This applies to sync models discovery, sync init, and enrich action selection.
+
 ## Workflow: init → run → query
 
 \`\`\`bash
@@ -460,6 +478,8 @@ When a list endpoint returns lightweight records (e.g. just IDs), add an \`enric
 **Important:** \`enrich.resultsPath\` operates on the raw API response, NOT the CLI's \`{dryRun, request, response}\` wrapper you see when testing with \`one --agent actions execute\`. If the CLI shows your data at \`response.thread\`, the enrich resultsPath is just \`"thread"\` (no \`response.\` prefix).
 
 Enrichment runs after list sync completes (Phase 2), not inline. It's inherently resumable — records track an \`_enriched_at\` timestamp, and re-running skips already-enriched rows.
+
+**Limitation:** Each profile supports one enrich action. If you need multiple enrichments (e.g. both summary and transcript from Fathom), create a second profile/model for the second enrichment.
 
 ## Record Transform
 

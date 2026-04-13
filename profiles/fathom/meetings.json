@@ -13,5 +13,15 @@
     "hasMorePath": "has_more"
   },
   "dateFilter": { "param": "created_after", "format": "iso8601" },
-  "defaultLimit": 50
+  "defaultLimit": 50,
+  "queryParams": {
+    "include_action_items": "true"
+  },
+  "enrich": {
+    "actionId": "conn_mod_def::GIpBYFV5Mog::G6aag6ykQ-uD6XCeUUnq7Q",
+    "pathVars": {
+      "RECORDING_ID": "{recording_id}"
+    },
+    "concurrency": 3
+  }
 }

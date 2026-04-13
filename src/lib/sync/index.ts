@@ -3,7 +3,7 @@ import * as output from '../output.js';
 import { OneApi } from '../api.js';
 import { getApiKey, getAccessControlFromAllSources } from '../config.js';
 import { discoverModels } from './models.js';
-import { readProfile, writeProfile, writeDraftProfile, listProfiles, removeProfile, generateTemplate } from './profile.js';
+import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTemplate } from './profile.js';
 import { syncModel } from './runner.js';
 import { testSyncProfile } from './test.js';
 import { inferProfileFromKnowledge } from './infer.js';
@@ -788,15 +788,11 @@ async function syncRemoveCommand(platform: string, options: { models?: string; y
       const db = await openDatabase(platform);
       for (const model of modelList) {
         dropTable(db, model);
-        removeProfile(platform, model);
         removeModelState(platform, model);
       }
       db.close();
     } else {
-      // Remove everything for this platform
-      for (const prof of profiles) {
-        removeProfile(prof.platform, prof.model);
-      }
+      // Remove data for this platform (profiles are preserved)
       deleteDatabase(platform);
       removeModelState(platform);
     }

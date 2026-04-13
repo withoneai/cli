@@ -330,6 +330,8 @@ actions
   .option('--form-data', 'Send as multipart/form-data')
   .option('--form-url-encoded', 'Send as application/x-www-form-urlencoded')
   .option('--dry-run', 'Show request that would be sent without executing')
+  .option('--mock', 'Return example response without making an API call')
+  .option('--skip-validation', 'Skip input validation against the action schema')
   .action(async (platform: string, actionId: string, connectionKey: string, options: any) => {
     await actionsExecuteCommand(platform, actionId, connectionKey, {
       data: options.data,
@@ -339,6 +341,8 @@ actions
       formData: options.formData,
       formUrlEncoded: options.formUrlEncoded,
       dryRun: options.dryRun,
+      mock: options.mock,
+      skipValidation: options.skipValidation,
     });
   });
 
@@ -363,10 +367,11 @@ flow
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
   .option('--dry-run', 'Validate and show execution plan without running')
-  .option('--mock', 'With --dry-run: execute transforms/code with mock API responses')
+  .option('--mock', 'With --dry-run: execute transforms/code with realistic mock API responses')
+  .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
   .option('-v, --verbose', 'Show full request/response for each step')
-  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean }) => {
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean }) => {
     await flowExecuteCommand(keyOrPath, options);
   });
 

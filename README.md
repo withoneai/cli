@@ -246,6 +246,10 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--form-data` | Send as multipart/form-data |
 | `--form-url-encoded` | Send as application/x-www-form-urlencoded |
 | `--dry-run` | Show the request without executing it |
+| `--mock` | Return example response without making an API call |
+| `--skip-validation` | Skip input validation against the action schema |
+
+The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.
 
 ### `one cache`
 
@@ -375,7 +379,8 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
 | `--dry-run` | Validate and show execution plan without running |
-| `--mock` | With `--dry-run`: execute transforms/code with mock API responses |
+| `--mock` | With `--dry-run`: execute transforms/code with realistic mock API responses |
+| `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
 
