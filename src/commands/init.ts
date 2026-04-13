@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   writeConfig,
   readConfig,
+  getApiKey,
   getConfigPath,
   getApiBase,
   getAccessControl,
@@ -797,64 +798,94 @@ async function freshSetup(
   scope: ConfigScope,
   options: { yes?: boolean; global?: boolean; project?: boolean },
 ): Promise<void> {
-  // Step 1: Get API key
-  p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
-
-  const openBrowser = await p.confirm({
-    message: scopedMessage(scope, 'Open browser to get API key?'),
-    initialValue: true,
+  // Step 1: Get API key (browser login or manual paste)
+  const authMethod = await p.select({
+    message: scopedMessage(scope, 'How would you like to authenticate?'),
+    options: [
+      { value: 'browser', label: 'Browser login', hint: 'recommended — opens app.withone.ai' },
+      { value: 'manual', label: 'Paste API key manually' },
+    ],
   });
 
-  if (p.isCancel(openBrowser)) {
+  if (p.isCancel(authMethod)) {
     p.cancel('Setup cancelled.');
     process.exit(0);
   }
 
-  if (openBrowser) {
-    await openApiKeyPage();
+  let apiKey: string;
+
+  if (authMethod === 'browser') {
+    // Import and run the login command inline
+    const { loginCommand } = await import('./login.js');
+    await loginCommand({});
+    // After login, read the key from config
+    const storedKey = getApiKey();
+    if (!storedKey) {
+      p.cancel('Browser login did not complete. Try: one init');
+      process.exit(1);
+    }
+    apiKey = storedKey;
+  } else {
+    p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
+
+    const openBrowser = await p.confirm({
+      message: scopedMessage(scope, 'Open browser to get API key?'),
+      initialValue: true,
+    });
+
+    if (p.isCancel(openBrowser)) {
+      p.cancel('Setup cancelled.');
+      process.exit(0);
+    }
+
+    if (openBrowser) {
+      await openApiKeyPage();
+    }
+
+    const inputKey = await p.text({
+      message: scopedMessage(scope, 'Enter your One API key:'),
+      placeholder: 'sk_live_...',
+      validate: (value) => {
+        if (!value) return 'API key is required';
+        if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
+          return 'API key should start with sk_live_ or sk_test_';
+        }
+        return undefined;
+      },
+    });
+
+    if (p.isCancel(inputKey)) {
+      p.cancel('Setup cancelled.');
+      process.exit(0);
+    }
+
+    apiKey = inputKey;
+
+    // Validate API key
+    const spinner = p.spinner();
+    spinner.start('Validating API key...');
+
+    const api = new OneApi(apiKey, getApiBase());
+    const isValid = await api.validateApiKey();
+
+    if (!isValid) {
+      spinner.stop('Invalid API key');
+      p.cancel(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
+      process.exit(1);
+    }
+
+    spinner.stop('API key validated');
+
+    // Save API key to config at the chosen scope
+    writeConfig(
+      {
+        apiKey,
+        installedAgents: [],
+        createdAt: new Date().toISOString(),
+      },
+      scope,
+    );
   }
-
-  const apiKey = await p.text({
-    message: scopedMessage(scope, 'Enter your One API key:'),
-    placeholder: 'sk_live_...',
-    validate: (value) => {
-      if (!value) return 'API key is required';
-      if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
-        return 'API key should start with sk_live_ or sk_test_';
-      }
-      return undefined;
-    },
-  });
-
-  if (p.isCancel(apiKey)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
-  }
-
-  // Validate API key
-  const spinner = p.spinner();
-  spinner.start('Validating API key...');
-
-  const api = new OneApi(apiKey, getApiBase());
-  const isValid = await api.validateApiKey();
-
-  if (!isValid) {
-    spinner.stop('Invalid API key');
-    p.cancel(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
-    process.exit(1);
-  }
-
-  spinner.stop('API key validated');
-
-  // Save API key to config at the chosen scope
-  writeConfig(
-    {
-      apiKey,
-      installedAgents: [],
-      createdAt: new Date().toISOString(),
-    },
-    scope,
-  );
 
   // Step 2: Install skill
   await promptSkillInstall();

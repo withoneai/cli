@@ -39,7 +39,15 @@ npm install -g @withone/cli
 one init
 ```
 
-`one init` walks you through setup: enter your [API key](https://app.withone.ai/settings/api-keys), pick your AI agents, and you're done. The MCP server gets installed automatically.
+`one init` walks you through setup: authenticate via browser or enter your [API key](https://app.withone.ai/settings/api-keys), pick your AI agents, and you're done. The MCP server gets installed automatically.
+
+Or authenticate directly:
+
+```bash
+one login              # Opens browser for authentication
+one login --key sk_live_...  # Authenticate with an existing API key
+one logout             # Clear local credentials
+```
 
 Requires Node.js 18+.
 

@@ -47,6 +47,9 @@ export interface AccessControlSettings {
 
 export interface Config {
   apiKey: string;
+  keyId?: string;
+  userEmail?: string;
+  userName?: string;
   installedAgents: string[];
   createdAt: string;
   accessControl?: AccessControlSettings;

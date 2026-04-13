@@ -5,9 +5,12 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 ## Setup
 
-1. Run \`one init\` to configure your API key (interactive — can be global or per-project)
+1. Run \`one login\` to authenticate via browser (opens app.withone.ai, creates API key automatically)
+   - Or use \`one login --key sk_live_...\` to authenticate with an existing API key
 2. Run \`one add <platform>\` to connect platforms via OAuth
 3. Run \`one --agent connection list\` to verify connections
+
+Alternatively, run \`one init\` for the full interactive setup (includes MCP installation and platform connections).
 
 ## The --agent Flag
 
