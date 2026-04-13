@@ -172,6 +172,26 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 
 **Do NOT** pass path or query parameters in \`-d\`. Use the correct flags.
 
+### 4b. Parallel Execute
+
+Execute multiple actions concurrently in a single command:
+
+\`\`\`bash
+one --agent actions execute --parallel \\
+  gmail send-email conn123 -d '{"to":"a@b.com"}' \\
+  -- slack post-message conn456 -d '{"text":"done"}' \\
+  -- google-sheets append-row conn789 -d '{"values":["x"]}'
+\`\`\`
+
+Each segment separated by \`--\` follows the same format: \`<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...]\`. Global flags (\`--dry-run\`, \`--mock\`, \`--skip-validation\`) apply to all segments.
+
+All segments are validated upfront before any execution starts — if one segment has bad params, nothing runs. Execution uses \`Promise.allSettled\` so if one action fails the rest still complete. Use \`--max-concurrency <n>\` (default 5) to control batch size.
+
+Agent-mode output:
+\`\`\`json
+{"parallel":true,"totalDurationMs":1234,"succeeded":2,"failed":0,"results":[{"segment":1,"platform":"gmail","actionId":"send-email","status":"success","durationMs":800,"response":{...}},{"segment":2,"platform":"slack","actionId":"post-message","status":"success","durationMs":600,"response":{...}}]}
+\`\`\`
+
 ## Input Validation
 
 The CLI validates required parameters before executing. Missing params return a structured error:

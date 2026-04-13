@@ -251,6 +251,26 @@ one actions execute stripe <actionId> <connectionKey> \
 
 The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.
 
+#### Parallel execution
+
+Execute multiple actions concurrently with `--parallel`, separating each action with `--`:
+
+```bash
+one --agent actions execute --parallel \
+  gmail send-email conn123 -d '{"to":"a@b.com","subject":"Hi","body":"Hello"}' \
+  -- slack post-message conn456 -d '{"channel":"#general","text":"Done"}' \
+  -- google-sheets append-row conn789 -d '{"values":["x","y"]}'
+```
+
+Each segment follows the same format: `<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...]`. All segments are validated upfront before any execution starts. Results are collected via `Promise.allSettled` — if one fails, the rest still complete.
+
+| Option | What it does |
+|--------|-------------|
+| `--parallel` | Enable parallel mode |
+| `--max-concurrency <n>` | Max concurrent actions per batch (default: 5) |
+
+Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`response`, plus `totalDurationMs`, `succeeded`, and `failed` counts.
+
 ### `one cache`
 
 Manage the local cache for knowledge and search responses. The CLI automatically caches `actions knowledge` and `actions search` results so repeated calls serve instantly from disk.

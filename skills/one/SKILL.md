@@ -101,6 +101,18 @@ one --agent actions execute gmail <actionId> <connectionKey> \
   --query-params '{"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}'
 ```
 
+### Parallel execution
+
+Execute multiple actions concurrently with `--parallel`, separating each action with `--`:
+
+```bash
+one --agent actions execute --parallel \
+  gmail send-email conn123 -d '{"to":"a@b.com"}' \
+  -- slack post-message conn456 -d '{"text":"done"}'
+```
+
+All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`.
+
 ## Error Handling
 
 All errors return JSON: `{"error": "message"}`. Parse output as JSON and check for the `error` key.

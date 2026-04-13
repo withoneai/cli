@@ -13,7 +13,7 @@ import {
 } from './lib/config.js';
 import { connectionAddCommand, connectionListCommand, connectionDeleteCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
-import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
+import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand, actionsExecuteParallelCommand } from './commands/actions.js';
 import {
   flowCreateCommand,
   flowExecuteCommand,
@@ -42,7 +42,7 @@ import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './co
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
-import { setAgentMode, isAgentMode, json as outputJson } from './lib/output.js';
+import { setAgentMode, isAgentMode, json as outputJson, error as outputError } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
 
 const require = createRequire(import.meta.url);
@@ -320,9 +320,11 @@ actions
   });
 
 actions
-  .command('execute <platform> <actionId> <connectionKey>')
+  .command('execute [platform] [actionId] [connectionKey]')
   .alias('x')
-  .description('Execute an action — pass connectionKey from "one list", actionId from "actions search"')
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .description('Execute an action (or multiple with --parallel, separated by --)')
   .option('-d, --data <json>', 'Request body as JSON')
   .option('--path-vars <json>', 'Path variables as JSON')
   .option('--query-params <json>', 'Query parameters as JSON')
@@ -332,8 +334,17 @@ actions
   .option('--dry-run', 'Show request that would be sent without executing')
   .option('--mock', 'Return example response without making an API call')
   .option('--skip-validation', 'Skip input validation against the action schema')
-  .action(async (platform: string, actionId: string, connectionKey: string, options: any) => {
-    await actionsExecuteCommand(platform, actionId, connectionKey, {
+  .option('--parallel', 'Execute multiple actions concurrently (separate actions with --)')
+  .option('--max-concurrency <n>', 'Max concurrent actions when using --parallel (default: 5)', '5')
+  .action(async (platform: string | undefined, actionId: string | undefined, connectionKey: string | undefined, options: any) => {
+    if (options.parallel) {
+      await actionsExecuteParallelCommand();
+      return;
+    }
+    if (!platform || !actionId || !connectionKey) {
+      outputError('Usage: one actions execute <platform> <actionId> <connectionKey> [-d ...]');
+    }
+    await actionsExecuteCommand(platform!, actionId!, connectionKey!, {
       data: options.data,
       pathVars: options.pathVars,
       queryParams: options.queryParams,
