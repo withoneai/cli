@@ -24,8 +24,8 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 function saveCredentials(opts: {
   apiKey: string;
   keyId?: string;
-  userEmail?: string;
   userName?: string;
+  userEmail?: string;
 }): void {
   const resolved = resolveConfig();
   const scope = resolved.scope ?? 'global';
@@ -33,13 +33,16 @@ function saveCredentials(opts: {
   writeConfig({
     apiKey: opts.apiKey,
     keyId: opts.keyId,
-    userEmail: opts.userEmail,
-    userName: opts.userName,
     installedAgents: existing?.installedAgents ?? [],
     createdAt: new Date().toISOString(),
     accessControl: existing?.accessControl,
     cacheTtl: existing?.cacheTtl,
     apiBase: existing?.apiBase,
+    whoami: opts.userName || opts.userEmail ? {
+      user: { id: '', name: opts.userName || '', email: opts.userEmail || '' },
+      organization: null,
+      project: null,
+    } : existing?.whoami,
   }, scope);
 }
 

@@ -45,16 +45,24 @@ export interface AccessControlSettings {
   knowledgeAgent?: boolean;
 }
 
+export interface WhoAmIUser { id: string; name: string; email: string }
+export interface WhoAmIOrg { id: string; name: string }
+export interface WhoAmIProject { id: string; name: string }
+export interface WhoAmIResponse {
+  user: WhoAmIUser;
+  organization: WhoAmIOrg | null;
+  project: WhoAmIProject | null;
+}
+
 export interface Config {
   apiKey: string;
   keyId?: string;
-  userEmail?: string;
-  userName?: string;
   installedAgents: string[];
   createdAt: string;
   accessControl?: AccessControlSettings;
   cacheTtl?: number;
   apiBase?: string;
+  whoami?: WhoAmIResponse;
 }
 
 export interface ConnectionsResponse {
