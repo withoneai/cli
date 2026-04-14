@@ -817,7 +817,7 @@ async function freshSetup(
   if (authMethod === 'browser') {
     // Import and run the login command inline
     const { loginCommand } = await import('./login.js');
-    await loginCommand({});
+    await loginCommand();
     // After login, read the key from config
     const storedKey = getApiKey();
     if (!storedKey) {

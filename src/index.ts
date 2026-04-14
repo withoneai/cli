@@ -59,7 +59,6 @@ program
 
   Setup:
     one login                             Authenticate via browser (opens app.withone.ai)
-    one login --key <key>                 Authenticate with an API key directly
     one logout                            Clear local credentials
     one init                              Set up API key and install MCP server
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
@@ -163,10 +162,9 @@ program
 
 program
   .command('login')
-  .description('Authenticate with One via browser or API key')
-  .option('-k, --key <api-key>', 'Authenticate with an API key directly (for CI/CD or manual setup)')
-  .action(async (options) => {
-    await loginCommand(options);
+  .description('Authenticate with One via browser')
+  .action(async () => {
+    await loginCommand();
   });
 
 program

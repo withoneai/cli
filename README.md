@@ -45,7 +45,6 @@ Or authenticate directly:
 
 ```bash
 one login              # Opens browser for authentication
-one login --key sk_live_...  # Authenticate with an existing API key
 one logout             # Clear local credentials
 ```
 

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import * as p from '@clack/prompts';
-import { getApiKey, getGlobalConfigPath } from '../lib/config.js';
+import { getApiKey, resolveConfig } from '../lib/config.js';
 import * as output from '../lib/output.js';
 
 export async function logoutCommand(): Promise<void> {
@@ -15,7 +15,8 @@ export async function logoutCommand(): Promise<void> {
     return;
   }
 
-  const configPath = getGlobalConfigPath();
+  const resolved = resolveConfig();
+  const configPath = resolved.path;
   if (fs.existsSync(configPath)) {
     fs.unlinkSync(configPath);
   }

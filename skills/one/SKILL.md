@@ -28,11 +28,10 @@ If the user wants a separate API key / connections for a specific project (vs. t
 
 ```bash
 one login                    # Browser-based login (opens app.withone.ai)
-one login --key sk_live_...  # Authenticate with an existing API key
 one logout                   # Clear local credentials
 ```
 
-`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. Use `--key` for CI/CD or headless environments where a browser is not available.
+`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. For CI/CD or headless environments, use `one init` to paste a key manually.
 
 ## Core Workflow: search -> knowledge -> execute
 

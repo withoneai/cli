@@ -1,8 +1,8 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import * as p from '@clack/prompts';
-import { OneApi, ApiError } from '../lib/api.js';
-import { getApiKey, writeConfig, readConfig, getApiBase } from '../lib/config.js';
+import { ApiError } from '../lib/api.js';
+import { getApiKey, writeConfig, resolveConfig } from '../lib/config.js';
 import { getCliAuthUrl, openCliAuthPage } from '../lib/browser.js';
 import * as output from '../lib/output.js';
 
@@ -27,7 +27,9 @@ function saveCredentials(opts: {
   userEmail?: string;
   userName?: string;
 }): void {
-  const existing = readConfig();
+  const resolved = resolveConfig();
+  const scope = resolved.scope ?? 'global';
+  const existing = resolved.config;
   writeConfig({
     apiKey: opts.apiKey,
     keyId: opts.keyId,
@@ -38,7 +40,7 @@ function saveCredentials(opts: {
     accessControl: existing?.accessControl,
     cacheTtl: existing?.cacheTtl,
     apiBase: existing?.apiBase,
-  }, 'global');
+  }, scope);
 }
 
 interface CallbackPayload {
@@ -77,11 +79,13 @@ function startCallbackServer(
           return;
         }
 
-        const apiKey = url.searchParams.get('apiKey');
-        const keyId = url.searchParams.get('keyId') || '';
+        const encodedKey = url.searchParams.get('s');
+        const keyId = url.searchParams.get('k') || '';
         const state = url.searchParams.get('state');
-        const userEmail = url.searchParams.get('userEmail') || undefined;
-        const userName = url.searchParams.get('userName') || undefined;
+        const userEmail = url.searchParams.get('e') || undefined;
+        const userName = url.searchParams.get('n') || undefined;
+
+        const apiKey = encodedKey ? Buffer.from(encodedKey, 'base64').toString('utf-8') : null;
 
         if (!apiKey || !state) {
           res.writeHead(400, { 'Content-Type': 'text/plain' });
@@ -118,18 +122,12 @@ function startCallbackServer(
   });
 }
 
-export async function loginCommand(options: { key?: string }): Promise<void> {
-  // --key flag: manual key input
-  if (options.key) {
-    await loginWithKey(options.key);
-    return;
-  }
-
+export async function loginCommand(): Promise<void> {
   // Check if already logged in
   const existingKey = getApiKey();
   if (existingKey) {
     if (output.isAgentMode()) {
-      output.json({ status: 'already_authenticated', message: 'Already logged in. Use --key to update.' });
+      output.json({ status: 'already_authenticated', message: 'Already logged in. Run one init to update key manually.' });
       return;
     }
     const shouldOverwrite = await p.confirm({
@@ -144,7 +142,7 @@ export async function loginCommand(options: { key?: string }): Promise<void> {
   const state = crypto.randomUUID();
 
   if (output.isAgentMode()) {
-    output.json({ error: 'Browser login not available in agent mode. Use: one login --key <api-key>' });
+    output.json({ error: 'Browser login not available in agent mode. Use: one init' });
     return;
   }
 
@@ -158,7 +156,7 @@ export async function loginCommand(options: { key?: string }): Promise<void> {
   try {
     ({ server, port, result: resultPromise } = await startCallbackServer(state));
   } catch (err) {
-    output.error('Could not start local server. Try: one login --key <api-key>');
+    output.error('Could not start local server. Try: one init');
     return;
   }
 
@@ -203,7 +201,9 @@ export async function loginCommand(options: { key?: string }): Promise<void> {
     if (displayName !== 'Unknown') {
       p.log.success(`Authenticated as ${displayName}${payload.userEmail ? ` (${payload.userEmail})` : ''}`);
     }
-    p.log.success('API key stored in ~/.one/config.json');
+    const { scope: savedScope } = resolveConfig();
+    const scopeLabel = savedScope === 'project' ? 'project config' : '~/.one/config.json';
+    p.log.success(`API key stored in ${scopeLabel}`);
     p.outro('You\'re all set!');
   } catch (err) {
     spin.stop('Authentication failed.');
@@ -212,59 +212,9 @@ export async function loginCommand(options: { key?: string }): Promise<void> {
     } else if (err instanceof ApiError) {
       output.error(`Authentication failed: ${err.message}`);
     } else {
-      output.error('Authentication failed. Try: one login --key <api-key>');
+      output.error('Authentication failed. Try: one init');
     }
   } finally {
     server!.close();
-  }
-}
-
-async function loginWithKey(key: string): Promise<void> {
-  // Validate format
-  if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
-    output.error('Invalid key format. Keys start with sk_live_ or sk_test_');
-    return;
-  }
-
-  if (!output.isAgentMode()) {
-    const spin = p.spinner();
-    spin.start('Validating API key...');
-
-    try {
-      const apiBase = getApiBase();
-      const api = new OneApi(key, apiBase);
-      const isValid = await api.validateApiKey();
-      if (!isValid) throw new ApiError(401, 'Invalid API key');
-      spin.stop('Key validated!');
-
-      saveCredentials({ apiKey: key });
-
-      p.log.success('API key stored in ~/.one/config.json');
-      p.outro('You\'re all set!');
-    } catch (err) {
-      spin.stop('Validation failed.');
-      if (err instanceof ApiError && err.status === 401) {
-        output.error('Invalid API key. Check your key and try again.');
-      } else {
-        output.error('Could not validate key. Check your network connection.');
-      }
-    }
-  } else {
-    try {
-      const apiBase = getApiBase();
-      const api = new OneApi(key, apiBase);
-      await api.validateApiKey();
-
-      saveCredentials({ apiKey: key });
-
-      output.json({ status: 'authenticated', message: 'API key stored successfully.' });
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        output.json({ error: 'Invalid API key.' });
-      } else {
-        output.json({ error: 'Could not validate key.' });
-      }
-      process.exit(1);
-    }
   }
 }
