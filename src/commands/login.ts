@@ -202,7 +202,9 @@ export async function loginCommand(): Promise<void> {
     const scopeInfo = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
 
     p.log.success(`Authenticated as ${displayName} (${whoami.user.email})`);
-    p.log.info(`Account: ${scopeInfo}`);
+    if (whoami.organization || whoami.project) {
+      p.log.info(scopeInfo);
+    }
 
     const configLabel = resolved.scope === 'project' ? 'project config' : '~/.one/config.json';
     p.log.success(`API key stored in ${configLabel}`);
