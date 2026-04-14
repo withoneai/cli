@@ -1,8 +1,8 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import * as p from '@clack/prompts';
-import { ApiError } from '../lib/api.js';
-import { getApiKey, writeConfig, resolveConfig } from '../lib/config.js';
+import { OneApi, ApiError } from '../lib/api.js';
+import { getApiKey, writeConfig, resolveConfig, getApiBase } from '../lib/config.js';
 import { getCliAuthUrl, openCliAuthPage } from '../lib/browser.js';
 import * as output from '../lib/output.js';
 
@@ -24,8 +24,6 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 function saveCredentials(opts: {
   apiKey: string;
   keyId?: string;
-  userName?: string;
-  userEmail?: string;
 }): void {
   const resolved = resolveConfig();
   const scope = resolved.scope ?? 'global';
@@ -38,11 +36,6 @@ function saveCredentials(opts: {
     accessControl: existing?.accessControl,
     cacheTtl: existing?.cacheTtl,
     apiBase: existing?.apiBase,
-    whoami: opts.userName || opts.userEmail ? {
-      user: { id: '', name: opts.userName || '', email: opts.userEmail || '' },
-      organization: null,
-      project: null,
-    } : existing?.whoami,
   }, scope);
 }
 
@@ -50,8 +43,6 @@ interface CallbackPayload {
   apiKey: string;
   keyId: string;
   state: string;
-  userEmail?: string;
-  userName?: string;
 }
 
 function randomPort(): number {
@@ -85,8 +76,6 @@ function startCallbackServer(
         const encodedKey = url.searchParams.get('s');
         const keyId = url.searchParams.get('k') || '';
         const state = url.searchParams.get('state');
-        const userEmail = url.searchParams.get('e') || undefined;
-        const userName = url.searchParams.get('n') || undefined;
 
         const apiKey = encodedKey ? Buffer.from(encodedKey, 'base64').toString('utf-8') : null;
 
@@ -105,7 +94,7 @@ function startCallbackServer(
         // Serve success page to the browser
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(SUCCESS_HTML);
-        resolveResult({ apiKey, keyId, state, userEmail, userName });
+        resolveResult({ apiKey, keyId, state });
       });
 
       server.on('error', (err: NodeJS.ErrnoException) => {
@@ -192,20 +181,24 @@ export async function loginCommand(): Promise<void> {
     const payload = await Promise.race([resultPromise, timeout]);
     spin.stop('Authentication received!');
 
-    const displayName = payload.userName || payload.userEmail || 'Unknown';
+    // Save key first
+    saveCredentials({ apiKey: payload.apiKey, keyId: payload.keyId });
 
-    saveCredentials({
-      apiKey: payload.apiKey,
-      keyId: payload.keyId,
-      userEmail: payload.userEmail,
-      userName: payload.userName,
-    });
+    // Call whoami to get user info and store it
+    const apiBase = getApiBase();
+    const api = new OneApi(payload.apiKey, apiBase);
+    const whoami = await api.whoami();
 
-    if (displayName !== 'Unknown') {
-      p.log.success(`Authenticated as ${displayName}${payload.userEmail ? ` (${payload.userEmail})` : ''}`);
+    // Update config with whoami data
+    const resolved = resolveConfig();
+    if (resolved.config) {
+      writeConfig({ ...resolved.config, whoami }, resolved.scope ?? 'global');
     }
-    const { scope: savedScope } = resolveConfig();
-    const scopeLabel = savedScope === 'project' ? 'project config' : '~/.one/config.json';
+
+    const displayName = whoami.user.name || whoami.user.email;
+    p.log.success(`Authenticated as ${displayName} (${whoami.user.email})`);
+
+    const scopeLabel = resolved.scope === 'project' ? 'project config' : '~/.one/config.json';
     p.log.success(`API key stored in ${scopeLabel}`);
     p.outro('You\'re all set!');
   } catch (err) {
