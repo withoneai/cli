@@ -56,7 +56,6 @@ export interface WhoAmIResponse {
 
 export interface Config {
   apiKey: string;
-  keyId?: string;
   installedAgents: string[];
   createdAt: string;
   accessControl?: AccessControlSettings;

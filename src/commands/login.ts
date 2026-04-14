@@ -21,16 +21,12 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 <p style="color:#a1a1aa;font-size:14px">Return to your terminal. You can close this tab.</p>
 </div></body></html>`;
 
-function saveCredentials(opts: {
-  apiKey: string;
-  keyId?: string;
-}): void {
+function saveCredentials(apiKey: string): void {
   const resolved = resolveConfig();
   const scope = resolved.scope ?? 'global';
   const existing = resolved.config;
   writeConfig({
-    apiKey: opts.apiKey,
-    keyId: opts.keyId,
+    apiKey,
     installedAgents: existing?.installedAgents ?? [],
     createdAt: new Date().toISOString(),
     accessControl: existing?.accessControl,
@@ -41,7 +37,6 @@ function saveCredentials(opts: {
 
 interface CallbackPayload {
   apiKey: string;
-  keyId: string;
   state: string;
 }
 
@@ -74,7 +69,6 @@ function startCallbackServer(
         }
 
         const encodedKey = url.searchParams.get('s');
-        const keyId = url.searchParams.get('k') || '';
         const state = url.searchParams.get('state');
 
         const apiKey = encodedKey ? Buffer.from(encodedKey, 'base64').toString('utf-8') : null;
@@ -94,7 +88,7 @@ function startCallbackServer(
         // Serve success page to the browser
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(SUCCESS_HTML);
-        resolveResult({ apiKey, keyId, state });
+        resolveResult({ apiKey, state });
       });
 
       server.on('error', (err: NodeJS.ErrnoException) => {
@@ -182,7 +176,7 @@ export async function loginCommand(): Promise<void> {
     spin.stop('Authentication received!');
 
     // Save key first
-    saveCredentials({ apiKey: payload.apiKey, keyId: payload.keyId });
+    saveCredentials(payload.apiKey);
 
     // Call whoami to get user info and store it
     const apiBase = getApiBase();
