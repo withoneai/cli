@@ -196,11 +196,17 @@ export async function loginCommand(): Promise<void> {
     }
 
     const displayName = whoami.user.name || whoami.user.email;
-    p.log.success(`Authenticated as ${displayName} (${whoami.user.email})`);
+    const contextParts: string[] = [];
+    if (whoami.organization) contextParts.push(whoami.organization.name);
+    if (whoami.project) contextParts.push(whoami.project.name);
+    const scopeInfo = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
 
-    const scopeLabel = resolved.scope === 'project' ? 'project config' : '~/.one/config.json';
-    p.log.success(`API key stored in ${scopeLabel}`);
-    p.outro('You\'re all set!');
+    p.log.success(`Authenticated as ${displayName} (${whoami.user.email})`);
+    p.log.info(`Account: ${scopeInfo}`);
+
+    const configLabel = resolved.scope === 'project' ? 'project config' : '~/.one/config.json';
+    p.log.success(`API key stored in ${configLabel}`);
+    p.outro('Run `one whoami` for full details.');
   } catch (err) {
     spin.stop('Authentication failed.');
     if (err instanceof Error && err.message === 'timeout') {
