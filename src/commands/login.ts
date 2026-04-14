@@ -2,7 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import * as p from '@clack/prompts';
 import { OneApi, ApiError } from '../lib/api.js';
-import { getApiKey, writeConfig, resolveConfig, getApiBase } from '../lib/config.js';
+import { getApiKey, writeConfig, resolveConfig, getApiBase, getEnvFromApiKey } from '../lib/config.js';
 import { getCliAuthUrl, openCliAuthPage } from '../lib/browser.js';
 import * as output from '../lib/output.js';
 
@@ -195,19 +195,25 @@ export async function loginCommand(): Promise<void> {
       writeConfig({ ...resolved.config, whoami }, resolved.scope ?? 'global');
     }
 
-    const displayName = whoami.user.name || whoami.user.email;
+    // Display in same format as `one whoami`
+    const pc = (await import('picocolors')).default;
+    const env = getEnvFromApiKey(payload.apiKey);
     const contextParts: string[] = [];
     if (whoami.organization) contextParts.push(whoami.organization.name);
     if (whoami.project) contextParts.push(whoami.project.name);
-    const scopeInfo = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+    const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+    const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+    const configLabel = resolved.scope === 'project'
+      ? pc.cyan('project config')
+      : pc.magenta('global config');
 
-    p.log.success(`Authenticated as ${displayName} (${whoami.user.email})`);
-    if (whoami.organization || whoami.project) {
-      p.log.info(scopeInfo);
-    }
-
-    const configLabel = resolved.scope === 'project' ? 'project config' : '~/.one/config.json';
-    p.log.success(`API key stored in ${configLabel}`);
+    console.log();
+    console.log(`  ${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
+    console.log(`  ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+    if (whoami.organization) console.log(`  ${pc.dim('Org:')} ${whoami.organization.name}`);
+    if (whoami.project) console.log(`  ${pc.dim('Project:')} ${whoami.project.name}`);
+    console.log();
+    console.log(`  ${pc.dim('Stored in')} ${configLabel}`);
     p.outro('Run `one whoami` for full details.');
   } catch (err) {
     spin.stop('Authentication failed.');
