@@ -2,7 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import * as p from '@clack/prompts';
 import { OneApi, ApiError } from '../lib/api.js';
-import { getApiKey, writeConfig, resolveConfig, getApiBase, getEnvFromApiKey } from '../lib/config.js';
+import { getApiKey, writeConfig, resolveConfig, readGlobalConfig, readProjectConfig, getApiBase, getEnvFromApiKey, type ConfigScope } from '../lib/config.js';
 import { getCliAuthUrl, openCliAuthPage } from '../lib/browser.js';
 import * as output from '../lib/output.js';
 
@@ -21,10 +21,9 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 <p style="color:#a1a1aa;font-size:14px">Return to your terminal. You can close this tab.</p>
 </div></body></html>`;
 
-function saveCredentials(apiKey: string): void {
-  const resolved = resolveConfig();
-  const scope = resolved.scope ?? 'global';
-  const existing = resolved.config;
+function saveCredentials(apiKey: string, scope: ConfigScope): void {
+  // Read existing config for the target scope to preserve settings
+  const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
   writeConfig({
     apiKey,
     installedAgents: existing?.installedAgents ?? [],
@@ -109,28 +108,57 @@ function startCallbackServer(
 }
 
 export async function loginCommand(): Promise<void> {
-  // Check if already logged in
-  const existingKey = getApiKey();
-  if (existingKey) {
-    if (output.isAgentMode()) {
-      output.json({ status: 'already_authenticated', message: 'Already logged in. Run one init to update key manually.' });
-      return;
-    }
-    const shouldOverwrite = await p.confirm({
-      message: 'You are already logged in. Overwrite with new credentials?',
-    });
-    if (p.isCancel(shouldOverwrite) || !shouldOverwrite) {
-      p.cancel('Login cancelled.');
-      return;
-    }
-  }
-
-  const state = crypto.randomUUID();
-
   if (output.isAgentMode()) {
     output.json({ error: 'Browser login not available in agent mode. Use: one init' });
     return;
   }
+
+  // Determine login scope
+  let targetScope: ConfigScope = 'global';
+  const existingKey = getApiKey();
+
+  if (existingKey) {
+    // Show current session info (same format as `one whoami`)
+    const pc = (await import('picocolors')).default;
+    const resolved = resolveConfig();
+    const whoami = resolved.config?.whoami;
+    const env = getEnvFromApiKey(existingKey);
+    const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+    const currentScope = resolved.scope === 'project'
+      ? pc.cyan('local config')
+      : pc.magenta('global config');
+
+    const lines: string[] = ['You are already logged in.', ''];
+    if (whoami) {
+      const contextParts: string[] = [];
+      if (whoami.organization) contextParts.push(whoami.organization.name);
+      if (whoami.project) contextParts.push(whoami.project.name);
+      const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+      lines.push(`${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
+      lines.push(`${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+      if (whoami.organization) lines.push(`${pc.dim('Org:')} ${whoami.organization.name}`);
+      if (whoami.project) lines.push(`${pc.dim('Project:')} ${whoami.project.name}`);
+    }
+    lines.push('');
+    lines.push(`${pc.dim('Stored in')} ${currentScope}`);
+    p.note(lines.join('\n'));
+
+    // Let user pick scope for new login
+    const scopeChoice = await p.select({
+      message: 'Where would you like to log in?',
+      options: [
+        { value: 'global', label: 'Globally', hint: 'applies everywhere' },
+        { value: 'project', label: 'This directory', hint: 'only this project' },
+      ],
+    });
+    if (p.isCancel(scopeChoice)) {
+      p.cancel('Login cancelled.');
+      return;
+    }
+    targetScope = scopeChoice as ConfigScope;
+  }
+
+  const state = crypto.randomUUID();
 
   const spin = p.spinner();
 
@@ -176,7 +204,7 @@ export async function loginCommand(): Promise<void> {
     spin.stop('Authentication received!');
 
     // Save key first
-    saveCredentials(payload.apiKey);
+    saveCredentials(payload.apiKey, targetScope);
 
     // Call whoami to get user info and store it
     const apiBase = getApiBase();
@@ -186,7 +214,7 @@ export async function loginCommand(): Promise<void> {
     // Update config with whoami data
     const resolved = resolveConfig();
     if (resolved.config) {
-      writeConfig({ ...resolved.config, whoami }, resolved.scope ?? 'global');
+      writeConfig({ ...resolved.config, whoami }, targetScope);
     }
 
     // Display in same format as `one whoami`
@@ -197,18 +225,39 @@ export async function loginCommand(): Promise<void> {
     if (whoami.project) contextParts.push(whoami.project.name);
     const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
     const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
-    const configLabel = resolved.scope === 'project'
-      ? pc.cyan('project config')
+    const configLabel = targetScope === 'project'
+      ? pc.cyan('local config')
       : pc.magenta('global config');
 
+    const infoLines = [
+      `${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`,
+      `${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
+    ];
+    if (whoami.organization) infoLines.push(`${pc.dim('Org:')} ${whoami.organization.name}`);
+    if (whoami.project) infoLines.push(`${pc.dim('Project:')} ${whoami.project.name}`);
+    infoLines.push('');
+    infoLines.push(`${pc.dim('Stored in')} ${configLabel}`);
+    p.note(infoLines.join('\n'), 'Logged in');
+
     console.log();
-    console.log(`  ${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
-    console.log(`  ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
-    if (whoami.organization) console.log(`  ${pc.dim('Org:')} ${whoami.organization.name}`);
-    if (whoami.project) console.log(`  ${pc.dim('Project:')} ${whoami.project.name}`);
+    console.log(`  ${pc.dim('Next steps:')}`);
+    console.log(`  ${pc.cyan('one add <platform>')}  ${pc.dim('—')} Connect a platform (e.g. gmail, slack, stripe)`);
     console.log();
-    console.log(`  ${pc.dim('Stored in')} ${configLabel}`);
-    p.outro('Run `one whoami` for full details.');
+    console.log(pc.bold('  Copy-paste this to your AI agent:'));
+    console.log();
+    console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
+    console.log(pc.cyan('  │'));
+    console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
+    console.log(pc.cyan('  │  lets you interact with 250+ third-party platforms (Gmail,'));
+    console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
+    console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
+    console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
+    console.log(pc.cyan('  │  skill. Please save this to your project instructions or'));
+    console.log(pc.cyan('  │  memory so you remember it in future conversations.'));
+    console.log(pc.cyan('  │'));
+    console.log(pc.cyan('  └─────────────────────────────────────────────────────────────'));
+    console.log();
+    p.outro('Happy building!');
   } catch (err) {
     spin.stop('Authentication failed.');
     if (err instanceof Error && err.message === 'timeout') {
@@ -219,6 +268,7 @@ export async function loginCommand(): Promise<void> {
       output.error('Authentication failed. Try: one init');
     }
   } finally {
+    server!.closeAllConnections();
     server!.close();
   }
 }

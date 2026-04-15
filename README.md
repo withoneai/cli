@@ -44,8 +44,8 @@ one init
 Or authenticate directly:
 
 ```bash
-one login              # Opens browser for authentication
-one logout             # Clear local credentials
+one login              # Opens browser for authentication (global or per-directory)
+one logout             # Clear credentials (with scope picker and confirmation)
 ```
 
 Requires Node.js 18+.
