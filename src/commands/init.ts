@@ -41,6 +41,7 @@ import * as output from '../lib/output.js';
 import type { Agent } from '../lib/types.js';
 import { writeInstalledSkillVersion } from '../lib/skill-sync.js';
 import { getCurrentVersion } from './update.js';
+import { browserLogin } from './login.js';
 
 export async function initCommand(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
   if (output.isAgentMode()) {
@@ -287,53 +288,82 @@ async function handleExistingConfig(
 // ── Action handlers ──────────────────────────────────────────────────
 
 async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Promise<void> {
-  p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
-
-  const openBrowser = await p.confirm({
-    message: scopedMessage(scope, 'Open browser to get API key?'),
-    initialValue: true,
+  const authMethod = await p.select({
+    message: scopedMessage(scope, 'How would you like to authenticate?'),
+    options: [
+      { value: 'browser', label: 'Browser login', hint: 'recommended — opens app.withone.ai' },
+      { value: 'manual', label: 'Paste API key manually' },
+    ],
   });
 
-  if (p.isCancel(openBrowser)) {
+  if (p.isCancel(authMethod)) {
     p.cancel('Cancelled.');
     process.exit(0);
   }
 
-  if (openBrowser) {
-    await openApiKeyPage();
+  let newKey: string;
+  let whoamiResult: import('../lib/types.js').WhoAmIResponse;
+
+  if (authMethod === 'browser') {
+    const result = await browserLogin();
+    if (!result) {
+      p.cancel('Browser login did not complete.');
+      process.exit(1);
+    }
+    newKey = result.apiKey;
+    whoamiResult = result.whoami;
+  } else {
+    p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
+
+    const openBrowser = await p.confirm({
+      message: scopedMessage(scope, 'Open browser to get API key?'),
+      initialValue: true,
+    });
+
+    if (p.isCancel(openBrowser)) {
+      p.cancel('Cancelled.');
+      process.exit(0);
+    }
+
+    if (openBrowser) {
+      await openApiKeyPage();
+    }
+
+    const inputKey = await p.text({
+      message: scopedMessage(scope, 'Enter your new One API key:'),
+      placeholder: 'sk_live_...',
+      validate: (value) => {
+        if (!value) return 'API key is required';
+        if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
+          return 'API key should start with sk_live_ or sk_test_';
+        }
+        return undefined;
+      },
+    });
+
+    if (p.isCancel(inputKey)) {
+      p.cancel('Cancelled.');
+      process.exit(0);
+    }
+
+    newKey = inputKey;
+
+    // Validate
+    const spinner = p.spinner();
+    spinner.start('Validating API key...');
+
+    const api = new OneApi(newKey, getApiBase());
+    const validated = await api.validateApiKey();
+
+    if (!validated) {
+      spinner.stop('Invalid API key');
+      p.cancel(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
+      process.exit(1);
+    }
+
+    spinner.stop('API key validated');
+    whoamiResult = validated;
   }
-
-  const newKey = await p.text({
-    message: scopedMessage(scope, 'Enter your new One API key:'),
-    placeholder: 'sk_live_...',
-    validate: (value) => {
-      if (!value) return 'API key is required';
-      if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
-        return 'API key should start with sk_live_ or sk_test_';
-      }
-      return undefined;
-    },
-  });
-
-  if (p.isCancel(newKey)) {
-    p.cancel('Cancelled.');
-    process.exit(0);
-  }
-
-  // Validate
-  const spinner = p.spinner();
-  spinner.start('Validating API key...');
-
-  const api = new OneApi(newKey, getApiBase());
-  const whoamiResult = await api.validateApiKey();
-
-  if (!whoamiResult) {
-    spinner.stop('Invalid API key');
-    p.cancel(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
-    process.exit(1);
-  }
-
-  spinner.stop('API key validated');
 
   // Show key context
   const env = getEnvFromApiKey(newKey);
@@ -837,16 +867,35 @@ async function freshSetup(
   let apiKey: string;
 
   if (authMethod === 'browser') {
-    // Import and run the login command inline
-    const { loginCommand } = await import('./login.js');
-    await loginCommand();
-    // After login, read the key from config
-    const storedKey = getApiKey();
-    if (!storedKey) {
+    const result = await browserLogin();
+    if (!result) {
       p.cancel('Browser login did not complete. Try: one init');
       process.exit(1);
     }
-    apiKey = storedKey;
+    apiKey = result.apiKey;
+
+    // Show account context
+    const env = getEnvFromApiKey(apiKey);
+    const contextParts: string[] = [];
+    if (result.whoami.organization) contextParts.push(result.whoami.organization.name);
+    if (result.whoami.project) contextParts.push(result.whoami.project.name);
+    const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+    const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+    p.note(
+      `${scopeDisplay} ${pc.dim('·')} ${envLabel}\n${result.whoami.user.name} ${pc.dim(`(${result.whoami.user.email})`)}`,
+      'Account',
+    );
+
+    // Save API key + whoami to config at the chosen scope
+    writeConfig(
+      {
+        apiKey,
+        installedAgents: [],
+        createdAt: new Date().toISOString(),
+        whoami: result.whoami,
+      },
+      scope,
+    );
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
 
@@ -903,12 +952,12 @@ async function freshSetup(
     const contextParts: string[] = [];
     if (whoami.organization) contextParts.push(whoami.organization.name);
     if (whoami.project) contextParts.push(whoami.project.name);
-    const scope_label = contextParts.length > 0
+    const scopeDisplay = contextParts.length > 0
       ? contextParts.join(' / ')
       : 'Personal';
     const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
     p.note(
-      `${scope_label} ${pc.dim('·')} ${envLabel}\n${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
+      `${scopeDisplay} ${pc.dim('·')} ${envLabel}\n${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
       'Account',
     );
 

@@ -5,11 +5,11 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 ## Setup
 
-1. Run \`one login\` to authenticate via browser (opens app.withone.ai, creates API key automatically)
+1. Run \`one init\` for full interactive setup (authentication, skill installation, and platform connections)
 2. Run \`one add <platform>\` to connect platforms via OAuth
 3. Run \`one --agent connection list\` to verify connections
 
-Alternatively, run \`one init\` for the full interactive setup (includes MCP installation and platform connections).
+You can also use \`one login\` / \`one logout\` to manage authentication separately (global or per-directory).
 
 ## The --agent Flag
 

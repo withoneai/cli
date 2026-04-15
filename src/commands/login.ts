@@ -5,6 +5,7 @@ import { OneApi, ApiError } from '../lib/api.js';
 import { getApiKey, writeConfig, resolveConfig, readGlobalConfig, readProjectConfig, getApiBase, getEnvFromApiKey, type ConfigScope } from '../lib/config.js';
 import { getCliAuthUrl, openCliAuthPage } from '../lib/browser.js';
 import * as output from '../lib/output.js';
+import type { WhoAmIResponse } from '../lib/types.js';
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const PORT_RANGE_START = 49152;
@@ -20,19 +21,6 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 <h1 style="font-size:20px;margin:0 0 8px">You're all set!</h1>
 <p style="color:#a1a1aa;font-size:14px">Return to your terminal. You can close this tab.</p>
 </div></body></html>`;
-
-function saveCredentials(apiKey: string, scope: ConfigScope): void {
-  // Read existing config for the target scope to preserve settings
-  const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
-  writeConfig({
-    apiKey,
-    installedAgents: existing?.installedAgents ?? [],
-    createdAt: new Date().toISOString(),
-    accessControl: existing?.accessControl,
-    cacheTtl: existing?.cacheTtl,
-    apiBase: existing?.apiBase,
-  }, scope);
-}
 
 interface CallbackPayload {
   apiKey: string;
@@ -107,6 +95,93 @@ function startCallbackServer(
   });
 }
 
+// ── Reusable browser auth flow ──────────────────────────────────────
+// Returns { apiKey, whoami } on success, null on failure/cancel.
+// Handles the local callback server, browser open, and whoami validation.
+// Does NOT handle scope selection, credential saving, or post-login UX.
+
+export interface BrowserLoginResult {
+  apiKey: string;
+  whoami: WhoAmIResponse;
+}
+
+export async function browserLogin(): Promise<BrowserLoginResult | null> {
+  const state = crypto.randomUUID();
+  const spin = p.spinner();
+
+  let server: http.Server;
+  let port: number;
+  let resultPromise: Promise<CallbackPayload>;
+
+  try {
+    ({ server, port, result: resultPromise } = await startCallbackServer(state));
+  } catch {
+    output.error('Could not start local server. Try: one init');
+    return null;
+  }
+
+  const authUrl = getCliAuthUrl(port, state);
+
+  p.note(
+    `If the browser doesn't open, visit:\n${authUrl}`,
+    'Opening browser for authentication...'
+  );
+
+  try {
+    await openCliAuthPage(port, state);
+  } catch {
+    // Browser open failed — URL is already displayed above
+  }
+
+  spin.start('Waiting for authentication... (timeout: 5 min)');
+
+  const timeout = new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('timeout'));
+    }, LOGIN_TIMEOUT_MS);
+    timer.unref();
+  });
+
+  try {
+    const payload = await Promise.race([resultPromise, timeout]);
+    spin.stop('Authentication received!');
+
+    // Fetch whoami
+    const apiBase = getApiBase();
+    const api = new OneApi(payload.apiKey, apiBase);
+    const whoami = await api.whoami();
+
+    return { apiKey: payload.apiKey, whoami };
+  } catch (err) {
+    spin.stop('Authentication failed.');
+    if (err instanceof Error && err.message === 'timeout') {
+      output.error('Authentication timed out (5 min). Try again with: one login');
+    } else if (err instanceof ApiError) {
+      output.error(`Authentication failed: ${err.message}`);
+    } else {
+      output.error('Authentication failed. Try: one init');
+    }
+    return null;
+  } finally {
+    server!.closeAllConnections();
+    server!.close();
+  }
+}
+
+// ── Standalone login command ────────────────────────────────────────
+
+function saveCredentials(apiKey: string, scope: ConfigScope): void {
+  const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
+  writeConfig({
+    apiKey,
+    installedAgents: existing?.installedAgents ?? [],
+    createdAt: new Date().toISOString(),
+    accessControl: existing?.accessControl,
+    cacheTtl: existing?.cacheTtl,
+    apiBase: existing?.apiBase,
+  }, scope);
+}
+
 export async function loginCommand(): Promise<void> {
   if (output.isAgentMode()) {
     output.json({ error: 'Browser login not available in agent mode. Use: one init' });
@@ -158,117 +233,58 @@ export async function loginCommand(): Promise<void> {
     targetScope = scopeChoice as ConfigScope;
   }
 
-  const state = crypto.randomUUID();
+  // Run browser auth
+  const result = await browserLogin();
+  if (!result) return;
 
-  const spin = p.spinner();
+  const { apiKey, whoami } = result;
 
-  // Start localhost callback server
-  let server: http.Server;
-  let port: number;
-  let resultPromise: Promise<CallbackPayload>;
-
-  try {
-    ({ server, port, result: resultPromise } = await startCallbackServer(state));
-  } catch (err) {
-    output.error('Could not start local server. Try: one init');
-    return;
+  // Save credentials and whoami
+  saveCredentials(apiKey, targetScope);
+  const resolved = resolveConfig();
+  if (resolved.config) {
+    writeConfig({ ...resolved.config, whoami }, targetScope);
   }
 
-  const authUrl = getCliAuthUrl(port, state);
+  // Display result
+  const pc = (await import('picocolors')).default;
+  const env = getEnvFromApiKey(apiKey);
+  const contextParts: string[] = [];
+  if (whoami.organization) contextParts.push(whoami.organization.name);
+  if (whoami.project) contextParts.push(whoami.project.name);
+  const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+  const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+  const configLabel = targetScope === 'project'
+    ? pc.cyan('local config')
+    : pc.magenta('global config');
 
-  p.note(
-    `If the browser doesn't open, visit:\n${authUrl}`,
-    'Opening browser for authentication...'
-  );
+  const infoLines = [
+    `${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`,
+    `${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
+  ];
+  if (whoami.organization) infoLines.push(`${pc.dim('Org:')} ${whoami.organization.name}`);
+  if (whoami.project) infoLines.push(`${pc.dim('Project:')} ${whoami.project.name}`);
+  infoLines.push('');
+  infoLines.push(`${pc.dim('Stored in')} ${configLabel}`);
+  p.note(infoLines.join('\n'), 'Logged in');
 
-  // Open browser
-  try {
-    await openCliAuthPage(port, state);
-  } catch {
-    // Browser open failed — URL is already displayed above
-  }
-
-  spin.start('Waiting for authentication... (timeout: 5 min)');
-
-  // Wait for callback or timeout
-  const timeout = new Promise<never>((_, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('timeout'));
-    }, LOGIN_TIMEOUT_MS);
-    // Allow process to exit if the timeout is the only thing keeping it alive
-    timer.unref();
-  });
-
-  try {
-    const payload = await Promise.race([resultPromise, timeout]);
-    spin.stop('Authentication received!');
-
-    // Save key first
-    saveCredentials(payload.apiKey, targetScope);
-
-    // Call whoami to get user info and store it
-    const apiBase = getApiBase();
-    const api = new OneApi(payload.apiKey, apiBase);
-    const whoami = await api.whoami();
-
-    // Update config with whoami data
-    const resolved = resolveConfig();
-    if (resolved.config) {
-      writeConfig({ ...resolved.config, whoami }, targetScope);
-    }
-
-    // Display in same format as `one whoami`
-    const pc = (await import('picocolors')).default;
-    const env = getEnvFromApiKey(payload.apiKey);
-    const contextParts: string[] = [];
-    if (whoami.organization) contextParts.push(whoami.organization.name);
-    if (whoami.project) contextParts.push(whoami.project.name);
-    const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
-    const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
-    const configLabel = targetScope === 'project'
-      ? pc.cyan('local config')
-      : pc.magenta('global config');
-
-    const infoLines = [
-      `${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`,
-      `${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
-    ];
-    if (whoami.organization) infoLines.push(`${pc.dim('Org:')} ${whoami.organization.name}`);
-    if (whoami.project) infoLines.push(`${pc.dim('Project:')} ${whoami.project.name}`);
-    infoLines.push('');
-    infoLines.push(`${pc.dim('Stored in')} ${configLabel}`);
-    p.note(infoLines.join('\n'), 'Logged in');
-
-    console.log();
-    console.log(`  ${pc.dim('Next steps:')}`);
-    console.log(`  ${pc.cyan('one add <platform>')}  ${pc.dim('—')} Connect a platform (e.g. gmail, slack, stripe)`);
-    console.log();
-    console.log(pc.bold('  Copy-paste this to your AI agent:'));
-    console.log();
-    console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
-    console.log(pc.cyan('  │'));
-    console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
-    console.log(pc.cyan('  │  lets you interact with 250+ third-party platforms (Gmail,'));
-    console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
-    console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
-    console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
-    console.log(pc.cyan('  │  skill. Please save this to your project instructions or'));
-    console.log(pc.cyan('  │  memory so you remember it in future conversations.'));
-    console.log(pc.cyan('  │'));
-    console.log(pc.cyan('  └─────────────────────────────────────────────────────────────'));
-    console.log();
-    p.outro('Happy building!');
-  } catch (err) {
-    spin.stop('Authentication failed.');
-    if (err instanceof Error && err.message === 'timeout') {
-      output.error('Authentication timed out (5 min). Try again with: one login');
-    } else if (err instanceof ApiError) {
-      output.error(`Authentication failed: ${err.message}`);
-    } else {
-      output.error('Authentication failed. Try: one init');
-    }
-  } finally {
-    server!.closeAllConnections();
-    server!.close();
-  }
+  console.log();
+  console.log(`  ${pc.dim('Next steps:')}`);
+  console.log(`  ${pc.cyan('one add <platform>')}  ${pc.dim('—')} Connect a platform (e.g. gmail, slack, stripe)`);
+  console.log();
+  console.log(pc.bold('  Copy-paste this to your AI agent:'));
+  console.log();
+  console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
+  console.log(pc.cyan('  │'));
+  console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
+  console.log(pc.cyan('  │  lets you interact with 250+ third-party platforms (Gmail,'));
+  console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
+  console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
+  console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
+  console.log(pc.cyan('  │  skill. Please save this to your project instructions or'));
+  console.log(pc.cyan('  │  memory so you remember it in future conversations.'));
+  console.log(pc.cyan('  │'));
+  console.log(pc.cyan('  └─────────────────────────────────────────────────────────────'));
+  console.log();
+  p.outro('Happy building!');
 }
