@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type {
   Connection,
   ConnectionsResponse,
@@ -422,8 +424,41 @@ export class OneApi {
       throw new ApiError(response.status, text || `HTTP ${response.status}`);
     }
 
-    const responseText = await response.text();
-    const responseData = responseText ? JSON.parse(responseText) : {};
+    // Try to parse as JSON first; if that fails, treat as binary
+    const responseBuffer = Buffer.from(await response.arrayBuffer());
+    const responseContentType = response.headers.get('content-type') || '';
+
+    let responseData: unknown;
+    try {
+      const text = responseBuffer.toString('utf-8');
+      responseData = text ? JSON.parse(text) : {};
+    } catch {
+      // Not valid JSON — treat as binary response
+      if (args.output) {
+        const outputPath = resolve(args.output);
+        writeFileSync(outputPath, responseBuffer);
+        return {
+          requestConfig: sanitizedConfig,
+          responseData: {
+            saved: true,
+            path: outputPath,
+            size: responseBuffer.length,
+            contentType: responseContentType,
+          },
+        };
+      }
+
+      // No --output flag — return metadata about the binary response
+      return {
+        requestConfig: sanitizedConfig,
+        responseData: {
+          binary: true,
+          size: responseBuffer.length,
+          contentType: responseContentType,
+          message: 'Binary response received. Use --output <path> to save to a file.',
+        },
+      };
+    }
 
     return {
       requestConfig: sanitizedConfig,
