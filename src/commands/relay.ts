@@ -68,6 +68,10 @@ export async function relayCreateCommand(options: {
     if (result.description) console.log(`  ${pc.dim('Description:')} ${result.description}`);
     if (result.eventFilters?.length) console.log(`  ${pc.dim('Events:')}      ${result.eventFilters.join(', ')}`);
     if (result.webhookPayload?.id) console.log(`  ${pc.dim('Webhook ID:')}  ${result.webhookPayload.id}`);
+    if (result.warning) {
+      console.log();
+      console.log(`  ${pc.yellow('⚠ Warning:')} ${result.warning}`);
+    }
     console.log();
   } catch (error) {
     spinner.stop('Failed to create relay endpoint');
