@@ -1,5 +1,7 @@
-import { writeFileSync } from 'node:fs';
+import { createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import type {
   Connection,
   ConnectionsResponse,
@@ -424,46 +426,54 @@ export class OneApi {
       throw new ApiError(response.status, text || `HTTP ${response.status}`);
     }
 
-    // Try to parse as JSON first; if that fails, treat as binary
-    const responseBuffer = Buffer.from(await response.arrayBuffer());
     const responseContentType = response.headers.get('content-type') || '';
+    const isExplicitJson = responseContentType.includes('application/json') || responseContentType.includes('text/');
 
-    let responseData: unknown;
-    try {
-      const text = responseBuffer.toString('utf-8');
-      responseData = text ? JSON.parse(text) : {};
-    } catch {
-      // Not valid JSON — treat as binary response
-      if (args.output) {
-        const outputPath = resolve(args.output);
-        writeFileSync(outputPath, responseBuffer);
-        return {
-          requestConfig: sanitizedConfig,
-          responseData: {
-            saved: true,
-            path: outputPath,
-            size: responseBuffer.length,
-            contentType: responseContentType,
-          },
-        };
+    if (isExplicitJson || !responseContentType) {
+      // Explicit JSON/text content-type — fast path
+      const responseText = await response.text();
+      const responseData = responseText ? JSON.parse(responseText) : {};
+      return { requestConfig: sanitizedConfig, responseData };
+    }
+
+    // Ambiguous content-type (e.g. application/octet-stream from the API proxy).
+    // With --output: stream to disk (memory-safe for large binary files).
+    if (args.output) {
+      const outputPath = resolve(args.output);
+      const body = response.body;
+      if (!body) {
+        throw new ApiError(0, 'Response body is null — cannot save to file');
       }
+      const nodeReadable = Readable.fromWeb(body as any);
+      await pipeline(nodeReadable, createWriteStream(outputPath));
+      const contentLength = response.headers.get('content-length');
+      const size = contentLength ? parseInt(contentLength, 10) : undefined;
+      return {
+        requestConfig: sanitizedConfig,
+        responseData: { saved: true, path: outputPath, size, contentType: responseContentType },
+      };
+    }
 
-      // No --output flag — return metadata about the binary response
+    // Without --output: try JSON parse, fall back to binary metadata.
+    // The API proxy often returns application/octet-stream for JSON responses,
+    // so we must attempt parsing before assuming binary.
+    const responseText = await response.text();
+    try {
+      const responseData = responseText ? JSON.parse(responseText) : {};
+      return { requestConfig: sanitizedConfig, responseData };
+    } catch {
+      const contentLength = response.headers.get('content-length');
+      const size = contentLength ? parseInt(contentLength, 10) : responseText.length;
       return {
         requestConfig: sanitizedConfig,
         responseData: {
           binary: true,
-          size: responseBuffer.length,
+          size,
           contentType: responseContentType,
           message: 'Binary response received. Use --output <path> to save to a file.',
         },
       };
     }
-
-    return {
-      requestConfig: sanitizedConfig,
-      responseData,
-    };
   }
 
   // Webhook Relay methods
