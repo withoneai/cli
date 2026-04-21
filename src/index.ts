@@ -45,6 +45,7 @@ import {
 } from './commands/relay.js';
 
 import { registerSyncCommands } from './lib/sync/index.js';
+import { registerMemoryCommands } from './commands/mem.js';
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
@@ -646,6 +647,10 @@ relay
 // ── Sync Commands ──
 
 registerSyncCommands(program);
+
+// ── Memory Commands ──
+
+registerMemoryCommands(program);
 
 // ── Cache Commands ──
 

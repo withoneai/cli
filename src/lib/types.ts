@@ -77,6 +77,12 @@ export interface Config {
   cacheTtl?: number;
   apiBase?: string;
   whoami?: WhoAmIResponse;
+  /**
+   * Unified-memory subsystem config. Shape defined in lib/memory/config.ts
+   * (kept loose here to avoid import cycles between the core config layer
+   * and the memory module).
+   */
+  memory?: unknown;
 }
 
 export interface ConnectionsResponse {
