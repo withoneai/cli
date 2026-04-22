@@ -20,6 +20,20 @@ export interface MemWriteReport {
   inserted: number;
   updated: number;
   skipped: number;
+  /**
+   * Source keys (`<platform>/<model>:<id>`) that landed during this page.
+   * Used by `--full-refresh` to reconcile against memory records whose
+   * source didn't appear this run (those get archived).
+   */
+  sourceKeysSeen: string[];
+  /**
+   * Per-action record arrays so hook dispatch can fire `onInsert` vs
+   * `onUpdate` without a second classify pass. Only populated when
+   * `capturePerAction: true` is set — otherwise kept empty to avoid
+   * the memory cost on large syncs with no hooks.
+   */
+  inserts: Array<Record<string, unknown>>;
+  updates: Array<Record<string, unknown>>;
 }
 
 /**
@@ -83,8 +97,17 @@ export function getSearchablePaths(profile: SyncProfile): string[] | undefined {
 export async function writePageToMemory(
   profile: SyncProfile,
   records: Array<Record<string, unknown>>,
+  opts: { capturePerAction?: boolean } = {},
 ): Promise<MemWriteReport> {
-  const report: MemWriteReport = { attempted: 0, inserted: 0, updated: 0, skipped: 0 };
+  const report: MemWriteReport = {
+    attempted: 0,
+    inserted: 0,
+    updated: 0,
+    skipped: 0,
+    sourceKeysSeen: [],
+    inserts: [],
+    updates: [],
+  };
   const type = `${profile.platform}/${profile.model}`;
   const identityKey = profile.identityKey;
   const embedFlag = deriveEmbedFlag(profile);
@@ -143,8 +166,14 @@ export async function writePageToMemory(
         // interactive `mem add` / `mem update`, wrong for sync.
         { embed: embedFlag, replace: true },
       );
-      if (res.action === 'inserted') report.inserted++;
-      else report.updated++;
+      report.sourceKeysSeen.push(sourceKey);
+      if (res.action === 'inserted') {
+        report.inserted++;
+        if (opts.capturePerAction) report.inserts.push(record);
+      } else {
+        report.updated++;
+        if (opts.capturePerAction) report.updates.push(record);
+      }
     } catch {
       report.skipped++;
     }
