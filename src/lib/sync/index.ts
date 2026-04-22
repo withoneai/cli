@@ -13,6 +13,8 @@ import { parseCondition, splitConditions } from './where-parser.js';
 import { readSyncState, removeModelState, getModelState } from './state.js';
 import { executeQuery, executeRawSql } from './query.js';
 import { searchSyncedData } from './search.js';
+import { extractSearchableFromPaths, getSearchablePaths } from './mem-writer.js';
+import { defaultSearchableText } from '../memory/embedding.js';
 import { openDatabase, getDatabaseSize, dropTable, deleteDatabase, countRecords, listTables, deleteRecords, rebuildFtsIndex, tableExists, sanitizeTableName } from './db.js';
 import type { SyncProfile, SyncRunOptions, SyncQueryOptions } from './types.js';
 import { isSqliteAvailable, loadSqlite } from './sqlite-loader.js';
@@ -408,7 +410,10 @@ async function syncInitCommand(platform: string, model: string, options: { confi
 
 // ── sync test ──
 
-async function syncTestCommand(platformModel: string): Promise<void> {
+async function syncTestCommand(
+  platformModel: string,
+  options: { showSearchable?: boolean } = {},
+): Promise<void> {
   const [platform, model] = platformModel.split('/');
   if (!platform || !model) {
     output.error('Usage: one sync test <platform>/<model>. Example: one sync test shopify/orders');
@@ -440,8 +445,12 @@ async function syncTestCommand(platformModel: string): Promise<void> {
     }
   }
 
+  const searchablePreview = options.showSearchable
+    ? buildSearchablePreview(profile!, report.sample)
+    : null;
+
   if (output.isAgentMode()) {
-    output.json(report);
+    output.json({ ...report, ...(searchablePreview ? { searchable: searchablePreview } : {}) });
     return;
   }
 
@@ -460,12 +469,56 @@ async function syncTestCommand(platformModel: string): Promise<void> {
     }
   }
 
+  if (searchablePreview) {
+    console.log(`\n  ${pc.bold('Searchable preview')} ${pc.dim(`(${searchablePreview.mode})`)}`);
+    console.log(`    ${pc.dim('length:')}  ${searchablePreview.length} chars`);
+    console.log(`    ${pc.dim('text:')}    ${searchablePreview.text.slice(0, 300)}${searchablePreview.length > 300 ? pc.dim(' …') : ''}`);
+    if (searchablePreview.paths) {
+      console.log(`    ${pc.dim('paths:')}`);
+      for (const p of searchablePreview.paths) {
+        const mark = p.found ? pc.green('✓') : pc.yellow('—');
+        console.log(`      ${mark} ${p.path}${p.sample ? pc.dim(` → ${p.sample}`) : pc.yellow(' (empty on this sample)')}`);
+      }
+    } else {
+      console.log(`    ${pc.yellow('note:')} no memory.searchable declared — using the default walker (walks every field, often noisy).`);
+      console.log(`    ${pc.dim('tip:')}  pick dot-paths to the signal fields (name, title, description, email, ...) and add them to profile.memory.searchable, then re-run this preview.`);
+    }
+  }
+
   console.log(
     `\n${report.ok ? pc.green('Profile looks good.') : pc.red('Profile has issues.')} ` +
     (report.ok
       ? `Run: ${pc.bold(`one sync run ${platform} --models ${model}`)}`
       : 'Fix the issues above and test again.')
   );
+}
+
+/**
+ * Run the same searchable-text extraction `sync run --to-memory` would, so
+ * the agent can iterate on `memory.searchable` before committing embeddings.
+ * Returns null when no sample record is available.
+ */
+function buildSearchablePreview(
+  profile: SyncProfile,
+  sample: Record<string, unknown> | undefined,
+):
+  | {
+      mode: 'declared' | 'default';
+      text: string;
+      length: number;
+      paths?: Array<{ path: string; found: boolean; sample: string }>;
+    }
+  | null {
+  if (!sample) return null;
+  const paths = getSearchablePaths(profile);
+  if (paths) {
+    const { text, paths: perPath } = extractSearchableFromPaths(sample, paths);
+    return { mode: 'declared', text, length: text.length, paths: perPath };
+  }
+  // Mirror the runtime fallback so the preview reflects what WOULD be
+  // embedded today (noisy).
+  const text = defaultSearchableText(sample);
+  return { mode: 'default', text, length: text.length };
 }
 
 // ── sync run ──
@@ -999,8 +1052,9 @@ export function registerSyncCommands(program: Command): void {
   sync
     .command('test <platform/model>')
     .description('Validate a sync profile with a single-page fetch (no DB writes)')
-    .action(async (platformModel: string) => {
-      await syncTestCommand(platformModel);
+    .option('--show-searchable', 'Also preview the text that would be embedded / FTS-indexed, per memory.searchable', false)
+    .action(async (platformModel: string, options: { showSearchable?: boolean }) => {
+      await syncTestCommand(platformModel, { showSearchable: options.showSearchable });
     });
 
   sync

@@ -123,6 +123,50 @@ export interface SyncProfile {
    * need to distinguish between the two. Same value format as onInsert/onUpdate.
    */
   onChange?: string;
+  /**
+   * Unified-memory options. Only consulted when `sync run --to-memory` is
+   * active. See docs/plans/unified-memory.md §9.1.
+   */
+  memory?: MemorySyncOptions;
+}
+
+/**
+ * Per-profile memory config layered on top of the global defaults. Lets
+ * the agent opt into embedding per data type and, critically, declare
+ * **which fields** make up the embeddable text — see `searchable`. Without
+ * clean paths, the default extractor walks the whole JSON and produces
+ * noisy embeddings that degrade semantic search.
+ */
+export interface MemorySyncOptions {
+  /**
+   * When true, synced records of this profile get embedded on write
+   * (overrides `defaults.embedOnSync`). Requires an OpenAI key.
+   */
+  embed?: boolean;
+  /**
+   * Dot-paths into each record that carry the meaningful text to embed
+   * and full-text-index. The agent declares these after inspecting a
+   * sample with `sync test` — e.g. for Attio people:
+   *
+   *   ["values.name[0].full_name",
+   *    "values.job_title[0].value",
+   *    "values.description[0].value",
+   *    "values.primary_location[0].locality",
+   *    "values.email_addresses[0].email_address"]
+   *
+   * Each path is resolved with `getByDotPath`; string / number / boolean
+   * leaves are concatenated with spaces, arrays of strings are flattened,
+   * nested objects are NOT flattened (declare deeper paths instead).
+   * Missing / empty values are silently skipped.
+   *
+   * Preview the result before enabling embeddings with:
+   *   one sync test <platform>/<model> --show-searchable
+   *
+   * When omitted or empty, falls back to `defaultSearchableText` which
+   * walks the whole record — correct but often noisy for hierarchical
+   * APIs (Attio, HubSpot, Salesforce).
+   */
+  searchable?: string[];
 }
 
 export interface ModelSyncState {

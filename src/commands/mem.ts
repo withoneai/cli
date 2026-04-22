@@ -62,7 +62,7 @@ export function registerMemoryCommands(program: Command): void {
     .action(memStatusCommand);
 
   mem.command('init')
-    .description('Set up backend, path, embedding provider + key')
+    .description('Tune memory config (backend, path, embeddings) — optional; memory auto-inits on first use')
     .option('--backend <name>', 'Backend plugin name (pglite | postgres | third-party)')
     .option('--embedding <provider>', 'Embedding provider: openai | none', 'none')
     .option('--openai-key <key>', 'OpenAI API key (or set OPENAI_API_KEY)')

@@ -22,6 +22,64 @@ export interface MemWriteReport {
   skipped: number;
 }
 
+/**
+ * Build the embeddable / FTS text for a synced record from agent-declared
+ * dot-paths. Resolves each path, keeps string/number/boolean leaves, flattens
+ * arrays of strings, drops empties. Nested objects are intentionally NOT
+ * walked — the agent must declare deeper paths if they want that content
+ * (otherwise we're back to the "embed everything" noise problem).
+ *
+ * Exported so `sync test --show-searchable` can preview the output without
+ * running a real sync.
+ */
+export function extractSearchableFromPaths(
+  record: Record<string, unknown>,
+  paths: string[],
+): { text: string; paths: Array<{ path: string; found: boolean; sample: string }> } {
+  const parts: string[] = [];
+  const perPath: Array<{ path: string; found: boolean; sample: string }> = [];
+
+  for (const path of paths) {
+    const value = getByDotPath(record, path);
+    const collected: string[] = [];
+
+    const absorb = (v: unknown): void => {
+      if (v === null || v === undefined) return;
+      if (typeof v === 'string') {
+        const t = v.trim();
+        if (t) collected.push(t);
+      } else if (typeof v === 'number' || typeof v === 'boolean') {
+        collected.push(String(v));
+      } else if (Array.isArray(v)) {
+        for (const inner of v) absorb(inner);
+      }
+      // Objects are not walked on purpose — declare deeper paths if needed.
+    };
+
+    absorb(value);
+
+    if (collected.length > 0) {
+      parts.push(...collected);
+      perPath.push({ path, found: true, sample: collected.join(' ').slice(0, 80) });
+    } else {
+      perPath.push({ path, found: false, sample: '' });
+    }
+  }
+
+  const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+  return { text, paths: perPath };
+}
+
+/**
+ * Returns the declared searchable paths for a profile, or undefined when
+ * nothing is configured (callers fall back to `defaultSearchableText`).
+ */
+export function getSearchablePaths(profile: SyncProfile): string[] | undefined {
+  const paths = profile.memory?.searchable;
+  if (!paths || !Array.isArray(paths) || paths.length === 0) return undefined;
+  return paths;
+}
+
 export async function writePageToMemory(
   profile: SyncProfile,
   records: Array<Record<string, unknown>>,
@@ -30,6 +88,7 @@ export async function writePageToMemory(
   const type = `${profile.platform}/${profile.model}`;
   const identityKey = profile.identityKey;
   const embedFlag = deriveEmbedFlag(profile);
+  const searchablePaths = getSearchablePaths(profile);
 
   for (const record of records) {
     report.attempted++;
@@ -55,12 +114,20 @@ export async function writePageToMemory(
       if (k.startsWith('_')) delete data[k];
     }
 
+    // When the profile declares searchable paths, extract directly so the
+    // embedding + FTS text is clean. Otherwise let the runtime fall back
+    // to `defaultSearchableText` which walks the whole record.
+    const searchable_text = searchablePaths
+      ? extractSearchableFromPaths(record, searchablePaths).text
+      : undefined;
+
     try {
       const res = await upsertRecord(
         {
           type,
           data,
           keys,
+          searchable_text,
           sources: {
             [sourceKey]: {
               last_synced_at: new Date().toISOString(),
@@ -82,10 +149,7 @@ export async function writePageToMemory(
 }
 
 function deriveEmbedFlag(profile: SyncProfile): boolean {
-  // Profiles can opt in per-type via `memory.embed: true`. Absent, defer to
-  // the runtime's config default.
-  const mem = (profile as unknown as { memory?: { embed?: boolean } }).memory;
-  if (mem && typeof mem.embed === 'boolean') return mem.embed;
+  if (profile.memory && typeof profile.memory.embed === 'boolean') return profile.memory.embed;
   return false;
 }
 

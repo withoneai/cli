@@ -6,16 +6,27 @@
  * same env-var override chain.
  */
 
-import { readConfig, writeConfig } from '../config.js';
+import {
+  readConfig,
+  writeConfig,
+  getOpenAiApiKey as getOpenAiApiKeyFromCore,
+  setOpenAiApiKey as setOpenAiApiKeyInCore,
+} from '../config.js';
 import type { Config } from '../types.js';
 
 export type EmbeddingProvider = 'openai' | 'none';
 
 export interface EmbeddingConfig {
   provider: EmbeddingProvider;
-  apiKey?: string;
   model: string;
   dimensions: number;
+  /**
+   * @deprecated Read-only legacy field. The canonical home for the OpenAI
+   * key is top-level `config.openaiApiKey`. Older installs may still have
+   * a value here — we read it once as a fallback, then `mem config` writes
+   * promote it to the top level and clear this field.
+   */
+  apiKey?: string;
 }
 
 export interface MemoryDefaults {
@@ -68,7 +79,7 @@ export function memoryConfigExists(): boolean {
 export function updateMemoryConfig(patch: Partial<MemoryConfig>): MemoryConfig {
   const config = readConfig();
   if (!config) {
-    throw new Error('No One config found. Run `one init` first, then `one mem init`.');
+    throw new Error('No One config found. Run `one init` first.');
   }
   const current = (config.memory as MemoryConfig | undefined) ?? DEFAULT_MEMORY_CONFIG;
   const next: MemoryConfig = { ...current, ...patch };
@@ -78,15 +89,26 @@ export function updateMemoryConfig(patch: Partial<MemoryConfig>): MemoryConfig {
 }
 
 /**
- * Read the OpenAI key using the same precedence as ONE_SECRET:
- *   env var > .onerc > project > global config.
+ * Read the OpenAI key with the full precedence chain (env > .onerc >
+ * project > global). Falls back to the legacy `memory.embedding.apiKey`
+ * field one last time so pre-migration installs keep working.
+ *
+ * The canonical home is top-level `config.openaiApiKey` — same level as
+ * `config.apiKey`. See lib/config.ts:getOpenAiApiKey.
  */
 export function getEmbeddingApiKey(): string | null {
-  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
-  // .onerc support mirrors ONE_SECRET; fold in later if needed
+  const fromCore = getOpenAiApiKeyFromCore();
+  if (fromCore) return fromCore;
   const mem = getMemoryConfig();
   return mem?.embedding.apiKey ?? null;
 }
+
+/**
+ * Persist the OpenAI key at the top level of the active config scope.
+ * Re-exported from the core config module so memory-facing code has a
+ * single import surface.
+ */
+export const setOpenAiApiKey = setOpenAiApiKeyInCore;
 
 /**
  * Read the Postgres connection string with env-var override.

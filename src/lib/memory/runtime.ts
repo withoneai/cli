@@ -10,9 +10,12 @@
 import type { MemBackend, UpsertResult } from './backend.js';
 import type { MemRecord, RecordInput } from './types.js';
 import {
+  DEFAULT_MEMORY_CONFIG,
   getMemoryConfig,
   getMemoryConfigOrDefault,
+  updateMemoryConfig,
 } from './config.js';
+import { getOpenAiApiKey } from '../config.js';
 import { loadBackendFromConfig } from './plugins.js';
 import { embed, defaultSearchableText } from './embedding.js';
 import { contentHash } from './canonical.js';
@@ -21,10 +24,17 @@ let cached: Promise<MemBackend> | null = null;
 
 export async function getBackend(): Promise<MemBackend> {
   if (cached) return cached;
-  const cfg = getMemoryConfig();
-  if (!cfg) {
-    throw new Error('Memory is not configured. Run `one mem init` first.');
+
+  // Auto-bootstrap on first use. Zero-config UX: humans and agents can call
+  // `one mem add` / `one mem search` on a fresh install without running
+  // `one mem init` first. Smart defaults: pglite backend + no embed (unless
+  // an OpenAI key is already resolvable, in which case flip to openai).
+  // Requires `one init` — the base One config must exist first.
+  if (!getMemoryConfig()) {
+    bootstrapMemoryDefaults();
   }
+
+  const cfg = getMemoryConfigOrDefault();
   cached = (async () => {
     const backend = await loadBackendFromConfig(cfg);
     await backend.init();
@@ -32,6 +42,31 @@ export async function getBackend(): Promise<MemBackend> {
     return backend;
   })();
   return cached;
+}
+
+/**
+ * Write a default memory block if none exists. Picks `openai` for the
+ * embedding provider when an OpenAI key is already resolvable via env /
+ * .onerc / config — matches user intent without a prompt. Otherwise stays
+ * at `none` and the user can upgrade later via `mem config`.
+ */
+function bootstrapMemoryDefaults(): void {
+  const hasOpenAiKey = !!getOpenAiApiKey();
+  const next = {
+    ...DEFAULT_MEMORY_CONFIG,
+    embedding: {
+      ...DEFAULT_MEMORY_CONFIG.embedding,
+      provider: hasOpenAiKey ? 'openai' : 'none',
+    },
+  } as typeof DEFAULT_MEMORY_CONFIG;
+  updateMemoryConfig(next);
+  // One-line breadcrumb on stderr so humans know a file got created.
+  // Stays out of JSON stdout so agent consumers aren't disrupted.
+  if (process.stderr.isTTY) {
+    process.stderr.write(
+      `one mem: initialized ${hasOpenAiKey ? '(embeddings enabled)' : '(FTS only; set OpenAI key for semantic search)'}\n`,
+    );
+  }
 }
 
 /** Resets the singleton — used in tests. */

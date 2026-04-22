@@ -16,6 +16,7 @@ import {
   memoryConfigExists,
   updateMemoryConfig,
   listBackendPlugins,
+  setOpenAiApiKey,
 } from '../../lib/memory/index.js';
 import type { EmbeddingProvider, MemoryConfig } from '../../lib/memory/index.js';
 
@@ -50,7 +51,7 @@ export async function memInitCommand(flags: InitFlags): Promise<void> {
     }
   }
 
-  const nextConfig = flags.yes
+  const { config: nextConfig, openaiApiKey } = flags.yes
     ? buildFromFlags(flags)
     : await interactiveInit(flags);
 
@@ -62,6 +63,12 @@ export async function memInitCommand(flags: InitFlags): Promise<void> {
     output.error(`Backend config invalid: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // OpenAI key lives at the top level of config.json alongside `apiKey` —
+  // not nested under memory.embedding.* — so every subsystem that needs it
+  // reads from one canonical place.
+  if (openaiApiKey) {
+    setOpenAiApiKey(openaiApiKey);
+  }
   updateMemoryConfig(nextConfig);
 
   // Warm up: open, ensureSchema, roundtrip.
@@ -99,7 +106,13 @@ export async function memInitCommand(flags: InitFlags): Promise<void> {
   );
 }
 
-async function interactiveInit(flags: InitFlags): Promise<MemoryConfig> {
+interface BuiltConfig {
+  config: MemoryConfig;
+  /** OpenAI key to persist at the top level of config.json (not under memory). */
+  openaiApiKey?: string;
+}
+
+async function interactiveInit(flags: InitFlags): Promise<BuiltConfig> {
   output.intro('one mem init');
 
   const plugins = listBackendPlugins();
@@ -177,24 +190,26 @@ async function interactiveInit(flags: InitFlags): Promise<MemoryConfig> {
   }
 
   return {
-    ...DEFAULT_MEMORY_CONFIG,
-    backend,
-    ...perBackend,
-    embedding: {
-      provider,
-      apiKey,
-      model: DEFAULT_MEMORY_CONFIG.embedding.model,
-      dimensions: DEFAULT_MEMORY_CONFIG.embedding.dimensions,
+    config: {
+      ...DEFAULT_MEMORY_CONFIG,
+      backend,
+      ...perBackend,
+      embedding: {
+        provider,
+        model: DEFAULT_MEMORY_CONFIG.embedding.model,
+        dimensions: DEFAULT_MEMORY_CONFIG.embedding.dimensions,
+      },
+      defaults: {
+        trackAccessOnSearch: DEFAULT_MEMORY_CONFIG.defaults.trackAccessOnSearch,
+        embedOnAdd,
+        embedOnSync,
+      },
     },
-    defaults: {
-      trackAccessOnSearch: DEFAULT_MEMORY_CONFIG.defaults.trackAccessOnSearch,
-      embedOnAdd,
-      embedOnSync,
-    },
+    openaiApiKey: apiKey,
   };
 }
 
-function buildFromFlags(flags: InitFlags): MemoryConfig {
+function buildFromFlags(flags: InitFlags): BuiltConfig {
   const backend = flags.backend ?? 'pglite';
   const perBackend: Record<string, unknown> = {};
   if (backend === 'pglite' && flags.dbPath) {
@@ -215,20 +230,22 @@ function buildFromFlags(flags: InitFlags): MemoryConfig {
   }
 
   return {
-    ...DEFAULT_MEMORY_CONFIG,
-    backend,
-    ...perBackend,
-    embedding: {
-      provider,
-      apiKey: flags.openaiKey,
-      model: DEFAULT_MEMORY_CONFIG.embedding.model,
-      dimensions: DEFAULT_MEMORY_CONFIG.embedding.dimensions,
+    config: {
+      ...DEFAULT_MEMORY_CONFIG,
+      backend,
+      ...perBackend,
+      embedding: {
+        provider,
+        model: DEFAULT_MEMORY_CONFIG.embedding.model,
+        dimensions: DEFAULT_MEMORY_CONFIG.embedding.dimensions,
+      },
+      defaults: {
+        trackAccessOnSearch: DEFAULT_MEMORY_CONFIG.defaults.trackAccessOnSearch,
+        embedOnAdd: flags.embedOnAdd ?? DEFAULT_MEMORY_CONFIG.defaults.embedOnAdd,
+        embedOnSync: flags.embedOnSync ?? DEFAULT_MEMORY_CONFIG.defaults.embedOnSync,
+      },
     },
-    defaults: {
-      trackAccessOnSearch: DEFAULT_MEMORY_CONFIG.defaults.trackAccessOnSearch,
-      embedOnAdd: flags.embedOnAdd ?? DEFAULT_MEMORY_CONFIG.defaults.embedOnAdd,
-      embedOnSync: flags.embedOnSync ?? DEFAULT_MEMORY_CONFIG.defaults.embedOnSync,
-    },
+    openaiApiKey: flags.openaiKey,
   };
 }
 

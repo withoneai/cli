@@ -51,6 +51,7 @@ export {
   memoryConfigExists,
   updateMemoryConfig,
   getEmbeddingApiKey,
+  setOpenAiApiKey,
   getPostgresConnectionString,
   DEFAULT_MEMORY_CONFIG,
 } from './config.js';

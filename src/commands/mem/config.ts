@@ -8,15 +8,24 @@
 import * as output from '../../lib/output.js';
 import {
   getMemoryConfigOrDefault,
-  memoryConfigExists,
   updateMemoryConfig,
+  setOpenAiApiKey,
 } from '../../lib/memory/index.js';
+import { getOpenAiApiKey } from '../../lib/config.js';
 import type { MemoryConfig } from '../../lib/memory/index.js';
 
 const SECRET_PATHS = new Set([
   'embedding.apiKey',
   'postgres.connectionString',
 ]);
+
+/**
+ * Keys the user may type into `mem config set/get` that we transparently
+ * redirect to the top-level config (see lib/config.ts). The OpenAI key is
+ * a user credential, not a memory-subsystem setting, so it lives at the
+ * same level as `apiKey`.
+ */
+const EMBEDDING_API_KEY_PATH = 'embedding.apiKey';
 
 interface ConfigFlags {
   showSecrets?: boolean;
@@ -31,11 +40,14 @@ export async function memConfigCommand(
   const act = action ?? 'get';
 
   if (act === 'get') {
-    const cfg = memoryConfigExists() ? getMemoryConfigOrDefault() : null;
-    if (!cfg) {
-      output.error('Memory is not configured. Run `one mem init` first.');
-    }
-    const view = flags.showSecrets ? cfg! : redactSecrets(cfg!);
+    // Memory auto-inits on first mem-command use, so reads return the
+    // default shape before an explicit init. We never block here.
+    const cfg = getMemoryConfigOrDefault();
+    // Splice the top-level OpenAI key into the memory.embedding view so
+    // `mem config get embedding.apiKey` keeps working even though storage
+    // moved up. This is a read-only projection — writes still redirect.
+    const projected = projectEmbeddingApiKey(cfg);
+    const view = flags.showSecrets ? projected : redactSecrets(projected);
     const result = key ? getPath(view as unknown as Record<string, unknown>, key) : view;
     if (output.isAgentMode()) {
       output.json({ config: result });
@@ -48,31 +60,91 @@ export async function memConfigCommand(
   if (act === 'set') {
     if (!key) output.error('`set` requires a key (e.g. embedding.provider)');
     if (value === undefined) output.error('`set` requires a value');
+
+    // `embedding.apiKey` is not stored in the memory block — it's a
+    // top-level credential alongside config.apiKey. Redirect the write
+    // and strip any stale value from the memory block.
+    if (key === EMBEDDING_API_KEY_PATH) {
+      const str = typeof value === 'string' ? value : String(value);
+      setOpenAiApiKey(str);
+      const cur = getMemoryConfigOrDefault();
+      if (cur.embedding.apiKey !== undefined) {
+        const cleaned = { ...cur, embedding: { ...cur.embedding } };
+        delete cleaned.embedding.apiKey;
+        updateMemoryConfig(cleaned);
+      }
+      const refreshed = projectEmbeddingApiKey(getMemoryConfigOrDefault());
+      if (output.isAgentMode()) {
+        output.json({ status: 'ok', storedAt: 'config.openaiApiKey', updated: redactSecrets(refreshed) });
+      } else {
+        console.log(JSON.stringify(redactSecrets(refreshed), null, 2));
+      }
+      return;
+    }
+
     const current = getMemoryConfigOrDefault();
     const next = setPath({ ...current } as unknown as Record<string, unknown>, key, parseValue(value!));
     const updated = updateMemoryConfig(next as unknown as Partial<MemoryConfig>);
     if (output.isAgentMode()) {
-      output.json({ status: 'ok', updated: redactSecrets(updated) });
+      output.json({ status: 'ok', updated: redactSecrets(projectEmbeddingApiKey(updated)) });
     } else {
-      console.log(JSON.stringify(redactSecrets(updated), null, 2));
+      console.log(JSON.stringify(redactSecrets(projectEmbeddingApiKey(updated)), null, 2));
     }
     return;
   }
 
   if (act === 'unset') {
     if (!key) output.error('`unset` requires a key');
+
+    if (key === EMBEDDING_API_KEY_PATH) {
+      // Clear from both locations so there's one clean state to observe.
+      setOpenAiApiKey('');
+      const cur = getMemoryConfigOrDefault();
+      if (cur.embedding.apiKey !== undefined) {
+        const cleaned = { ...cur, embedding: { ...cur.embedding } };
+        delete cleaned.embedding.apiKey;
+        updateMemoryConfig(cleaned);
+      }
+      const refreshed = projectEmbeddingApiKey(getMemoryConfigOrDefault());
+      if (output.isAgentMode()) {
+        output.json({ status: 'ok', updated: redactSecrets(refreshed) });
+      } else {
+        console.log(JSON.stringify(redactSecrets(refreshed), null, 2));
+      }
+      return;
+    }
+
     const current = getMemoryConfigOrDefault();
     const next = unsetPath({ ...current } as unknown as Record<string, unknown>, key);
     const updated = updateMemoryConfig(next as unknown as Partial<MemoryConfig>);
     if (output.isAgentMode()) {
-      output.json({ status: 'ok', updated: redactSecrets(updated) });
+      output.json({ status: 'ok', updated: redactSecrets(projectEmbeddingApiKey(updated)) });
     } else {
-      console.log(JSON.stringify(redactSecrets(updated), null, 2));
+      console.log(JSON.stringify(redactSecrets(projectEmbeddingApiKey(updated)), null, 2));
     }
     return;
   }
 
   output.error(`Unknown action "${act}". Use get, set, or unset.`);
+}
+
+/**
+ * Read-only view projection: splice the top-level OpenAI key into the
+ * memory.embedding.apiKey slot so `mem config get` prints a unified view
+ * even though storage lives at config.openaiApiKey. The input is never
+ * mutated.
+ */
+function projectEmbeddingApiKey(cfg: MemoryConfig): MemoryConfig {
+  const topLevelKey = getOpenAiApiKey();
+  if (!topLevelKey) {
+    // No top-level value. If the memory block has a stale legacy key,
+    // surface it as-is so the user can see it and rotate.
+    return cfg;
+  }
+  return {
+    ...cfg,
+    embedding: { ...cfg.embedding, apiKey: topLevelKey },
+  };
 }
 
 function redactSecrets<T extends Record<string, unknown>>(cfg: T): T {

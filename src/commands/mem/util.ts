@@ -3,11 +3,18 @@
  */
 
 import * as output from '../../lib/output.js';
-import { memoryConfigExists } from '../../lib/memory/index.js';
+import { readConfig } from '../../lib/config.js';
 
+/**
+ * Precondition check for every `one mem` command. We no longer require
+ * `mem init` — memory auto-bootstraps with pglite defaults on first use
+ * (see runtime.ts:getBackend). The one thing we still insist on is the
+ * base One config, because memory writes live in the same config.json
+ * alongside `apiKey` and nothing should run without that anchor.
+ */
 export function requireMemoryInit(): void {
-  if (!memoryConfigExists()) {
-    output.error('Memory is not configured. Run `one mem init` first.');
+  if (!readConfig()) {
+    output.error('No One config found. Run `one init` first.');
   }
 }
 
