@@ -104,11 +104,33 @@ export function getEmbeddingApiKey(): string | null {
 }
 
 /**
- * Persist the OpenAI key at the top level of the active config scope.
- * Re-exported from the core config module so memory-facing code has a
- * single import surface.
+ * Persist the OpenAI key AND enable semantic search if it isn't already.
+ *
+ * Callers reach for this function because they want semantic search — if
+ * the memory block exists but `embedding.provider` is still `none` (e.g.
+ * auto-init ran before any key was set), flip it to `openai` on the same
+ * write. Skips the flip when the memory block hasn't been created yet
+ * (auto-init will pick `openai` naturally once a key is resolvable) or
+ * when the provider is already `openai`.
+ *
+ * Callers that truly just want to persist the bytes without touching the
+ * provider can import `setOpenAiApiKey` from `lib/config.ts` directly.
  */
-export const setOpenAiApiKey = setOpenAiApiKeyInCore;
+export function setOpenAiApiKey(key: string): void {
+  setOpenAiApiKeyInCore(key);
+  // Clearing the key — leave provider alone so the upgrade hint can
+  // legitimately reappear.
+  if (key === '') return;
+
+  const mem = getMemoryConfig();
+  if (!mem) return; // auto-init will pick 'openai' on first getBackend()
+  if (mem.embedding.provider === 'openai') return;
+
+  updateMemoryConfig({
+    ...mem,
+    embedding: { ...mem.embedding, provider: 'openai' },
+  });
+}
 
 /**
  * Read the Postgres connection string with env-var override.

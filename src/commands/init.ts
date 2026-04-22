@@ -22,9 +22,13 @@ import {
   getEnvFromApiKey,
   getWhoAmI,
   getOpenAiApiKey,
-  setOpenAiApiKey,
   type ConfigScope,
 } from '../lib/config.js';
+// Use the memory-aware wrapper — persists the key AND enables semantic
+// search if the memory block already exists with provider=none. Going
+// through the core helper would leave the hint telling agents to enable
+// the provider even after the key was just set.
+import { setOpenAiApiKey } from '../lib/memory/index.js';
 import {
   getAllAgents,
   installMcpConfig,
