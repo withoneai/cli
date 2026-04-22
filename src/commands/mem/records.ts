@@ -8,7 +8,7 @@ import * as output from '../../lib/output.js';
 import { getBackend, addRecord } from '../../lib/memory/runtime.js';
 import { embed } from '../../lib/memory/embedding.js';
 import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
-import { okJson, parseCsv, parseJsonArg, parsePositiveInt, printList, printRecord, requireMemoryInit } from './util.js';
+import { okJson, parseCsv, parseJsonArg, parsePositiveInt, printList, printRecord, requireMemoryInit, semanticSearchUpgradeHint, semanticSearchUpgradeLine } from './util.js';
 
 interface AddFlags {
   tags?: string;
@@ -138,7 +138,30 @@ export async function memSearchCommand(query: string, flags: SearchFlags): Promi
     trackAccess: !flags.noTrack && cfg.defaults.trackAccessOnSearch,
     includeArchived: flags.includeArchived,
   });
-  printList(results);
+
+  // Surface the upgrade path on every search that ran without embeddings.
+  // Agents need this in structured form so they can tell their users;
+  // humans get a dim one-liner after the results. The hint only appears
+  // when semantic search is actually off — no noise otherwise.
+  const upgrade = !queryEmbedding ? semanticSearchUpgradeHint() : null;
+
+  if (output.isAgentMode()) {
+    output.json({
+      items: results,
+      total: results.length,
+      searchMode: queryEmbedding ? 'hybrid' : 'fts_only',
+      ...(upgrade ? { _upgrade: upgrade } : {}),
+    });
+    return;
+  }
+
+  if (results.length === 0) {
+    console.log('(no results)');
+  } else {
+    console.log(JSON.stringify(results, null, 2));
+  }
+  const line = !queryEmbedding ? semanticSearchUpgradeLine() : '';
+  if (line) console.log(`\n${line}`);
 }
 
 interface ContextFlags {

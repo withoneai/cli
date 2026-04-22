@@ -10,6 +10,7 @@ import * as output from '../lib/output.js';
 import { listBackendPlugins, getMemoryConfig, SCHEMA_VERSION } from '../lib/memory/index.js';
 import { memInitCommand } from './mem/init.js';
 import { memConfigCommand } from './mem/config.js';
+import { semanticSearchUpgradeHint, semanticSearchUpgradeLine } from './mem/util.js';
 import {
   memAddCommand,
   memGetCommand,
@@ -40,18 +41,22 @@ function memStatusCommand(): void {
     schemaVersion: p.schemaVersion,
     capabilities: p.capabilities,
   }));
+  const upgrade = semanticSearchUpgradeHint();
   const payload = {
     configured: cfg !== null,
     backend: cfg?.backend ?? null,
     embedding: cfg ? { provider: cfg.embedding.provider, model: cfg.embedding.model } : null,
     expectedSchemaVersion: SCHEMA_VERSION,
     registeredPlugins: plugins,
+    ...(upgrade ? { _upgrade: upgrade } : {}),
   };
   if (output.isAgentMode()) {
     output.json(payload);
     return;
   }
   console.log(JSON.stringify(payload, null, 2));
+  const line = semanticSearchUpgradeLine();
+  if (line) console.log(`\n${line}`);
 }
 
 export function registerMemoryCommands(program: Command): void {

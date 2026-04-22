@@ -10,6 +10,7 @@ import {
   listBackendPlugins,
   SCHEMA_VERSION,
 } from '../../lib/memory/index.js';
+import { semanticSearchUpgradeHint, semanticSearchUpgradeLine } from './util.js';
 
 interface Check {
   name: string;
@@ -128,8 +129,10 @@ export async function memDoctorCommand(): Promise<void> {
 
 function emit(checks: Check[]): void {
   const allOk = checks.every(c => c.ok);
+  const upgrade = semanticSearchUpgradeHint();
+
   if (output.isAgentMode()) {
-    output.json({ ok: allOk, checks });
+    output.json({ ok: allOk, checks, ...(upgrade ? { _upgrade: upgrade } : {}) });
     if (!allOk) process.exitCode = 1;
     return;
   }
@@ -144,4 +147,6 @@ function emit(checks: Check[]): void {
   } else {
     console.log('\n' + pc.green('Memory is healthy.'));
   }
+  const line = semanticSearchUpgradeLine();
+  if (line) console.log(`\n${pc.dim(line)}`);
 }

@@ -3,7 +3,8 @@
  */
 
 import * as output from '../../lib/output.js';
-import { readConfig } from '../../lib/config.js';
+import { readConfig, getOpenAiApiKey } from '../../lib/config.js';
+import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
 
 /**
  * Precondition check for every `one mem` command. We no longer require
@@ -70,4 +71,64 @@ export function okJson(payload: Record<string, unknown>): void {
     return;
   }
   console.log(JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Shape of the upgrade hint surfaced to agents + humans when a capability
+ * is available but not currently active. Mirrors the pattern called out in
+ * feedback_ux_and_ax.md: "Upgrade hints on every surface — when a subsystem
+ * is running in a degraded mode, structured output should tell the agent
+ * (so they can tell their user) that a better mode exists."
+ */
+export interface UpgradeHint {
+  capability: string;
+  available: boolean;
+  currentMode: string;
+  how: string;
+  benefit: string;
+}
+
+/**
+ * Returns a structured hint if semantic search is inactive (FTS-only).
+ * Call from any command whose output would be richer with embeddings
+ * (`mem search`, `mem status`, `mem context`).
+ *
+ * The hint is intentionally short and actionable — agents shouldn't have
+ * to translate a paragraph of prose into a user-facing instruction.
+ */
+export function semanticSearchUpgradeHint(): UpgradeHint | null {
+  const cfg = getMemoryConfigOrDefault();
+  const keyPresent = !!getOpenAiApiKey();
+  const providerOn = cfg.embedding.provider === 'openai';
+
+  if (providerOn && keyPresent) return null;
+
+  if (!keyPresent) {
+    return {
+      capability: 'semantic_search',
+      available: true,
+      currentMode: 'fts_only',
+      how: 'Add an OpenAI key: `one init` (then "Add OpenAI key"), or `one mem config set embedding.apiKey sk-...`',
+      benefit: 'Ranks memories by meaning, not just keyword overlap — finds relevant records even when the query and the data use different words.',
+    };
+  }
+
+  // Key is present but provider is still `none` — likely a legacy config.
+  return {
+    capability: 'semantic_search',
+    available: true,
+    currentMode: 'fts_only',
+    how: 'Flip the provider on: `one mem config set embedding.provider openai`',
+    benefit: 'Ranks memories by meaning, not just keyword overlap.',
+  };
+}
+
+/**
+ * Human-facing one-liner for the same hint. Call from TTY output paths.
+ * Returns empty string when there's nothing to say.
+ */
+export function semanticSearchUpgradeLine(): string {
+  const hint = semanticSearchUpgradeHint();
+  if (!hint) return '';
+  return `tip: semantic search available — ${hint.how}`;
 }
