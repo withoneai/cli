@@ -1007,11 +1007,30 @@ async function syncScheduleRepairCommand(id: string): Promise<void> {
 
 // ── Register all sync commands ──
 
-export function registerSyncCommands(program: Command): void {
+/**
+ * Register the full `sync` subtree against a parent command.
+ *
+ * Called twice:
+ *  1. `program` → exposes the commands as `one sync ...` with the `s` alias.
+ *  2. `one mem` → exposes the same commands as `one mem sync ...`. Single
+ *     source of truth, no drift between the two surfaces.
+ *
+ * `opts.parentLabel` controls the alias + description wording so each
+ * registration can present itself in its own context without forking
+ * the entire tree.
+ */
+export function registerSyncCommands(
+  program: Command,
+  opts: { alias?: string; description?: string } = {},
+): void {
   const sync = program
     .command('sync')
-    .alias('s')
-    .description('Sync platform data locally for instant offline queries');
+    .description(opts.description ?? 'Sync platform data locally for instant offline queries');
+  if (opts.alias) sync.alias(opts.alias);
+  registerSyncSubcommands(sync);
+}
+
+function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('install')
@@ -1066,8 +1085,12 @@ export function registerSyncCommands(program: Command): void {
     .option('--max-pages <n>', 'Maximum number of pages to fetch')
     .option('--dry-run', 'Fetch first page only, show results without persisting')
     .option('--full-refresh', 'Fetch ALL records and delete local rows no longer in the source (handles deletions)')
-    .option('--to-memory', 'Also write each page into the unified memory store (dual-write opt-in)')
-    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; toMemory?: boolean }) => {
+    .option('--no-memory', 'Skip the unified memory dual-write (default: memory is always written)')
+    // Back-compat alias: `--to-memory` was opt-in during the dual-write
+    // derisking window. Memory is now the primary target, so the flag is
+    // a silent no-op retained so existing scripts keep running.
+    .option('--to-memory', '(deprecated — memory is now always written; flag kept for back-compat)')
+    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; memory?: boolean; toMemory?: boolean }) => {
       await syncRunCommand(platform, {
         models: options.models?.split(',').map(m => m.trim()),
         since: options.since,
@@ -1075,7 +1098,8 @@ export function registerSyncCommands(program: Command): void {
         maxPages: options.maxPages ? parseInt(options.maxPages, 10) : undefined,
         dryRun: options.dryRun,
         fullRefresh: options.fullRefresh,
-        toMemory: options.toMemory,
+        // Commander inverts `--no-memory` into options.memory === false.
+        toMemory: options.memory !== false,
       });
     });
 

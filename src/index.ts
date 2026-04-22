@@ -646,7 +646,7 @@ relay
 
 // ── Sync Commands ──
 
-registerSyncCommands(program);
+registerSyncCommands(program, { alias: 's' });
 
 // ── Memory Commands ──
 

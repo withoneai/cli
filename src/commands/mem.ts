@@ -11,6 +11,7 @@ import { listBackendPlugins, getMemoryConfig, SCHEMA_VERSION } from '../lib/memo
 import { memInitCommand } from './mem/init.js';
 import { memConfigCommand } from './mem/config.js';
 import { semanticSearchUpgradeHint, semanticSearchUpgradeLine } from './mem/util.js';
+import { registerSyncCommands } from '../lib/memory/sync/index.js';
 import {
   memAddCommand,
   memGetCommand,
@@ -181,18 +182,12 @@ export function registerMemoryCommands(program: Command): void {
     .description('Look up the record owning "<system>/<model>:<external_id>"')
     .action(memFindBySourceCommand);
 
-  // Sync subverb. Full alias delegation is deferred; for now this prints a
-  // pointer to `one sync` plus the dual-write flag that lands synced rows
-  // into the memory store.
-  mem.command('sync [args...]')
-    .description('Sync platform data — use `one sync ...` (alias delegation pending)')
-    .action(() => {
-      output.error(
-        'Use `one sync ...` for now. To land synced rows in the memory store, run:\n' +
-        '  one sync run <platform> --to-memory\n' +
-        'Full `one mem sync` alias delegation is on the follow-up slice.',
-      );
-    });
+  // Sync subverb: mounted as a full alias of `one sync`. Same handlers, same
+  // options — only the command path differs. Keeps `one mem sync` feeling
+  // native inside the memory subsystem without forking the implementation.
+  registerSyncCommands(mem, {
+    description: 'Sync platform data into memory (alias of `one sync`)',
+  });
 
   // Migration + export/import
   mem.command('migrate')
