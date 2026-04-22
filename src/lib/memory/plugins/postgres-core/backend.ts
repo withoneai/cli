@@ -482,6 +482,17 @@ export class CoreBackend implements MemBackend {
     return res.rows;
   }
 
+  async removeSyncState(platform: string, model?: string): Promise<void> {
+    if (model) {
+      await this.client.query(
+        `DELETE FROM mem_sync_state WHERE platform = $1 AND model = $2`,
+        [platform, model],
+      );
+    } else {
+      await this.client.query(`DELETE FROM mem_sync_state WHERE platform = $1`, [platform]);
+    }
+  }
+
   // ── Hot columns ──────────────────────────────────────────────────────
 
   async ensureHotColumn(type: string, jsonPath: string): Promise<void> {

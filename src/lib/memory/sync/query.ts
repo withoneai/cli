@@ -132,7 +132,7 @@ export async function executeQuery(
     });
 
     // Sync metadata
-    const state = getModelState(platform, model);
+    const state = await getModelState(platform, model);
     const lastSync = state?.lastSync ?? null;
     const syncAge = lastSync ? formatSyncAge(lastSync) : null;
 

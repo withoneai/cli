@@ -146,7 +146,7 @@ export async function syncModel(
   // crashed between "set syncing" and the cleanup paths. Lock is the source
   // of truth on concurrency — auto-recover the stale state rather than
   // forcing the user to pass --force or hand-edit the state file.
-  const existingState = getModelState(platform, model);
+  const existingState = await getModelState(platform, model);
   if (existingState?.status === 'syncing' && !options.dryRun && !isAgentMode()) {
     process.stderr.write(
       `Recovered from crashed previous sync of ${platform}/${model} ` +
@@ -172,11 +172,12 @@ export async function syncModel(
   // Reset sync_state and release the lock if the process is killed mid-run
   // (SIGINT from Ctrl-C, SIGTERM from a process manager, cron job being
   // killed on laptop sleep). Without these handlers the state stays 'syncing'
-  // forever and the filesystem lock lingers for STALE_MS.
+  // forever and the filesystem lock lingers for STALE_MS. The state update
+  // is fire-and-forget because we're shutting down — the lock release is
+  // the cleanup that actually matters.
   const signalCleanup = (signal: NodeJS.Signals): void => {
-    try {
-      updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor });
-    } catch { /* best-effort */ }
+    updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor })
+      .catch(() => { /* best-effort */ });
     try { if (lock) lock.release(); } catch { /* best-effort */ }
     process.exit(signal === 'SIGINT' ? 130 : 143);
   };
@@ -185,7 +186,7 @@ export async function syncModel(
   if (!options.dryRun) {
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
-    updateModelState(platform, model, { status: 'syncing' });
+    await updateModelState(platform, model, { status: 'syncing' });
   }
   // Track every id we saw across pages, for --full-refresh deletion reconciliation.
   const seenIds = new Set<string | number>();
@@ -535,7 +536,7 @@ export async function syncModel(
         nextParams?.queryParams ?? nextParams?.bodyParams ?? nextParams?.headers;
       const cursorKeys = cursorBag ? Object.keys(cursorBag) : [];
       lastCursor = cursorKeys.length > 0 ? (cursorBag as Record<string, unknown>)[cursorKeys[0]] : null;
-      updateModelState(platform, model, {
+      await updateModelState(platform, model, {
         totalRecords: countRecords(db, model),
         pagesProcessed,
         lastCursor,
@@ -632,7 +633,7 @@ export async function syncModel(
 
     const duration = formatDuration(Date.now() - startTime);
     const actualCount = countRecords(db, model);
-    updateModelState(platform, model, {
+    await updateModelState(platform, model, {
       lastSync: new Date().toISOString(),
       totalRecords: actualCount,
       pagesProcessed,
@@ -652,7 +653,7 @@ export async function syncModel(
   } catch (err) {
     // Save failed state
     const failedCount = db ? countRecords(db, model) : (existingState?.totalRecords ?? 0);
-    updateModelState(platform, model, {
+    await updateModelState(platform, model, {
       status: 'failed',
       totalRecords: failedCount,
       pagesProcessed,

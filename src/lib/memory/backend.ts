@@ -103,6 +103,11 @@ export interface MemBackend {
   getSyncState(platform: string, model: string): Promise<SyncStateRow | null>;
   setSyncState(state: SyncStateRow): Promise<void>;
   listSyncStates(): Promise<SyncStateRow[]>;
+  /**
+   * Delete the row for a (platform, model) pair. When `model` is omitted,
+   * drops every row for that platform. Used by `sync remove`.
+   */
+  removeSyncState(platform: string, model?: string): Promise<void>;
 
   // Hot columns (profile-driven partial expression indexes)
   ensureHotColumn(type: string, jsonPath: string): Promise<void>;

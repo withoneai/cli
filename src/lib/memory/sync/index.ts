@@ -758,7 +758,7 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
 
 async function syncListCommand(platform?: string): Promise<void> {
   const profiles = listProfiles(platform);
-  const state = readSyncState();
+  const state = await readSyncState();
 
   const syncs = profiles.map(p => {
     const modelState = state[p.platform]?.[p.model];
@@ -858,13 +858,13 @@ async function syncRemoveCommand(platform: string, options: { models?: string; y
       const db = await openDatabase(platform);
       for (const model of modelList) {
         dropTable(db, model);
-        removeModelState(platform, model);
+        await removeModelState(platform, model);
       }
       db.close();
     } else {
       // Remove data for this platform (profiles are preserved)
       deleteDatabase(platform);
-      removeModelState(platform);
+      await removeModelState(platform);
     }
 
     if (output.isAgentMode()) {
