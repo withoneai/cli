@@ -8,6 +8,7 @@ import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
+import { writePageToMemory } from './mem-writer.js';
 import { enrichPhase, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
 import { extractRecords } from './extract.js';
@@ -471,6 +472,27 @@ export async function syncModel(
       );
       totalRecords += inserted;
       pagesProcessed++;
+
+      // Dual-write into the unified memory store (opt-in). Runs after the
+      // SQLite upsert so any runner validation already rejected the page,
+      // and it uses the same records array so behavior matches 1:1.
+      if (options.toMemory) {
+        try {
+          const report = await writePageToMemory(
+            profile,
+            records as Record<string, unknown>[],
+          );
+          if (!isAgentMode()) {
+            process.stderr.write(
+              `\n  mem: ${report.inserted} inserted, ${report.updated} updated, ${report.skipped} skipped\n`,
+            );
+          }
+        } catch (err) {
+          // Never fail the sync on mem-write errors during the dual-write phase.
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`\n  mem write-through failed: ${msg}\n`);
+        }
+      }
 
       // Fire hooks after each page (not at the end) so long syncs get real-time events
       if (hasHooks) {

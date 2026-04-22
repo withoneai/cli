@@ -168,6 +168,13 @@ export interface SyncRunOptions {
    * when pulling the whole collection. Cannot be combined with --since.
    */
   fullRefresh?: boolean;
+  /**
+   * Additionally write each page through to the unified memory store
+   * (mem_records) via upsertByKeys. The SQLite store continues to receive
+   * writes; this is a dual-write opt-in until the memory-primary path is
+   * proven on real data. See docs/plans/unified-memory.md §9.
+   */
+  toMemory?: boolean;
 }
 
 export interface SyncQueryOptions {

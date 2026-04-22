@@ -176,13 +176,16 @@ export function registerMemoryCommands(program: Command): void {
     .description('Look up the record owning "<system>/<model>:<external_id>"')
     .action(memFindBySourceCommand);
 
-  // Sync subverb — delegates through to the existing sync commands
-  const sync = mem.command('sync').description('Sync platform data (alias of the top-level `one sync`)');
-  sync.command('*')
-    .description('Any `one sync` subcommand is accepted here')
+  // Sync subverb. Full alias delegation is deferred; for now this prints a
+  // pointer to `one sync` plus the dual-write flag that lands synced rows
+  // into the memory store.
+  mem.command('sync [args...]')
+    .description('Sync platform data — use `one sync ...` (alias delegation pending)')
     .action(() => {
       output.error(
-        'Use the top-level `one sync ...` form for now. The `one mem sync` alias will delegate once sync integration lands.',
+        'Use `one sync ...` for now. To land synced rows in the memory store, run:\n' +
+        '  one sync run <platform> --to-memory\n' +
+        'Full `one mem sync` alias delegation is on the follow-up slice.',
       );
     });
 

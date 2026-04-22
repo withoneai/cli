@@ -1012,7 +1012,8 @@ export function registerSyncCommands(program: Command): void {
     .option('--max-pages <n>', 'Maximum number of pages to fetch')
     .option('--dry-run', 'Fetch first page only, show results without persisting')
     .option('--full-refresh', 'Fetch ALL records and delete local rows no longer in the source (handles deletions)')
-    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean }) => {
+    .option('--to-memory', 'Also write each page into the unified memory store (dual-write opt-in)')
+    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; toMemory?: boolean }) => {
       await syncRunCommand(platform, {
         models: options.models?.split(',').map(m => m.trim()),
         since: options.since,
@@ -1020,6 +1021,7 @@ export function registerSyncCommands(program: Command): void {
         maxPages: options.maxPages ? parseInt(options.maxPages, 10) : undefined,
         dryRun: options.dryRun,
         fullRefresh: options.fullRefresh,
+        toMemory: options.toMemory,
       });
     });
 
