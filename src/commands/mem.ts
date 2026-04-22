@@ -1,26 +1,35 @@
 /**
  * `one mem` command surface.
  *
- * Scaffolding stage: subcommands are wired and discoverable via --help, but
- * handlers return a "not implemented yet" message until the backend plugins
- * and orchestration layer land.
- *
- * See docs/plans/unified-memory.md §6 for the full command tree.
+ * See docs/plans/unified-memory.md §6. Sync subverb is soft-aliased here;
+ * the long-form `one sync ...` path remains active with a deprecation note.
  */
 
 import type { Command } from 'commander';
 import * as output from '../lib/output.js';
-import { listBackendPlugins, getMemoryConfig } from '../lib/memory/index.js';
-
-function scaffoldNote(cmd: string): void {
-  const msg = `\`one mem ${cmd}\` is scaffolded but not yet implemented. ` +
-    `Follow progress on branch feat/unified-memory (docs/plans/unified-memory.md).`;
-  if (output.isAgentMode()) {
-    output.json({ status: 'not-implemented', command: cmd, message: msg });
-  } else {
-    output.note(msg, 'one mem');
-  }
-}
+import { listBackendPlugins, getMemoryConfig, SCHEMA_VERSION } from '../lib/memory/index.js';
+import { memInitCommand } from './mem/init.js';
+import { memConfigCommand } from './mem/config.js';
+import {
+  memAddCommand,
+  memGetCommand,
+  memUpdateCommand,
+  memArchiveCommand,
+  memWeightCommand,
+  memFlushCommand,
+  memListCommand,
+  memSearchCommand,
+  memContextCommand,
+  memLinkCommand,
+  memUnlinkCommand,
+  memLinkedCommand,
+  memSourcesCommand,
+  memFindBySourceCommand,
+} from './mem/records.js';
+import { memDoctorCommand } from './mem/doctor.js';
+import { memExportCommand, memImportCommand } from './mem/export.js';
+import { memMigrateCommand } from './mem/migrate.js';
+import { memVacuumCommand, memReindexCommand } from './mem/admin.js';
 
 function memStatusCommand(): void {
   const cfg = getMemoryConfig();
@@ -31,126 +40,166 @@ function memStatusCommand(): void {
     schemaVersion: p.schemaVersion,
     capabilities: p.capabilities,
   }));
-
   const payload = {
     configured: cfg !== null,
     backend: cfg?.backend ?? null,
-    embedding: cfg
-      ? { provider: cfg.embedding.provider, model: cfg.embedding.model }
-      : null,
+    embedding: cfg ? { provider: cfg.embedding.provider, model: cfg.embedding.model } : null,
+    expectedSchemaVersion: SCHEMA_VERSION,
     registeredPlugins: plugins,
-    note: 'Subsystem is scaffolded. Run `one mem init` once implemented to configure.',
   };
-
   if (output.isAgentMode()) {
     output.json(payload);
     return;
   }
-
-  output.intro('one mem — unified memory subsystem (scaffolding)');
-  console.log(`  configured:  ${payload.configured}`);
-  console.log(`  backend:     ${payload.backend ?? '(none)'}`);
-  console.log(`  embedding:   ${payload.embedding ? `${payload.embedding.provider} / ${payload.embedding.model}` : '(none)'}`);
-  console.log(`  plugins:     ${plugins.map(p => `${p.name}@${p.version}`).join(', ')}`);
-  console.log('');
-  console.log('  ℹ  Subsystem is scaffolded. Not yet wired for live use.');
+  console.log(JSON.stringify(payload, null, 2));
 }
 
 export function registerMemoryCommands(program: Command): void {
-  const mem = program.command('mem').description('Unified memory (notes, decisions, synced data) — all pluggable backends');
+  const mem = program.command('mem').description('Unified memory (notes, decisions, synced data) — pluggable backends');
 
   mem.command('status')
     .description('Show memory subsystem status, config, and registered backend plugins')
     .action(memStatusCommand);
 
   mem.command('init')
-    .description('Interactive setup: backend, path, embedding provider + key')
-    .action(() => scaffoldNote('init'));
+    .description('Set up backend, path, embedding provider + key')
+    .option('--backend <name>', 'Backend plugin name (pglite | postgres | third-party)')
+    .option('--embedding <provider>', 'Embedding provider: openai | none', 'none')
+    .option('--openai-key <key>', 'OpenAI API key (or set OPENAI_API_KEY)')
+    .option('--db-path <path>', 'PGlite database path')
+    .option('--connection-string <url>', 'Postgres connection string')
+    .option('--embed-on-add', 'Embed user memories by default', false)
+    .option('--embed-on-sync', 'Embed synced records by default', false)
+    .option('-y, --yes', 'Skip interactive prompts (requires flags for any missing values)', false)
+    .option('--force', 'Overwrite existing memory config without confirmation', false)
+    .action(memInitCommand);
 
   mem.command('config [action] [key] [value]')
-    .description('Get or set memory config (backend, embedding provider, etc.)')
-    .action(() => scaffoldNote('config'));
-
-  mem.command('migrate')
-    .description('Import legacy .one/sync/data/*.db files into the unified store')
-    .action(() => scaffoldNote('migrate'));
+    .description('Get or set memory config (actions: get, set, unset)')
+    .option('--show-secrets', 'Include secret values in get output', false)
+    .action((action: string | undefined, key: string | undefined, value: string | undefined, flags: { showSecrets?: boolean }) =>
+      memConfigCommand(action, key, value, flags),
+    );
 
   mem.command('doctor')
-    .description('Diagnose schema, indexes, plugin resolution, connectivity')
-    .action(() => scaffoldNote('doctor'));
+    .description('Diagnose schema, indexes, plugin resolution, connectivity, embeddings')
+    .action(memDoctorCommand);
+
+  mem.command('vacuum')
+    .description('Run backend maintenance (VACUUM ANALYZE on tables)')
+    .action(memVacuumCommand);
+
+  mem.command('reindex')
+    .description('Re-embed records (optionally under a new embedding model)')
+    .option('--model <name>', 'Override the embedding model')
+    .option('--batch <n>', 'Batch size', '50')
+    .action(memReindexCommand);
 
   // Records
   mem.command('add <type> <data>')
-    .description('Add a new memory record')
-    .action(() => scaffoldNote('add'));
+    .description('Add a new memory record (data is JSON)')
+    .option('--tags <csv>', 'Comma-separated tags')
+    .option('--keys <csv>', 'Comma-separated keys (prefixed, e.g. email:x@y.com)')
+    .option('--weight <n>', 'Importance 1-10 (default 5)')
+    .option('--embed', 'Force embedding for this record')
+    .option('--no-embed', 'Skip embedding for this record')
+    .action(memAddCommand);
 
   mem.command('get <id>')
     .description('Get a record by id')
-    .action(() => scaffoldNote('get'));
+    .option('--links', 'Include outgoing and incoming links', false)
+    .action(memGetCommand);
 
   mem.command('update <id> <patch>')
-    .description('Update a record')
-    .action(() => scaffoldNote('update'));
+    .description('Update a record (patch is JSON merged into data)')
+    .action(memUpdateCommand);
 
   mem.command('archive <id>')
     .description('Archive a record')
-    .action(() => scaffoldNote('archive'));
+    .option('--reason <text>', 'Why it was archived (user_archived | deleted_upstream | superseded | …)')
+    .action(memArchiveCommand);
 
   mem.command('weight <id> <n>')
     .description('Set record relevance weight (1-10)')
-    .action(() => scaffoldNote('weight'));
+    .action(memWeightCommand);
 
   mem.command('flush <id>')
     .description('Reset access count for a record')
-    .action(() => scaffoldNote('flush'));
+    .action(memFlushCommand);
 
   mem.command('list <type>')
     .description('List records of a given type')
-    .action(() => scaffoldNote('list'));
+    .option('--limit <n>', 'Max records (default 100)')
+    .option('--offset <n>', 'Offset (default 0)')
+    .option('--status <status>', 'active | archived', 'active')
+    .action(memListCommand);
 
   // Search
   mem.command('search <query>')
-    .description('Hybrid search (FTS + optional semantic) across all records')
-    .action(() => scaffoldNote('search'));
+    .description('Hybrid search across memory (FTS + optional semantic)')
+    .option('--type <type>', 'Restrict to one record type')
+    .option('--limit <n>', 'Max results (default 10)')
+    .option('--deep', 'Force semantic embedding on the query', false)
+    .option('--no-track', 'Do not bump access_count on results', false)
+    .option('--include-archived', 'Include archived records', false)
+    .action(memSearchCommand);
 
   mem.command('context')
-    .description('Get the most relevant records for startup context')
-    .action(() => scaffoldNote('context'));
+    .description('Get the most relevant records for session context')
+    .option('-n, --limit <n>', 'Max records (default 20)')
+    .option('--types <csv>', 'Comma-separated types to include')
+    .action(memContextCommand);
 
   // Graph
   mem.command('link <fromId> <toId> <relation>')
-    .description('Create a typed link between records')
-    .action(() => scaffoldNote('link'));
+    .description('Create a typed link between two records')
+    .option('--bi', 'Make the link bidirectional', false)
+    .option('--meta <json>', 'JSON metadata attached to the link')
+    .action(memLinkCommand);
 
   mem.command('unlink <fromId> <toId> <relation>')
     .description('Remove a link')
-    .action(() => scaffoldNote('unlink'));
+    .action(memUnlinkCommand);
 
   mem.command('linked <id>')
     .description('List linked records')
-    .action(() => scaffoldNote('linked'));
+    .option('--relation <name>', 'Filter by relation')
+    .option('--direction <dir>', 'outgoing | incoming | both', 'outgoing')
+    .action(memLinkedCommand);
 
-  // Sources (replaces old external-refs concept)
+  // Sources
   mem.command('sources <id>')
     .description('List source entries on a record')
-    .action(() => scaffoldNote('sources'));
+    .action(memSourcesCommand);
 
   mem.command('find-by-source <sourceKey>')
-    .description('Look up the record owning a "<system>/<model>:<external_id>" source key')
-    .action(() => scaffoldNote('find-by-source'));
+    .description('Look up the record owning "<system>/<model>:<external_id>"')
+    .action(memFindBySourceCommand);
 
-  // Sync subverb (absorbed)
-  const sync = mem.command('sync').description('Sync platform data into memory');
-  sync.command('run <platform>').description('Sync a platform').action(() => scaffoldNote('sync run'));
-  sync.command('list [platform]').description('List synced platforms + freshness').action(() => scaffoldNote('sync list'));
-  sync.command('query <type>').description('Structured query against synced records').action(() => scaffoldNote('sync query'));
-  sync.command('search <query>').description('Fast FTS-only search across synced records').action(() => scaffoldNote('sync search'));
-  sync.command('profile [action]').description('Manage sync profiles').action(() => scaffoldNote('sync profile'));
-  sync.command('schedule [action]').description('Manage recurring syncs').action(() => scaffoldNote('sync schedule'));
+  // Sync subverb — delegates through to the existing sync commands
+  const sync = mem.command('sync').description('Sync platform data (alias of the top-level `one sync`)');
+  sync.command('*')
+    .description('Any `one sync` subcommand is accepted here')
+    .action(() => {
+      output.error(
+        'Use the top-level `one sync ...` form for now. The `one mem sync` alias will delegate once sync integration lands.',
+      );
+    });
 
-  // Maintenance
-  mem.command('vacuum').description('Backend maintenance').action(() => scaffoldNote('vacuum'));
-  mem.command('reindex').description('Re-embed all records under a (possibly new) embedding model').action(() => scaffoldNote('reindex'));
-  mem.command('export [outfile]').description('Export records as JSON').action(() => scaffoldNote('export'));
-  mem.command('import <file>').description('Import records from JSON').action(() => scaffoldNote('import'));
+  // Migration + export/import
+  mem.command('migrate')
+    .description('Import legacy .one/sync/data/*.db files into the unified store')
+    .option('--platform <name>', 'Only migrate this platform')
+    .option('--dry-run', 'Report what would be migrated without writing', false)
+    .option('--cleanup', 'After migration, delete legacy files', false)
+    .option('-y, --yes', 'Skip confirmation prompts', false)
+    .action(memMigrateCommand);
+
+  mem.command('export [outfile]')
+    .description('Export records as JSONL (default: stdout)')
+    .action(memExportCommand);
+
+  mem.command('import <file>')
+    .description('Import records from a JSONL file (idempotent via keys)')
+    .action(memImportCommand);
 }

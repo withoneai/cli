@@ -140,7 +140,7 @@ export class CoreBackend implements MemBackend {
   // ── Records ──────────────────────────────────────────────────────────
 
   async insert(row: RecordInput): Promise<MemRecord> {
-    const embedding = vectorLiteral((row as unknown as { embedding?: number[] | null }).embedding ?? null);
+    const embedding = vectorLiteral(row.embedding ?? null);
     const res = await this.client.query<RecordRow>(
       `INSERT INTO mem_records
         (type, data, tags, keys, sources, searchable_text, content_hash, weight,
@@ -158,15 +158,15 @@ export class CoreBackend implements MemBackend {
         row.content_hash ?? null,
         row.weight ?? 5,
         embedding,
-        null, // embedding_model (set by caller via update when they know it)
+        row.embedding_model ?? null,
       ],
     );
     return toRecord(res.rows[0]);
   }
 
   async upsertByKeys(row: RecordInput): Promise<UpsertResult> {
-    const embedding = vectorLiteral((row as unknown as { embedding?: number[] | null }).embedding ?? null);
-    const embeddingModel = (row as unknown as { embedding_model?: string | null }).embedding_model ?? null;
+    const embedding = vectorLiteral(row.embedding ?? null);
+    const embeddingModel = row.embedding_model ?? null;
 
     const res = await this.client.query<{ id: string; action: 'inserted' | 'updated' }>(
       `SELECT id, action FROM mem_upsert_by_keys(

@@ -102,7 +102,11 @@ export interface RecordInput {
   searchable_text?: string | null;
   content_hash?: string | null;
   weight?: number;
+  /** Opt in/out of embedding regardless of config defaults. */
   embed?: boolean;
+  /** Optional pre-computed embedding; takes precedence over generating one. */
+  embedding?: number[] | null;
+  embedding_model?: string | null;
 }
 
 export interface ListOptions {

@@ -7,5 +7,8 @@ export default defineConfig({
   clean: true,
   dts: true,
   shims: true,
-  external: ['better-sqlite3'],
+  // Keep native/wasm deps out of the bundle so their runtime assets
+  // (better-sqlite3's .node, PGlite's vector.tar.gz, pg's pure-TS build)
+  // resolve from node_modules at import time.
+  external: ['better-sqlite3', '@electric-sql/pglite', '@electric-sql/pglite/vector', 'pg'],
 });
