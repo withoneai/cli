@@ -1,10 +1,8 @@
 /**
  * Postgres backend plugin — Supabase, self-hosted, Neon, any Postgres.
  *
- * Thin adapter over node-pg. Most of the work lives in postgres-core
- * (shared between this plugin and the PGlite plugin).
- *
- * Implementation is stubbed pending the postgres-core shared query layer.
+ * Thin adapter over node-pg. All heavy lifting lives in CoreBackend.
+ * The pg dep is lazily imported at init() so the CLI installs without it.
  */
 
 import type {
@@ -14,6 +12,8 @@ import type {
   ParsedBackendConfig,
 } from '../../backend.js';
 import { SCHEMA_VERSION } from '../../schema.js';
+import { CoreBackend } from '../postgres-core/index.js';
+import type { PgClient, PgQueryResult } from '../postgres-core/index.js';
 
 interface PostgresConfig extends ParsedBackendConfig {
   connectionString: string;
@@ -37,62 +37,122 @@ function parseConfig(raw: unknown): PostgresConfig {
   if (!connectionString) {
     throw new Error(
       'Postgres backend requires a connection string. ' +
-      'Set MEM_DATABASE_URL, or run `one mem config set memory.postgres.connectionString <url>`.'
+      'Set MEM_DATABASE_URL, or run `one mem config set memory.postgres.connectionString <url>`.',
     );
   }
   const schema = typeof r.schema === 'string' && r.schema ? r.schema : 'public';
   return { connectionString, schema };
 }
 
-class PostgresBackend implements MemBackend {
-  constructor(_config: PostgresConfig) {
-    // Connection wired in a follow-up commit against postgres-core.
+// Structural type matching the pg.Pool subset we touch.
+interface PgPool {
+  query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{ rows: T[]; rowCount?: number }>;
+  connect(): Promise<PgPoolClient>;
+  end(): Promise<void>;
+}
+
+interface PgPoolClient {
+  query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{ rows: T[]; rowCount?: number }>;
+  release(): void;
+}
+
+function wrapClient(pool: PgPool): PgClient {
+  return {
+    async query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<PgQueryResult<T>> {
+      const res = await pool.query<T>(text, params);
+      return { rows: res.rows, rowCount: res.rowCount ?? undefined };
+    },
+    async transaction<T>(fn: (tx: PgClient) => Promise<T>): Promise<T> {
+      const tx = await pool.connect();
+      const txClient: PgClient = {
+        async query<U = Record<string, unknown>>(text: string, params?: unknown[]): Promise<PgQueryResult<U>> {
+          const res = await tx.query<U>(text, params);
+          return { rows: res.rows, rowCount: res.rowCount ?? undefined };
+        },
+        async transaction() {
+          throw new Error('Nested transactions are not supported.');
+        },
+        async close() {
+          tx.release();
+        },
+      };
+      try {
+        await tx.query('BEGIN');
+        const result = await fn(txClient);
+        await tx.query('COMMIT');
+        return result;
+      } catch (err) {
+        try { await tx.query('ROLLBACK'); } catch { /* swallow */ }
+        throw err;
+      } finally {
+        tx.release();
+      }
+    },
+    async close(): Promise<void> {
+      await pool.end();
+    },
+  };
+}
+
+class LazyPostgresBackend implements MemBackend {
+  private backend: CoreBackend | null = null;
+  private config: PostgresConfig;
+
+  constructor(config: PostgresConfig) { this.config = config; }
+
+  private async ensure(): Promise<CoreBackend> {
+    if (this.backend) return this.backend;
+    const pg = await import('pg').catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `pg is not installed. Run \`npm i -g pg\` or pick a different backend. (${msg})`,
+      );
+    });
+    const PoolCtor = (pg as unknown as { Pool: new (opts: Record<string, unknown>) => PgPool; default?: { Pool: new (opts: Record<string, unknown>) => PgPool } }).Pool
+                   ?? (pg as unknown as { default: { Pool: new (opts: Record<string, unknown>) => PgPool } }).default.Pool;
+    const pool = new PoolCtor({ connectionString: this.config.connectionString });
+    this.backend = new CoreBackend(wrapClient(pool), CAPABILITIES);
+    return this.backend;
   }
 
-  private notImplemented(method: string): never {
-    throw new Error(`PostgresBackend.${method} not yet implemented (scaffolding stage).`);
-  }
+  capabilities(): BackendCapabilities { return CAPABILITIES; }
 
-  async init(): Promise<void> { this.notImplemented('init'); }
-  async close(): Promise<void> { this.notImplemented('close'); }
-  async ensureSchema(): Promise<void> { this.notImplemented('ensureSchema'); }
-  async getSchemaVersion(): Promise<string | null> { return null; }
+  async init(): Promise<void> { await this.ensure(); }
+  async close(): Promise<void> { if (this.backend) await this.backend.close(); this.backend = null; }
+  async ensureSchema(): Promise<void> { return (await this.ensure()).ensureSchema(); }
+  async getSchemaVersion(): ReturnType<MemBackend['getSchemaVersion']> { return (await this.ensure()).getSchemaVersion(); }
 
-  async insert(): Promise<never> { this.notImplemented('insert'); }
-  async upsertByKeys(): Promise<never> { this.notImplemented('upsertByKeys'); }
-  async getById(): Promise<never> { this.notImplemented('getById'); }
-  async update(): Promise<never> { this.notImplemented('update'); }
-  async remove(): Promise<never> { this.notImplemented('remove'); }
-  async archive(): Promise<never> { this.notImplemented('archive'); }
-  async unarchive(): Promise<never> { this.notImplemented('unarchive'); }
-  async list(): Promise<never> { this.notImplemented('list'); }
+  async insert(...a: Parameters<MemBackend['insert']>): ReturnType<MemBackend['insert']> { return (await this.ensure()).insert(...a); }
+  async upsertByKeys(...a: Parameters<MemBackend['upsertByKeys']>): ReturnType<MemBackend['upsertByKeys']> { return (await this.ensure()).upsertByKeys(...a); }
+  async getById(...a: Parameters<MemBackend['getById']>): ReturnType<MemBackend['getById']> { return (await this.ensure()).getById(...a); }
+  async update(...a: Parameters<MemBackend['update']>): ReturnType<MemBackend['update']> { return (await this.ensure()).update(...a); }
+  async remove(...a: Parameters<MemBackend['remove']>): ReturnType<MemBackend['remove']> { return (await this.ensure()).remove(...a); }
+  async archive(...a: Parameters<MemBackend['archive']>): ReturnType<MemBackend['archive']> { return (await this.ensure()).archive(...a); }
+  async unarchive(...a: Parameters<MemBackend['unarchive']>): ReturnType<MemBackend['unarchive']> { return (await this.ensure()).unarchive(...a); }
+  async list(...a: Parameters<MemBackend['list']>): ReturnType<MemBackend['list']> { return (await this.ensure()).list(...a); }
 
-  async search(): Promise<never> { this.notImplemented('search'); }
-  async context(): Promise<never> { this.notImplemented('context'); }
-  async trackAccess(): Promise<never> { this.notImplemented('trackAccess'); }
+  async search(...a: Parameters<MemBackend['search']>): ReturnType<MemBackend['search']> { return (await this.ensure()).search(...a); }
+  async context(...a: Parameters<MemBackend['context']>): ReturnType<MemBackend['context']> { return (await this.ensure()).context(...a); }
+  async trackAccess(...a: Parameters<MemBackend['trackAccess']>): ReturnType<MemBackend['trackAccess']> { return (await this.ensure()).trackAccess(...a); }
 
-  async link(): Promise<never> { this.notImplemented('link'); }
-  async unlink(): Promise<never> { this.notImplemented('unlink'); }
-  async linked(): Promise<never> { this.notImplemented('linked'); }
+  async link(...a: Parameters<MemBackend['link']>): ReturnType<MemBackend['link']> { return (await this.ensure()).link(...a); }
+  async unlink(...a: Parameters<MemBackend['unlink']>): ReturnType<MemBackend['unlink']> { return (await this.ensure()).unlink(...a); }
+  async linked(...a: Parameters<MemBackend['linked']>): ReturnType<MemBackend['linked']> { return (await this.ensure()).linked(...a); }
 
-  async addSource(): Promise<never> { this.notImplemented('addSource'); }
-  async removeSource(): Promise<never> { this.notImplemented('removeSource'); }
-  async findBySource(): Promise<never> { this.notImplemented('findBySource'); }
-  async listSources(): Promise<never> { this.notImplemented('listSources'); }
+  async addSource(...a: Parameters<MemBackend['addSource']>): ReturnType<MemBackend['addSource']> { return (await this.ensure()).addSource(...a); }
+  async removeSource(...a: Parameters<MemBackend['removeSource']>): ReturnType<MemBackend['removeSource']> { return (await this.ensure()).removeSource(...a); }
+  async findBySource(...a: Parameters<MemBackend['findBySource']>): ReturnType<MemBackend['findBySource']> { return (await this.ensure()).findBySource(...a); }
+  async listSources(...a: Parameters<MemBackend['listSources']>): ReturnType<MemBackend['listSources']> { return (await this.ensure()).listSources(...a); }
 
-  async getSyncState(): Promise<never> { this.notImplemented('getSyncState'); }
-  async setSyncState(): Promise<never> { this.notImplemented('setSyncState'); }
-  async listSyncStates(): Promise<never> { this.notImplemented('listSyncStates'); }
+  async getSyncState(...a: Parameters<MemBackend['getSyncState']>): ReturnType<MemBackend['getSyncState']> { return (await this.ensure()).getSyncState(...a); }
+  async setSyncState(...a: Parameters<MemBackend['setSyncState']>): ReturnType<MemBackend['setSyncState']> { return (await this.ensure()).setSyncState(...a); }
+  async listSyncStates(): ReturnType<MemBackend['listSyncStates']> { return (await this.ensure()).listSyncStates(); }
 
-  async ensureHotColumn(): Promise<never> { this.notImplemented('ensureHotColumn'); }
-  async dropHotColumn(): Promise<never> { this.notImplemented('dropHotColumn'); }
+  async ensureHotColumn(...a: Parameters<MemBackend['ensureHotColumn']>): ReturnType<MemBackend['ensureHotColumn']> { return (await this.ensure()).ensureHotColumn(...a); }
+  async dropHotColumn(...a: Parameters<MemBackend['dropHotColumn']>): ReturnType<MemBackend['dropHotColumn']> { return (await this.ensure()).dropHotColumn(...a); }
 
-  async vacuum(): Promise<never> { this.notImplemented('vacuum'); }
-  async stats(): Promise<never> { this.notImplemented('stats'); }
-
-  capabilities(): BackendCapabilities {
-    return CAPABILITIES;
-  }
+  async vacuum(): ReturnType<MemBackend['vacuum']> { return (await this.ensure()).vacuum(); }
+  async stats(): ReturnType<MemBackend['stats']> { return (await this.ensure()).stats(); }
 }
 
 export const postgresPlugin: MemBackendPlugin = {
@@ -103,7 +163,7 @@ export const postgresPlugin: MemBackendPlugin = {
   capabilities: CAPABILITIES,
   parseConfig,
   create(config) {
-    return new PostgresBackend(config as PostgresConfig);
+    return new LazyPostgresBackend(config as PostgresConfig);
   },
 };
 

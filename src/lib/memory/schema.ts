@@ -14,9 +14,12 @@
 
 export const SCHEMA_VERSION = '2.0.0';
 
+// `vector` is loaded by the backend when `vectorSearch` is true.
+// `pg_trgm` was in the original mem schema but nothing in the unified query
+// layer uses it; dropped to keep PGlite happy out of the box. Can be added
+// back via an optional extension hook if fuzzy-match search lands.
 export const EXTENSIONS_SQL = `
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 `;
 
 export const TABLES_SQL = `
