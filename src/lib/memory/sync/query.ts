@@ -1,20 +1,31 @@
-import type Database from 'better-sqlite3';
-import { openDatabase, tableExists, getTableColumns, sanitizeTableName } from './db.js';
+/**
+ * `one sync query <platform>/<model>` — reads from the unified memory
+ * store now that synced rows live in `mem_records` (type = platform/model).
+ *
+ * Filters are applied in TypeScript over the record's `data` JSONB. This
+ * is correct for small and medium stores; very large result sets will
+ * want backend-side JSONB filters — deferred until the pain shows up.
+ *
+ * `executeRawSql` now returns a deprecation error pointing at the
+ * `one mem` surface (hybrid search + JSONB indexes) since there's no
+ * safe universal "raw SQL" that spans PGlite / Postgres / third-party
+ * plugins without leaking backend specifics.
+ */
+
+import { getBackend } from '../runtime.js';
 import { getModelState } from './state.js';
-import { parseCondition, splitConditions } from './where-parser.js';
+import { parseCondition, splitConditions, type ParsedCondition } from './where-parser.js';
 import type { SyncQueryOptions } from './types.js';
+import { getByDotPath } from '../../dot-path.js';
 
 const COMMON_DATE_COLUMNS = ['created_at', 'createdAt', 'created', 'date', 'timestamp', 'updated_at', 'updatedAt'];
 
-/** Auto-detect the date column from table columns */
-function detectDateColumn(columns: string[]): string | null {
-  const matches = columns.filter(c => COMMON_DATE_COLUMNS.includes(c));
+function detectDateColumn(sample: Record<string, unknown>): string | null {
+  const matches = COMMON_DATE_COLUMNS.filter(c => c in sample);
   if (matches.length === 1) return matches[0];
-  if (matches.length > 1) return null; // Ambiguous
-  return null;
+  return null; // zero or ambiguous
 }
 
-/** Format time duration as human-readable */
 function formatSyncAge(lastSync: string): string {
   const diffMs = Date.now() - new Date(lastSync).getTime();
   const seconds = Math.floor(diffMs / 1000);
@@ -39,159 +50,136 @@ export interface QueryResult {
   syncAge: string | null;
 }
 
-/**
- * Execute a query against local synced data.
- */
+function matchesCondition(row: Record<string, unknown>, c: ParsedCondition): boolean {
+  // Support dotted paths in --where (e.g. values.name[0].full_name) so
+  // memory records with deeply nested payloads are filterable without
+  // pre-flattening.
+  const left = c.field.includes('.') || c.field.includes('[')
+    ? getByDotPath(row, c.field)
+    : row[c.field];
+  const right = c.value;
+
+  switch (c.operator) {
+    case '=':
+      return String(left) === right;
+    case '!=':
+      return String(left) !== right;
+    case '>': return coerceNumber(left) > coerceNumber(right);
+    case '<': return coerceNumber(left) < coerceNumber(right);
+    case '>=': return coerceNumber(left) >= coerceNumber(right);
+    case '<=': return coerceNumber(left) <= coerceNumber(right);
+    case 'LIKE': {
+      // SQL-ish LIKE: % is wildcard, case-insensitive.
+      const pattern = right.replace(/[.*+?^${}()|[\]\\]/g, r => `\\${r}`).replace(/%/g, '.*');
+      return new RegExp(`^${pattern}$`, 'i').test(String(left ?? ''));
+    }
+    default:
+      return false;
+  }
+}
+
+function coerceNumber(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  return NaN;
+}
+
+function compareField(a: unknown, b: unknown): number {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a ?? '').localeCompare(String(b ?? ''));
+}
+
+/** Hard cap on what we pull back before filtering. JSONB scans in TS are
+ * fine at this scale; beyond it we want backend-side filtering. */
+const SCAN_CAP = 10_000;
+
 export async function executeQuery(
   platform: string,
   model: string,
   options: SyncQueryOptions,
 ): Promise<QueryResult> {
-  const db = await openDatabase(platform);
+  const backend = await getBackend();
+  const type = `${platform}/${model}`;
 
-  try {
-    if (!tableExists(db, model)) {
-      throw new Error(`No synced data for ${platform}/${model}. Run 'one sync run ${platform} --models ${model}' first.`);
-    }
-
-    const columns = getTableColumns(db, model).map(c => c.name);
-    const whereClauses: string[] = [];
-    const params: unknown[] = [];
-
-    // Parse --where conditions (splits on commas outside quoted sections)
-    if (options.where) {
-      const conditions = splitConditions(options.where);
-      for (const cond of conditions) {
-        const parsed = parseCondition(cond);
-        if (!columns.includes(parsed.field)) {
-          throw new Error(`Column "${parsed.field}" not found. Available: ${columns.join(', ')}`);
-        }
-        whereClauses.push(`"${parsed.field}" ${parsed.operator} ?`);
-        params.push(parsed.value);
-      }
-    }
-
-    // Parse --after/--before date filters
-    if (options.after || options.before) {
-      let dateCol: string | undefined = options.dateField;
-      if (!dateCol) {
-        dateCol = detectDateColumn(columns) ?? undefined;
-        if (!dateCol) {
-          throw new Error(
-            `Cannot auto-detect date column. Use --date-field to specify. ` +
-            `Available columns: ${columns.join(', ')}`
-          );
-        }
-      }
-      if (!columns.includes(dateCol)) {
-        throw new Error(`Date column "${dateCol}" not found. Available: ${columns.join(', ')}`);
-      }
-      if (options.after) {
-        whereClauses.push(`"${dateCol}" >= ?`);
-        params.push(options.after);
-      }
-      if (options.before) {
-        whereClauses.push(`"${dateCol}" <= ?`);
-        params.push(options.before);
-      }
-    }
-
-    // Build SQL (sanitize model → table name to prevent injection from CLI arg)
-    const table = sanitizeTableName(model);
-    let sql = `SELECT * FROM "${table}"`;
-    if (whereClauses.length > 0) {
-      sql += ` WHERE ${whereClauses.join(' AND ')}`;
-    }
-
-    // Order
-    if (options.orderBy) {
-      if (!columns.includes(options.orderBy)) {
-        throw new Error(`Order column "${options.orderBy}" not found. Available: ${columns.join(', ')}`);
-      }
-      const dir = (options.order || 'asc').toUpperCase();
-      sql += ` ORDER BY "${options.orderBy}" ${dir}`;
-    }
-
-    // Limit
-    const limit = options.limit ?? 50;
-    sql += ` LIMIT ${limit}`;
-
-    const results = db.prepare(sql).all(...params) as Record<string, unknown>[];
-
-    // Parse JSON strings back to objects
-    const parsed = results.map(row => {
-      const out: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(row)) {
-        if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
-          try { out[key] = JSON.parse(value); } catch { out[key] = value; }
-        } else {
-          out[key] = value;
-        }
-      }
-      return out;
-    });
-
-    // Sync metadata
-    const state = await getModelState(platform, model);
-    const lastSync = state?.lastSync ?? null;
-    const syncAge = lastSync ? formatSyncAge(lastSync) : null;
-
-    db.close();
-
+  const records = await backend.list(type, { limit: SCAN_CAP, status: 'active' });
+  if (records.length === 0) {
     return {
       platform,
       model,
-      results: parsed,
-      total: parsed.length,
-      query: sql,
+      results: [],
+      total: 0,
+      query: `memory.list(type="${type}")`,
       source: 'local',
-      lastSync,
-      syncAge,
+      lastSync: null,
+      syncAge: null,
     };
-  } catch (err) {
-    db.close();
-    throw err;
   }
+
+  let rows = records.map(r => r.data as Record<string, unknown>);
+
+  if (options.where) {
+    const conditions = splitConditions(options.where).map(parseCondition);
+    rows = rows.filter(row => conditions.every(c => matchesCondition(row, c)));
+  }
+
+  if (options.after || options.before) {
+    const dateCol = options.dateField ?? detectDateColumn(rows[0] ?? {});
+    if (!dateCol) {
+      throw new Error(
+        `Cannot auto-detect date column for ${type}. Pass --date-field to specify one of the record's timestamp fields.`
+      );
+    }
+    if (options.after) {
+      rows = rows.filter(r => String(r[dateCol] ?? '') >= options.after!);
+    }
+    if (options.before) {
+      rows = rows.filter(r => String(r[dateCol] ?? '') <= options.before!);
+    }
+  }
+
+  if (options.orderBy) {
+    const key = options.orderBy;
+    const asc = (options.order ?? 'asc').toLowerCase() !== 'desc';
+    rows.sort((a, b) => (asc ? 1 : -1) * compareField(a[key], b[key]));
+  }
+
+  const limit = options.limit ?? 50;
+  rows = rows.slice(0, limit);
+
+  const state = await getModelState(platform, model);
+  const lastSync = state?.lastSync ?? null;
+  const syncAge = lastSync ? formatSyncAge(lastSync) : null;
+
+  return {
+    platform,
+    model,
+    results: rows,
+    total: rows.length,
+    query: `memory.list(type="${type}") + ${options.where ? 'where' : 'no-where'}`,
+    source: 'local',
+    lastSync,
+    syncAge,
+  };
 }
 
 /**
- * Execute raw SQL against a platform's database.
- * Only SELECT statements are allowed.
+ * Raw SQL against synced data has no universal memory-side analog —
+ * PGlite's syntax and third-party plugins diverge, and exposing a raw
+ * query surface sidesteps key/search semantics. Point agents at the
+ * memory commands, which work against every backend.
  */
-export async function executeRawSql(platform: string, sql: string): Promise<{ results: Record<string, unknown>[]; query: string }> {
-  const trimmed = sql.trim();
-  const upper = trimmed.toUpperCase();
-  if (!upper.startsWith('SELECT')) {
-    throw new Error('Only SELECT statements are allowed. Sync databases are read-only.');
-  }
-  // Block statements that can mutate state or exfiltrate data even when they
-  // start with SELECT (e.g. CTEs containing INSERT, PRAGMA, ATTACH).
-  const forbidden = /\b(PRAGMA|ATTACH|DETACH|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM)\b/;
-  if (forbidden.test(upper)) {
-    throw new Error('Only pure SELECT queries are allowed. PRAGMA/ATTACH/DDL/DML are blocked.');
-  }
-
-  const db = await openDatabase(platform);
-  try {
-    const results = db.prepare(trimmed).all() as Record<string, unknown>[];
-
-    // Parse JSON strings back to objects
-    const parsed = results.map(row => {
-      const out: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(row)) {
-        if (typeof value === 'string' && (value.startsWith('{') || value.startsWith('['))) {
-          try { out[key] = JSON.parse(value); } catch { out[key] = value; }
-        } else {
-          out[key] = value;
-        }
-      }
-      return out;
-    });
-
-    db.close();
-    return { results: parsed, query: trimmed };
-  } catch (err) {
-    db.close();
-    throw err;
-  }
+export async function executeRawSql(
+  _platform: string,
+  _sql: string,
+): Promise<{ results: Record<string, unknown>[]; query: string }> {
+  throw new Error(
+    '`sync sql` is not supported against the unified memory store. ' +
+    'Use `one mem search "..." --type <platform>/<model>` for text search, ' +
+    'or `one mem list <platform>/<model>` for raw listing. ' +
+    'See `one mem --help` for the full surface.',
+  );
 }
