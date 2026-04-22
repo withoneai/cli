@@ -195,8 +195,13 @@ BEGIN
 END;
 $$;
 
--- Upsert by keys: merge into the first record whose keys overlap, else insert new.
+-- Upsert by keys: merge (or replace) into the first record whose keys overlap, else insert new.
 -- Returns the resulting record id + whether the operation was insert or update.
+--
+-- p_replace=FALSE (default): shallow-merge existing data with p_data. Right
+--   semantics for user-authored memories that get progressively enriched.
+-- p_replace=TRUE: REPLACE data with p_data. Right for synced rows — if the
+--   source removed a field, it must disappear from memory too.
 CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_type TEXT,
     p_data JSONB,
@@ -207,7 +212,8 @@ CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_content_hash TEXT,
     p_weight INTEGER DEFAULT NULL,
     p_embedding vector(1536) DEFAULT NULL,
-    p_embedding_model TEXT DEFAULT NULL
+    p_embedding_model TEXT DEFAULT NULL,
+    p_replace BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
 DECLARE
     existing_id UUID;
@@ -221,7 +227,7 @@ BEGIN
 
     IF existing_id IS NOT NULL THEN
         UPDATE mem_records r
-        SET data = r.data || p_data,
+        SET data = CASE WHEN p_replace THEN p_data ELSE r.data || p_data END,
             tags = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}')))),
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),

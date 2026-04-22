@@ -14,6 +14,7 @@ import type {
   MemBackend,
   BackendCapabilities,
   UpsertResult,
+  UpsertOptions,
 } from '../../backend.js';
 import type {
   MemRecord,
@@ -164,14 +165,14 @@ export class CoreBackend implements MemBackend {
     return toRecord(res.rows[0]);
   }
 
-  async upsertByKeys(row: RecordInput): Promise<UpsertResult> {
+  async upsertByKeys(row: RecordInput, opts: UpsertOptions = {}): Promise<UpsertResult> {
     const embedding = vectorLiteral(row.embedding ?? null);
     const embeddingModel = row.embedding_model ?? null;
 
     const res = await this.client.query<{ id: string; action: 'inserted' | 'updated' }>(
       `SELECT id, action FROM mem_upsert_by_keys(
           $1::text, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7,
-          $8::integer, $9::vector, $10::text
+          $8::integer, $9::vector, $10::text, $11::boolean
        )`,
       [
         row.type,
@@ -184,6 +185,7 @@ export class CoreBackend implements MemBackend {
         row.weight ?? null,
         embedding,
         embeddingModel,
+        opts.replace ?? false,
       ],
     );
     const { id, action } = res.rows[0];

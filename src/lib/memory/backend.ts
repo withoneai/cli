@@ -53,6 +53,19 @@ export interface UpsertResult {
   action: 'inserted' | 'updated';
 }
 
+export interface UpsertOptions {
+  /**
+   * When true, the existing record's `data` is REPLACED by the incoming
+   * payload (fields present before but missing now disappear). When false
+   * — the default — the existing record's `data` is shallow-merged with
+   * the incoming payload, which is the right semantic for user-authored
+   * memories but wrong for synced rows where memory should track the
+   * source exactly. Sync callers pass `replace: true`; interactive
+   * callers (mem add, mem update) leave it off.
+   */
+  replace?: boolean;
+}
+
 export interface MemBackend {
   // Lifecycle
   init(): Promise<void>;
@@ -62,7 +75,7 @@ export interface MemBackend {
 
   // Records
   insert(row: RecordInput): Promise<MemRecord>;
-  upsertByKeys(row: RecordInput): Promise<UpsertResult>;
+  upsertByKeys(row: RecordInput, opts?: UpsertOptions): Promise<UpsertResult>;
   getById(id: string, opts?: { withLinks?: boolean }): Promise<MemRecord | MemRecordWithLinks | null>;
   update(id: string, patch: Partial<RecordInput>): Promise<MemRecord | null>;
   remove(id: string): Promise<boolean>;

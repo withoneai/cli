@@ -7,7 +7,7 @@
  * configured.
  */
 
-import type { MemBackend, UpsertResult } from './backend.js';
+import type { MemBackend, UpsertResult, UpsertOptions } from './backend.js';
 import type { MemRecord, RecordInput } from './types.js';
 import {
   DEFAULT_MEMORY_CONFIG,
@@ -79,6 +79,12 @@ export function resetBackendSingleton(): void {
 export interface AddOptions {
   embed?: boolean;
   embeddingModel?: string;
+  /**
+   * Replace-semantics flag forwarded to `backend.upsertByKeys`. Sync
+   * callers pass `true` so deleted source fields actually disappear from
+   * memory; interactive callers leave it off so patches accumulate.
+   */
+  replace?: boolean;
 }
 
 /**
@@ -112,7 +118,8 @@ export async function upsertRecord(input: RecordInput, opts: AddOptions = {}): P
     embedding,
     embedding_model,
   };
-  return backend.upsertByKeys(prepared);
+  const backendOpts: UpsertOptions = { replace: opts.replace ?? false };
+  return backend.upsertByKeys(prepared, backendOpts);
 }
 
 type PrepareContext = 'add' | 'sync';

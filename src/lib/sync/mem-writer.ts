@@ -137,7 +137,11 @@ export async function writePageToMemory(
           tags: ['synced', profile.platform],
           embed: embedFlag,
         },
-        { embed: embedFlag },
+        // Sync must REPLACE: if a field vanished at the source (phone
+        // number removed, Gmail thread archived) it must also vanish
+        // from memory. The default merge behaviour is correct for
+        // interactive `mem add` / `mem update`, wrong for sync.
+        { embed: embedFlag, replace: true },
       );
       if (res.action === 'inserted') report.inserted++;
       else report.updated++;
