@@ -613,6 +613,10 @@ export async function syncModel(
           onInsert: profile.onInsert,
           onUpdate: profile.onUpdate,
           onChange: profile.onChange,
+          // Pass the full profile so enrich can mirror merged rows into the
+          // memory store. Without this, memory holds only the pre-enrich
+          // list payload — see enrich.ts:memoryBatch writeback.
+          profile,
         },
       );
       enrichedTotal = enrichResult.enriched;

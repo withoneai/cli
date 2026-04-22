@@ -37,11 +37,68 @@ export interface MemWriteReport {
 }
 
 /**
+ * Resolve a path that may contain `[]` array-wildcards (e.g.
+ * `messages[].snippet`, `messages[].payload.parts[].body.data`).
+ *
+ * - `a.b[].c`   → for each element of `a.b`, resolve `.c`
+ * - `a[0].b`    → numeric index works (already supported by getByDotPath)
+ * - `a.b`       → plain dot-path
+ *
+ * Returns a flat list of leaf values (strings / numbers / booleans);
+ * caller decides how to fold them into searchable text.
+ */
+function resolveWildcardPath(root: unknown, path: string): unknown[] {
+  // Split on `[]` boundaries keeping track of each segment. The segment
+  // before the first `[]` is a regular dot-path; after each `[]` the
+  // remainder is applied per-element, recursively.
+  const segments = path.split('[]');
+  if (segments.length === 1) {
+    // No wildcard — delegate to the existing resolver.
+    return [getByDotPath(root, path)];
+  }
+
+  const recurse = (value: unknown, idx: number): unknown[] => {
+    if (value === null || value === undefined) return [];
+    // `idx` points at the NEXT segment (to be applied after a `[]`).
+    const segment = segments[idx];
+    const head = segment.startsWith('.') ? segment.slice(1) : segment;
+
+    if (idx === segments.length - 1) {
+      // Last segment: apply to each array element (or the value directly
+      // if there's no tail segment), return the leaves.
+      if (!Array.isArray(value)) return [];
+      if (head === '') return value; // path ends with `[]` — return all elements
+      return value.map(el => getByDotPath(el, head));
+    }
+
+    // More segments remain → descend into the array and recurse.
+    if (!Array.isArray(value)) return [];
+    const results: unknown[] = [];
+    for (const el of value) {
+      const next = head === '' ? el : getByDotPath(el, head);
+      results.push(...recurse(next, idx + 1));
+    }
+    return results;
+  };
+
+  // Apply the first segment normally (can itself be a dotted path), then
+  // descend element-by-element through the remaining segments.
+  const firstHead = segments[0];
+  const firstValue = firstHead === '' ? root : getByDotPath(root, firstHead);
+  return recurse(firstValue, 1);
+}
+
+/**
  * Build the embeddable / FTS text for a synced record from agent-declared
  * dot-paths. Resolves each path, keeps string/number/boolean leaves, flattens
  * arrays of strings, drops empties. Nested objects are intentionally NOT
  * walked — the agent must declare deeper paths if they want that content
  * (otherwise we're back to the "embed everything" noise problem).
+ *
+ * Paths support `[]` wildcards for array fan-out:
+ *   values.name[0].full_name              (numeric index)
+ *   messages[].snippet                    (wildcard over array)
+ *   messages[].payload.parts[].body.data  (nested wildcards)
  *
  * Exported so `sync test --show-searchable` can preview the output without
  * running a real sync.
@@ -54,7 +111,7 @@ export function extractSearchableFromPaths(
   const perPath: Array<{ path: string; found: boolean; sample: string }> = [];
 
   for (const path of paths) {
-    const value = getByDotPath(record, path);
+    const values = resolveWildcardPath(record, path);
     const collected: string[] = [];
 
     const absorb = (v: unknown): void => {
@@ -70,7 +127,7 @@ export function extractSearchableFromPaths(
       // Objects are not walked on purpose — declare deeper paths if needed.
     };
 
-    absorb(value);
+    for (const v of values) absorb(v);
 
     if (collected.length > 0) {
       parts.push(...collected);

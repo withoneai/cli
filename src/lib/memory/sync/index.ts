@@ -372,16 +372,23 @@ async function syncInitCommand(platform: string, model: string, options: { confi
     return;
   }
 
+  // Seed base: prefer an on-disk profile (user has been editing), else the
+  // built-in (agents tweaking a known platform shouldn't have to re-supply
+  // actionId, pagination, etc.), else an empty shell. This was missing
+  // when --config was passed first-time for a built-in platform, leaving
+  // users with `Missing required field: actionId`.
   const existing = readProfile(platform, model);
+  const base = existing ?? (loadBuiltinProfile(platform, model) as SyncProfile | null) ?? ({} as SyncProfile);
+
   const profile: SyncProfile = {
-    ...(existing ?? ({} as SyncProfile)),
+    ...base,
     ...patch,
     // Ensure platform/model from args always win
     platform,
     model,
     // Deep-merge pagination so you can patch just nextPath without losing type
     pagination: {
-      ...(existing?.pagination ?? ({} as SyncProfile['pagination'])),
+      ...(base.pagination ?? ({} as SyncProfile['pagination'])),
       ...(patch.pagination ?? {}),
     },
   };

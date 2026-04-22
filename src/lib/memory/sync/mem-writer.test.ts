@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { writePageToMemory } from './mem-writer.js';
+import { writePageToMemory, extractSearchableFromPaths } from './mem-writer.js';
 import type { SyncProfile } from './types.js';
 import { updateMemoryConfig, DEFAULT_MEMORY_CONFIG } from '../config.js';
 import { writeConfig } from '../../config.js';
@@ -119,5 +119,67 @@ describe('sync mem-writer — dual-write into the unified memory store', () => {
     assert.ok(carol, 'carol should be found');
     assert.equal(carol!.data._synced_at, undefined);
     assert.equal(carol!.data._enriched_at, undefined);
+  });
+});
+
+describe('extractSearchableFromPaths — wildcard + numeric + plain paths', () => {
+  it('resolves messages[].snippet across an array of objects', () => {
+    const record = {
+      id: 'thread-1',
+      messages: [
+        { snippet: 'Hello Moe', from: 'alice@x.com' },
+        { snippet: 'Follow up later', from: 'bob@y.com' },
+      ],
+    };
+    const result = extractSearchableFromPaths(record, ['messages[].snippet']);
+    assert.ok(result.text.includes('Hello Moe'));
+    assert.ok(result.text.includes('Follow up later'));
+    assert.equal(result.paths[0].found, true);
+  });
+
+  it('resolves multiple wildcard paths and mixes with plain + numeric paths', () => {
+    const record = {
+      id: 'thread-1',
+      subject: 'Project kickoff',
+      messages: [
+        { snippet: 'Hello', from: 'alice@x.com' },
+        { snippet: 'Again', from: 'bob@y.com' },
+      ],
+      meta: { tags: ['urgent', 'sales'] },
+      values: { name: [{ full_name: 'Alice' }] },
+    };
+    const result = extractSearchableFromPaths(record, [
+      'id',
+      'subject',
+      'messages[].snippet',
+      'messages[].from',
+      'meta.tags',
+      'values.name[0].full_name',
+    ]);
+    for (const expect of ['thread-1', 'Project kickoff', 'Hello', 'Again', 'alice@x.com', 'bob@y.com', 'urgent', 'sales', 'Alice']) {
+      assert.ok(result.text.includes(expect), `missing "${expect}" in: ${result.text}`);
+    }
+    assert.ok(result.paths.every(p => p.found), `some paths empty: ${JSON.stringify(result.paths)}`);
+  });
+
+  it('handles nested wildcards (a[].b[].c) without crashing and flattens leaves', () => {
+    const record = {
+      threads: [
+        { parts: [{ data: 'one' }, { data: 'two' }] },
+        { parts: [{ data: 'three' }] },
+      ],
+    };
+    const result = extractSearchableFromPaths(record, ['threads[].parts[].data']);
+    assert.ok(result.text.includes('one'));
+    assert.ok(result.text.includes('two'));
+    assert.ok(result.text.includes('three'));
+  });
+
+  it('marks paths with no resolved values as found:false', () => {
+    const record = { id: 't1', messages: [] };
+    const result = extractSearchableFromPaths(record, ['messages[].snippet', 'missing_field']);
+    assert.equal(result.paths[0].found, false);
+    assert.equal(result.paths[1].found, false);
+    assert.equal(result.text, '');
   });
 });
