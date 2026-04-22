@@ -1,7 +1,7 @@
-import type { OneApi } from '../api.js';
-import { ApiError } from '../api.js';
-import { getByDotPath } from '../dot-path.js';
-import { isAgentMode } from '../output.js';
+import type { OneApi } from '../../api.js';
+import { ApiError } from '../../api.js';
+import { getByDotPath } from '../../dot-path.js';
+import { isAgentMode } from '../../output.js';
 import type { SyncProfile, SyncRunResult, SyncRunOptions, ModelSyncState } from './types.js';
 import { getNextPageParams, parsePassAs } from './pagination.js';
 import { getModelState, updateModelState } from './state.js';

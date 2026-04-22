@@ -44,7 +44,7 @@ import {
   relayEventTypesCommand,
 } from './commands/relay.js';
 
-import { registerSyncCommands } from './lib/sync/index.js';
+import { registerSyncCommands } from './lib/memory/sync/index.js';
 import { registerMemoryCommands } from './commands/mem.js';
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';

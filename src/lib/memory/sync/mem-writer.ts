@@ -11,9 +11,9 @@
  * exclusively to memory.
  */
 
-import { upsertRecord } from '../memory/runtime.js';
+import { upsertRecord } from '../runtime.js';
 import type { SyncProfile } from './types.js';
-import { getByDotPath } from '../dot-path.js';
+import { getByDotPath } from '../../dot-path.js';
 
 export interface MemWriteReport {
   attempted: number;

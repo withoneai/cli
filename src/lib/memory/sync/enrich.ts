@@ -1,8 +1,8 @@
-import type { OneApi } from '../api.js';
-import { ApiError } from '../api.js';
-import { isAgentMode } from '../output.js';
+import type { OneApi } from '../../api.js';
+import { ApiError } from '../../api.js';
+import { isAgentMode } from '../../output.js';
 import type { EnrichConfig } from './types.js';
-import type { ActionDetails } from '../types.js';
+import type { ActionDetails } from '../../types.js';
 import type Database from 'better-sqlite3';
 import { transformRecords } from './transform.js';
 import { fireHooks, type ChangeEvent } from './hooks.js';

@@ -18,8 +18,8 @@ import * as output from '../../lib/output.js';
 import * as p from '@clack/prompts';
 import { getBackend } from '../../lib/memory/runtime.js';
 import { upsertRecord } from '../../lib/memory/runtime.js';
-import { readProfile } from '../../lib/sync/profile.js';
-import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../../lib/sync/db.js';
+import { readProfile } from '../../lib/memory/sync/profile.js';
+import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../../lib/memory/sync/db.js';
 import { okJson, requireMemoryInit } from './util.js';
 import { getByDotPath } from '../../lib/dot-path.js';
 

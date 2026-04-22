@@ -5,9 +5,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { writePageToMemory } from './mem-writer.js';
 import type { SyncProfile } from './types.js';
-import { updateMemoryConfig, DEFAULT_MEMORY_CONFIG } from '../memory/config.js';
-import { writeConfig } from '../config.js';
-import { getBackend, resetBackendSingleton } from '../memory/runtime.js';
+import { updateMemoryConfig, DEFAULT_MEMORY_CONFIG } from '../config.js';
+import { writeConfig } from '../../config.js';
+import { getBackend, resetBackendSingleton } from '../runtime.js';
 
 /**
  * Exercises the dual-write helper end-to-end against a live PGlite. Proves

@@ -1,7 +1,7 @@
-import type { OneApi } from '../api.js';
-import { ApiError } from '../api.js';
-import type { ActionDetails } from '../types.js';
-import { getByDotPath } from '../dot-path.js';
+import type { OneApi } from '../../api.js';
+import { ApiError } from '../../api.js';
+import type { ActionDetails } from '../../types.js';
+import { getByDotPath } from '../../dot-path.js';
 import { getNextPageParams } from './pagination.js';
 import type { SyncProfile } from './types.js';
 import { extractRecords, isRootPath } from './extract.js';

@@ -19,7 +19,7 @@ export interface DateFilterConfig {
   format: 'iso8601' | 'unix' | 'date';
 }
 
-import type { ConnectionRef } from '../types.js';
+import type { ConnectionRef } from '../../types.js';
 
 export interface SyncProfile {
   platform: string;
