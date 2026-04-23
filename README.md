@@ -303,24 +303,56 @@ Default TTL is 1 hour. Configure via `ONE_CACHE_TTL` environment variable or `ca
 
 Note: `actions execute` is never cached — it always hits the API fresh.
 
-### `one sync`
+### `one mem` — unified memory store
 
-Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation. The sync engine (`better-sqlite3`) is an optional dependency — install it once per machine:
+One ships a local memory store (pglite default, Postgres pluggable) that backs both user-authored notes and synced platform data. **Zero-config** — the first `one mem` call on a fresh machine auto-initializes. No separate install step.
 
 ```bash
-one sync install && one sync doctor
+# User memories — works immediately on a new install
+one mem add note '{"content":"Design review is Thursday"}' --tags work --weight 7
+one mem search "design review"                       # hybrid FTS + semantic (if key set)
+one mem list note --limit 20
+
+# Enable semantic search (optional)
+one init                                             # re-run — prompts for OpenAI key
+# OR
+one mem config set embedding.apiKey sk-...           # writes top-level openaiApiKey
+# OR
+export OPENAI_API_KEY=sk-...                         # no persistence
+
+# Status + diagnostics
+one mem status                                       # backend, provider, _upgrade hint
+one mem doctor                                       # 7-check health report
 ```
 
-```bash
-# Discover → init (one command: infer + late-bound connection + auto-test) → run
-one sync models stripe
-one sync init stripe balanceTransactions    # connection: { platform } baked in, test auto-run
-one sync run stripe --since 90d
+Key surfaces: `add`, `get`, `update`, `archive`, `list`, `search` (`--deep` forces semantic), `context`, `link`/`linked`/`unlink`, `sources`, `find-by-source`, `export`, `import`, `migrate`, `vacuum`, `reindex`. Run `one guide memory` for the full reference.
 
-# Query, search, SQL
+### `one sync` (and `one mem sync` alias)
+
+Sync platform data into the unified memory store for instant queries, hybrid FTS + semantic search, scheduled refresh, and change-driven automation. Memory is always written; pass `--no-memory` to skip (rare).
+
+```bash
+# Discover → init (seeds from built-in, auto-tests) → declare searchable → preview → run
+one sync models stripe
+one sync init stripe balanceTransactions
+
+# Optional: declare clean fields for embedding, then preview
+one sync init stripe balanceTransactions --config '{
+  "memory": {
+    "embed": true,
+    "searchable": ["description","type","amount","currency"]
+  }
+}'
+one sync test stripe/balanceTransactions --show-searchable
+
+# Run — every row lands in memory (SQLite also written for enrich-phase compat)
+one sync run stripe --since 90d
+one mem sync run stripe                              # identical (alias)
+
+# Query + search (reads from memory)
 one sync query stripe/balanceTransactions --where "status=available" --limit 20
-one sync search "refund"
-one sync sql stripe "SELECT count(*) FROM balanceTransactions"
+one sync query stripe/customers --where 'address.city=SF'   # dotted paths supported
+one sync search "refund"                             # hybrid, per-type
 
 # Schedule unattended syncs + change hooks
 one sync schedule add stripe --every 1h
@@ -334,20 +366,23 @@ one sync run stripe --full-refresh
 
 > **Connections are late-bound.** Profiles use `"connection": { "platform": "<name>", "tag"?: "..." }` instead of literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. `tag` only needed for multi-account platforms (e.g. two Gmail accounts).
 
+> **`memory.searchable` paths.** Drives what gets embedded + FTS-indexed. Supports numeric indexes (`values.name[0].full_name`) and `[]` wildcards (`messages[].snippet`, `messages[].payload.parts[].body.data`). Without declared paths the default walker concatenates every string — correct but noisy for hierarchical APIs. Always declare when `embed: true`.
+
 | Subcommand | What it does |
 |------------|-------------|
-| `install` / `doctor` | Install + verify the SQLite engine |
+| `profiles [platform]` | List built-in pre-validated profiles |
+| `doctor` | Verify sync engine health |
 | `models <platform>` | Discover available data models |
-| `init <platform> <model>` | Create profile (auto-infers all fields, auto-resolves key, auto-runs test) |
-| `test <platform>/<model>` | Validate + auto-fix profile from real API response (also runs inside init) |
-| `run <platform>` | Sync data (`--full-refresh`, `--since`, `--dry-run`) |
-| `query <platform>/<model>` | Query with `--where`, `--after/before`, `--refresh` |
-| `search <query>` | FTS5 across all synced data |
-| `sql <platform> <sql>` | Raw SELECT queries |
+| `init <platform> <model>` | Create/patch profile (seeds from built-in, auto-tests) |
+| `test <platform>/<model>` | Validate profile. `--show-searchable` previews embedded text |
+| `run <platform>` | Sync data (`--full-refresh`, `--since`, `--dry-run`, `--no-memory`) |
+| `query <platform>/<model>` | Query memory with `--where` (dotted paths), `--after/before` |
+| `search <query>` | Hybrid FTS + semantic across all synced data |
+| `list [platform]` | Show profiles, record counts, freshness |
 | `schedule add/list/status/remove/repair` | Cron-backed scheduled syncs with drift detection |
-| `remove <platform>` | Delete local data (`--dry-run` to preview) |
+| `remove <platform>` | Delete synced data (`--dry-run` to preview) |
 
-Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` for the full reference.
+Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` or `one guide memory` for the full reference.
 
 ### `one guide [topic]`
 
