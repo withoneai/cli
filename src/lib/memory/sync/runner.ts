@@ -164,10 +164,18 @@ export async function syncModel(
     );
   }
 
+  // Memory is always the primary write target. SQLite is ONLY opened when
+  // the profile declares an enrich phase — enrich still reads unenriched
+  // rows via SQL. Non-enrich profiles (the common case: Attio, Stripe,
+  // Notion, HN, …) run purely against memory and never touch SQLite.
+  const needsSqlite = !!profile.enrich;
   let db: Database.Database | null = null;
   let totalRecords = 0;
   let pagesProcessed = 0;
   let lastCursor: unknown = null;
+  // Source keys accumulated across pages for --full-refresh reconciliation
+  // in the memory-only path. Old SQLite path uses `seenIds` below.
+  const seenSourceKeys = new Set<string>();
 
   // Reset sync_state and release the lock if the process is killed mid-run
   // (SIGINT from Ctrl-C, SIGTERM from a process manager, cron job being
@@ -200,7 +208,7 @@ export async function syncModel(
   let enrichRateLimited = 0;
 
   try {
-    db = await openDatabase(platform);
+    if (needsSqlite) db = await openDatabase(platform);
 
     // Determine the since date.
     // --full-refresh forces a complete pull: no dateFilter, no lastSync fallback.
@@ -275,7 +283,7 @@ export async function syncModel(
     }
 
     const maxPages = options.maxPages ?? Infinity;
-    let tableCreated = tableExists(db, model);
+    let tableCreated = db ? tableExists(db, model) : false;
 
     // Pagination loop
     let currentPageQueryParams = { ...queryParams };
@@ -389,7 +397,7 @@ export async function syncModel(
       if (options.dryRun) {
         pagesProcessed = 1;
         totalRecords = records.length;
-        db.close();
+        if (db) db.close();
         return {
           model,
           recordsSynced: totalRecords,
@@ -426,37 +434,29 @@ export async function syncModel(
         }
       }
 
-      // Create table on first page with actual data — AFTER enrich/transform/exclude
-      // so the table schema reflects the final record shape.
-      if (!tableCreated) {
-        const firstRecord = records[0] as Record<string, unknown>;
-        ensureTable(db, model, firstRecord, profile.idField);
-        tableCreated = true;
-      }
-
-      // Evolve schema if needed (check for new fields — after the full
-      // pipeline: enrich, transform, exclude, and table creation)
-      for (const record of records) {
-        if (typeof record === 'object' && record !== null) {
-          evolveSchema(db, model, record as Record<string, unknown>);
-          break; // Only need to check one record per page for new columns
+      // Create / evolve SQLite table ONLY when enrich needs it. Memory is
+      // schemaless — JSONB handles any shape that comes through.
+      if (db) {
+        if (!tableCreated) {
+          const firstRecord = records[0] as Record<string, unknown>;
+          ensureTable(db, model, firstRecord, profile.idField);
+          tableCreated = true;
         }
-      }
-
-      // Track ids for --full-refresh reconciliation
-      if (options.fullRefresh) {
-        for (const rec of records as Record<string, unknown>[]) {
-          const id = rec[profile.idField];
-          if (typeof id === 'string' || typeof id === 'number') {
-            seenIds.add(id);
+        for (const record of records) {
+          if (typeof record === 'object' && record !== null) {
+            evolveSchema(db, model, record as Record<string, unknown>);
+            break; // one record tells us everything we need about the shape
           }
         }
       }
 
-      // Classify records as insert vs update BEFORE upserting (for hooks)
+      // Classify records as insert vs update BEFORE upserting (for hooks).
+      // Two paths: SQLite-backed classify pre-dated memory-primary sync;
+      // the memory path uses per-record `action` flags returned by
+      // writePageToMemory with capturePerAction: true.
       let inserts: Record<string, unknown>[] = [];
       let updates: Record<string, unknown>[] = [];
-      if (hasHooks) {
+      if (hasHooks && db) {
         const classified = classifyRecords(
           db, model, records as Record<string, unknown>[], profile.idField, tableCreated,
         );
@@ -464,36 +464,50 @@ export async function syncModel(
         updates = classified.updates;
       }
 
-      // Upsert records
-      const inserted = upsertRecords(
-        db,
-        model,
-        records as Record<string, unknown>[],
-        profile.idField,
-      );
-      totalRecords += inserted;
-      pagesProcessed++;
-
-      // Dual-write into the unified memory store (opt-in). Runs after the
-      // SQLite upsert so any runner validation already rejected the page,
-      // and it uses the same records array so behavior matches 1:1.
-      if (options.toMemory) {
+      // Primary write: unified memory store. Every sync lands here.
+      // Behavior controlled by options.toMemory (--no-memory flips it off).
+      let pageReport: { inserted: number; updated: number; skipped: number } | null = null;
+      if (options.toMemory !== false) {
         try {
           const report = await writePageToMemory(
             profile,
             records as Record<string, unknown>[],
+            { capturePerAction: hasHooks && !db },
           );
-          if (!isAgentMode()) {
-            process.stderr.write(
-              `\n  mem: ${report.inserted} inserted, ${report.updated} updated, ${report.skipped} skipped\n`,
-            );
+          pageReport = report;
+          for (const key of report.sourceKeysSeen) seenSourceKeys.add(key);
+          if (hasHooks && !db) {
+            inserts = report.inserts;
+            updates = report.updates;
           }
         } catch (err) {
-          // Never fail the sync on mem-write errors during the dual-write phase.
           const msg = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`\n  mem write-through failed: ${msg}\n`);
+          process.stderr.write(`\n  memory write failed: ${msg}\n`);
         }
       }
+
+      // Secondary write: SQLite, only when enrich will read from it later.
+      if (db) {
+        if (options.fullRefresh) {
+          for (const rec of records as Record<string, unknown>[]) {
+            const id = rec[profile.idField];
+            if (typeof id === 'string' || typeof id === 'number') {
+              seenIds.add(id);
+            }
+          }
+        }
+        const inserted = upsertRecords(
+          db,
+          model,
+          records as Record<string, unknown>[],
+          profile.idField,
+        );
+        totalRecords += inserted;
+      } else {
+        // Memory-only path: counter comes from the per-page mem report.
+        totalRecords += (pageReport?.inserted ?? 0) + (pageReport?.updated ?? 0);
+      }
+      pagesProcessed++;
 
       // Fire hooks after each page (not at the end) so long syncs get real-time events
       if (hasHooks) {
@@ -537,7 +551,7 @@ export async function syncModel(
       const cursorKeys = cursorBag ? Object.keys(cursorBag) : [];
       lastCursor = cursorKeys.length > 0 ? (cursorBag as Record<string, unknown>)[cursorKeys[0]] : null;
       await updateModelState(platform, model, {
-        totalRecords: countRecords(db, model),
+        totalRecords: db ? countRecords(db, model) : totalRecords,
         pagesProcessed,
         lastCursor,
         status: 'syncing',
@@ -553,43 +567,63 @@ export async function syncModel(
       }
     }
 
-    // --full-refresh: delete local rows whose ids weren't seen this run.
+    // --full-refresh: archive records whose source didn't reappear this run.
     // Only runs if we actually fetched pages (paranoia against wiping data
     // when the API returned an empty first page due to some transient issue).
     let deletedStale = 0;
-    if (options.fullRefresh && pagesProcessed > 0 && tableCreated && seenIds.size > 0) {
-      const safeTable = sanitizeTableName(model);
-      const safeIdField = profile.idField.replace(/"/g, '""');
-      // Chunk the NOT IN clause to stay under SQLite's variable limit (~999)
-      const ids = Array.from(seenIds);
-      const CHUNK = 500;
-      const seenChunks: unknown[][] = [];
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        seenChunks.push(ids.slice(i, i + CHUNK));
+    if (options.fullRefresh && pagesProcessed > 0) {
+      // SQLite path — active only when enrich is configured.
+      if (db && tableCreated && seenIds.size > 0) {
+        const safeTable = sanitizeTableName(model);
+        const safeIdField = profile.idField.replace(/"/g, '""');
+        const ids = Array.from(seenIds);
+        const CHUNK = 500;
+        const seenChunks: unknown[][] = [];
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          seenChunks.push(ids.slice(i, i + CHUNK));
+        }
+        db.exec(`CREATE TEMP TABLE IF NOT EXISTS _seen_ids (id)`);
+        db.exec(`DELETE FROM _seen_ids`);
+        const insertStmt = db.prepare(`INSERT INTO _seen_ids (id) VALUES (?)`);
+        const tx = db.transaction((batch: unknown[]) => {
+          for (const id of batch) insertStmt.run(id as string | number);
+        });
+        for (const chunk of seenChunks) tx(chunk);
+        const delResult = db.prepare(
+          `DELETE FROM "${safeTable}" WHERE "${safeIdField}" NOT IN (SELECT id FROM _seen_ids)`
+        ).run();
+        deletedStale = delResult.changes;
+        db.exec(`DROP TABLE IF EXISTS _seen_ids`);
       }
 
-      // Build a temp table of seen ids and delete anything not in it
-      db.exec(`CREATE TEMP TABLE IF NOT EXISTS _seen_ids (id)`);
-      db.exec(`DELETE FROM _seen_ids`);
-      const insertStmt = db.prepare(`INSERT INTO _seen_ids (id) VALUES (?)`);
-      const tx = db.transaction((batch: unknown[]) => {
-        for (const id of batch) insertStmt.run(id as string | number);
-      });
-      for (const chunk of seenChunks) tx(chunk);
-
-      const delResult = db.prepare(
-        `DELETE FROM "${safeTable}" WHERE "${safeIdField}" NOT IN (SELECT id FROM _seen_ids)`
-      ).run();
-      deletedStale = delResult.changes;
-      db.exec(`DROP TABLE IF EXISTS _seen_ids`);
+      // Memory path — archive records whose source key didn't reappear.
+      // Runs in addition to the SQL path for enrich profiles so both stores
+      // stay in sync; it's the only path for non-enrich profiles.
+      if (options.toMemory !== false && seenSourceKeys.size > 0) {
+        const backend = await (await import('../runtime.js')).getBackend();
+        const type = `${platform}/${model}`;
+        const existing = await backend.list(type, { limit: 100_000, status: 'active' });
+        const sourcePrefix = `${type}:`;
+        let archived = 0;
+        for (const rec of existing) {
+          const sourceKey = (rec.keys ?? []).find(k => k.startsWith(sourcePrefix));
+          if (!sourceKey) continue;
+          if (seenSourceKeys.has(sourceKey)) continue;
+          await backend.archive(rec.id, 'deleted_upstream');
+          archived++;
+        }
+        // Without SQLite, the archive count is the deletedStale figure.
+        if (!db) deletedStale = archived;
+      }
 
       if (!isAgentMode() && deletedStale > 0) {
         process.stderr.write(`Removed ${deletedStale} stale record(s) no longer in source.\n`);
       }
     }
 
-    // Rebuild FTS index after all list data is written
-    if (pagesProcessed > 0 && tableCreated) {
+    // Rebuild FTS index after all list data is written (SQLite only —
+    // memory's tsvector trigger maintains the index automatically).
+    if (db && pagesProcessed > 0 && tableCreated) {
       rebuildFtsIndex(db, model);
     }
 
@@ -601,8 +635,9 @@ export async function syncModel(
     // Phase 2: Enrich unenriched rows (runs after list sync completes).
     // Queries _enriched_at IS NULL so it's inherently resumable — if the
     // process dies mid-enrichment, re-running picks up where it left off.
+    // Requires the SQLite path (enrich still reads via SQL).
     let enrichResult: EnrichResult | null = null;
-    if (profile.enrich && tableCreated && !options.dryRun) {
+    if (profile.enrich && db && tableCreated && !options.dryRun) {
       enrichResult = await enrichPhase(
         api, db, profile.enrich, model, profile.idField,
         connectionKey, platform,
@@ -630,13 +665,13 @@ export async function syncModel(
       }
 
       // Rebuild FTS after enrichment added new text content
-      if (enrichResult.enriched > 0) {
+      if (enrichResult.enriched > 0 && db) {
         rebuildFtsIndex(db, model);
       }
     }
 
     const duration = formatDuration(Date.now() - startTime);
-    const actualCount = countRecords(db, model);
+    const actualCount = db ? countRecords(db, model) : totalRecords;
     await updateModelState(platform, model, {
       lastSync: new Date().toISOString(),
       totalRecords: actualCount,
@@ -646,7 +681,7 @@ export async function syncModel(
       status: 'idle',
     });
 
-    db.close();
+    if (db) db.close();
     if (lock) lock.release();
     return {
       model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale,
