@@ -547,6 +547,20 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
     );
   }
 
+  // Auto-migrate on first encounter with legacy data. Fires when:
+  //   (a) ~/.one/sync/data/<platform>.db exists on disk, AND
+  //   (b) memory has zero records for any of this platform's types.
+  // Otherwise we'd leave users with two sources of truth (the old .db
+  // keeps rowcount, the new memory starts empty, neither agrees with
+  // the other) and no nudge to reconcile.
+  //
+  // --agent mode: silent auto-migrate + log the numbers to stderr.
+  // TTY mode: prompt interactively (default: yes) so nothing surprising
+  // happens without a human beat.
+  if (!options.dryRun) {
+    await maybeAutoMigrateLegacy(platform, toSync.map(p => p.model));
+  }
+
   const results = [];
   for (const profile of toSync) {
     try {
@@ -753,6 +767,49 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
     db.close();
     output.error(`Delete error: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * Detect legacy `.one/sync/data/<platform>.db` that memory hasn't
+ * absorbed yet, and migrate it automatically. Silent-pass when nothing
+ * matches. Logs counts to stderr (agent mode) or prompts (TTY).
+ */
+async function maybeAutoMigrateLegacy(platform: string, models: string[]): Promise<void> {
+  const dbSize = getDatabaseSize(platform);
+  if (!dbSize || dbSize === '0 B') return;
+
+  // Check memory: any records of this platform's types? If yes, the user
+  // has already run at least one memory-primary sync — don't re-migrate,
+  // they can explicitly invoke `mem migrate --cleanup` when ready.
+  const { getBackend } = await import('../runtime.js');
+  const backend = await getBackend();
+  let memoryHasData = false;
+  for (const model of models) {
+    const n = await backend.count(`${platform}/${model}`, { status: 'active' }).catch(() => 0);
+    if (n > 0) { memoryHasData = true; break; }
+  }
+  if (memoryHasData) return;
+
+  if (output.isAgentMode()) {
+    process.stderr.write(
+      `  detected legacy .one/sync/data/${platform}.db (${dbSize}) — auto-migrating into memory before sync.\n`,
+    );
+    const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
+    await memMigrateCommand({ platform, yes: true });
+    return;
+  }
+
+  // TTY: tell the user, default yes.
+  const shouldMigrate = await p.confirm({
+    message:
+      `Found legacy .one/sync/data/${platform}.db (${dbSize}) with no corresponding memory records. ` +
+      `Migrate into the unified memory store before syncing?`,
+    initialValue: true,
+  });
+  if (p.isCancel(shouldMigrate) || !shouldMigrate) return;
+
+  const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
+  await memMigrateCommand({ platform, yes: true });
 }
 
 // ── sync list ──
