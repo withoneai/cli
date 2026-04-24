@@ -172,8 +172,19 @@ export async function writePageToMemory(
 
   for (const record of records) {
     report.attempted++;
-    const externalId = record[profile.idField];
+    // Support dotted idField paths (e.g. "id.record_id") so profiles
+    // against APIs whose ids live inside a nested object (Attio v2,
+    // some Airtable shapes) don't silently collapse every record to
+    // the same "[object Object]" key.
+    const externalId = getByDotPath(record, profile.idField);
     if (externalId === undefined || externalId === null || externalId === '') {
+      report.skipped++;
+      continue;
+    }
+    // HARD GUARD against the object-stringification footgun. If we got
+    // here with an object, sync test should have caught it — but skip
+    // with a visible count so the caller sees something is off.
+    if (typeof externalId === 'object') {
       report.skipped++;
       continue;
     }

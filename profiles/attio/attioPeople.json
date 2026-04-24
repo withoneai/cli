@@ -7,8 +7,7 @@
   "actionId": "conn_mod_def::GJ0CbN-LPiU::A6h6M9QkS0Cs2Lt9CdPH7Q",
   "pathVars": { "object": "people" },
   "resultsPath": "data",
-  "idField": "id",
-  "transform": "jq '[.[] | .id = .id.record_id]'",
+  "idField": "id.record_id",
   "pagination": {
     "type": "offset",
     "passAs": "body:offset"

@@ -490,7 +490,7 @@ export async function syncModel(
       if (db) {
         if (options.fullRefresh) {
           for (const rec of records as Record<string, unknown>[]) {
-            const id = rec[profile.idField];
+            const id = getByDotPath(rec, profile.idField);
             if (typeof id === 'string' || typeof id === 'number') {
               seenIds.add(id);
             }
