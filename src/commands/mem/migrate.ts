@@ -41,13 +41,31 @@ interface MigrateReport {
 
 export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
   requireMemoryInit();
-  await getBackend();
+  const backend = await getBackend();
 
   const platforms = flags.platform ? [flags.platform] : listSyncedPlatforms();
   if (platforms.length === 0) {
     okJson({ status: 'noop', reason: 'no legacy .one/sync/data/*.db files found' });
     return;
   }
+
+  // Dry-run verb prediction: ask the backend whether a key already exists
+  // so the preview matches the real run. Without this, re-running dry-run
+  // after a live migrate always reports `inserted: N` on rows that would
+  // actually `updated` (the trust-bug Moe flagged in #126).
+  const canPredict = backend.capabilities().rawSql && typeof backend.raw === 'function';
+  const keyExists = async (keys: string[]): Promise<boolean> => {
+    if (!canPredict || keys.length === 0) return false;
+    try {
+      const res = await backend.raw!(
+        `SELECT 1 FROM mem_records WHERE keys && $1::text[] LIMIT 1`,
+        [keys],
+      );
+      return res.rowCount > 0;
+    } catch {
+      return false;
+    }
+  };
 
   const reports: MigrateReport[] = [];
   for (const platform of platforms) {
@@ -85,7 +103,8 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           }
 
           if (flags.dryRun) {
-            report.inserted++;
+            if (await keyExists(keys)) report.updated++;
+            else report.inserted++;
             continue;
           }
 

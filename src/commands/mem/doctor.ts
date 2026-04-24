@@ -49,10 +49,19 @@ export async function memDoctorCommand(): Promise<void> {
     await backend.ensureSchema();
     checks.push({ name: 'backend opens and applies schema', ok: true });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // `Aborted()` surfaces when PGlite's postmaster can't come up — most
+    // commonly from a corrupt state left by a forceful kill mid-sync
+    // (#127). Point users at the recovery path instead of leaving them
+    // to guess.
+    const isPgliteAbort = /Aborted\(/.test(msg) && cfg.backend === 'pglite';
     checks.push({
       name: 'backend opens and applies schema',
       ok: false,
-      detail: err instanceof Error ? err.message : String(err),
+      detail: isPgliteAbort
+        ? `${msg}\n    PGlite state looks corrupted (likely from a force-killed sync). ` +
+          `Delete the data dir to reset: \`rm -rf ~/.one/mem.pglite\` (loses all memory records).`
+        : msg,
     });
     return emit(checks);
   }

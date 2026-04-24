@@ -184,17 +184,42 @@ export async function syncModel(
   // at scale (see --full-refresh --max-pages data-loss repro).
   let paginationComplete = false;
 
-  // Reset sync_state and release the lock if the process is killed mid-run
-  // (SIGINT from Ctrl-C, SIGTERM from a process manager, cron job being
-  // killed on laptop sleep). Without these handlers the state stays 'syncing'
-  // forever and the filesystem lock lingers for STALE_MS. The state update
-  // is fire-and-forget because we're shutting down — the lock release is
-  // the cleanup that actually matters.
+  // Reset sync_state, release the lock, and gracefully close the memory
+  // backend if the process is killed mid-run (SIGINT from Ctrl-C, SIGTERM
+  // from a process manager, cron job being killed on laptop sleep).
+  // Without this:
+  //   - sync_state stays 'syncing' forever
+  //   - the filesystem lock lingers for STALE_MS
+  //   - PGlite skips its WAL checkpoint on teardown and the next open
+  //     fails with `Aborted()` on ensureSchema (issue #127). PGlite's
+  //     `postmaster.pid` normally contains a placeholder PID (-42)
+  //     even on healthy shutdowns, so the lockfile isn't the signal —
+  //     it's the unflushed WAL that matters. Calling close() gives
+  //     PGlite a chance to checkpoint.
+  //
+  // Backend close is async but runs on a 2s wall-clock timeout so a
+  // stuck close can't block the exit. SIGKILL / kernel panic still
+  // bypass this; `mem doctor` surfaces the recovery path when hit.
   const signalCleanup = (signal: NodeJS.Signals): void => {
-    updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor })
-      .catch(() => { /* best-effort */ });
-    try { if (lock) lock.release(); } catch { /* best-effort */ }
-    process.exit(signal === 'SIGINT' ? 130 : 143);
+    void (async () => {
+      await Promise.allSettled([
+        updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor }),
+        (async () => {
+          try {
+            const { getBackend } = await import('../runtime.js');
+            const backend = await getBackend();
+            await Promise.race([
+              backend.close(),
+              new Promise(resolve => setTimeout(resolve, 2_000)),
+            ]);
+          } catch {
+            // best-effort — we're exiting anyway
+          }
+        })(),
+      ]);
+      try { if (lock) lock.release(); } catch { /* best-effort */ }
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    })();
   };
   const onSigint = (): void => signalCleanup('SIGINT');
   const onSigterm = (): void => signalCleanup('SIGTERM');
