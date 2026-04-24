@@ -37,6 +37,10 @@ interface MigrateReport {
   inserted: number;
   updated: number;
   skipped: number;
+  /** Rows skipped because the idField path resolved to nothing (missing profile, bad path, nested). */
+  skippedUnresolvedId: number;
+  /** Rows skipped because the upsert threw (key conflict, schema violation, etc). */
+  skippedError: number;
 }
 
 export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
@@ -77,27 +81,57 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         const rows = db.prepare(`SELECT * FROM "${model}"`).all() as Array<Record<string, unknown>>;
         const report: MigrateReport = {
           platform, model, rowsSeen: total, inserted: 0, updated: 0, skipped: 0,
+          skippedUnresolvedId: 0, skippedError: 0,
         };
         const profile = readProfile(platform, model);
         const idField = profile?.idField;
         const identityKey = profile?.identityKey;
 
         for (const row of rows) {
-          if (!idField || row[idField] === undefined || row[idField] === null) {
+          // Legacy SQLite flattens first-level fields. Nested objects (e.g.
+          // Attio's `{workspace_id, object_id, record_id}`) land as JSON-
+          // stringified text in the `id` column. Rehydrate top-level JSON
+          // strings so dot-path resolution mirrors `sync run` — otherwise
+          // `id.record_id` returns undefined on companies and every row
+          // gets silently skipped (Moe's post-migrate repro, 2024/2024
+          // skipped on attioCompanies).
+          const hydrated = reviveStringifiedJson(row);
+
+          const externalRaw = idField ? getByDotPath(hydrated, idField) : undefined;
+          // Hard reject: the same guard sync test/mem-writer apply — an
+          // object id would String()-stringify to `[object Object]` and
+          // collapse every row onto one key. Better to skip visibly than
+          // to silently dedup the entire table.
+          if (
+            !idField ||
+            externalRaw === undefined ||
+            externalRaw === null ||
+            externalRaw === '' ||
+            typeof externalRaw === 'object'
+          ) {
+            report.skippedUnresolvedId++;
             report.skipped++;
+            if (!output.isAgentMode() && report.skippedUnresolvedId <= 3) {
+              const hint = !idField
+                ? 'no profile found'
+                : typeof externalRaw === 'object'
+                  ? `idField "${idField}" resolved to a nested object (stringifies to [object Object]) — profile needs a dotted path`
+                  : `idField "${idField}" resolved to undefined/empty`;
+              process.stderr.write(`  skip row ${report.skippedUnresolvedId}: ${hint}\n`);
+            }
             continue;
           }
-          const external = String(row[idField]);
+          const external = String(externalRaw);
           const sourceKey = `${platform}/${model}:${external}`;
           const keys = [sourceKey];
           if (identityKey) {
-            const idValue = getByDotPath(row, identityKey);
-            if (idValue !== undefined && idValue !== null && idValue !== '') {
+            const idValue = getByDotPath(hydrated, identityKey);
+            if (idValue !== undefined && idValue !== null && idValue !== '' && typeof idValue !== 'object') {
               keys.push(`${deriveIdentityPrefix(identityKey)}:${String(idValue).toLowerCase()}`);
             }
           }
 
-          const data = { ...row };
+          const data = { ...hydrated };
           for (const k of Object.keys(data)) {
             if (k.startsWith('_') || k === 'rowid') delete data[k];
           }
@@ -128,6 +162,7 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
             if (res.action === 'inserted') report.inserted++;
             else report.updated++;
           } catch (err) {
+            report.skippedError++;
             report.skipped++;
             if (!output.isAgentMode()) {
               const msg = err instanceof Error ? err.message : String(err);
@@ -137,9 +172,18 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         }
         reports.push(report);
         if (!output.isAgentMode()) {
+          const breakdown =
+            report.skipped > 0
+              ? ` skipped (${report.skippedUnresolvedId} unresolved id, ${report.skippedError} errors)`
+              : ' skipped';
           process.stderr.write(
-            `  ${platform}/${model}: ${report.inserted} inserted, ${report.updated} updated, ${report.skipped} skipped (${report.rowsSeen} seen)\n`,
+            `  ${platform}/${model}: ${report.inserted} inserted, ${report.updated} updated, ${report.skipped}${breakdown} (${report.rowsSeen} seen)\n`,
           );
+          if (report.skippedUnresolvedId === report.rowsSeen && report.rowsSeen > 0) {
+            process.stderr.write(
+              `    ⚠  Every row skipped — profile for ${platform}/${model} is missing or its idField doesn't resolve on legacy rows.\n`,
+            );
+          }
         }
       }
     } finally {
@@ -174,9 +218,39 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
       inserted: reports.reduce((a, r) => a + r.inserted, 0),
       updated: reports.reduce((a, r) => a + r.updated, 0),
       skipped: reports.reduce((a, r) => a + r.skipped, 0),
+      skippedUnresolvedId: reports.reduce((a, r) => a + r.skippedUnresolvedId, 0),
+      skippedError: reports.reduce((a, r) => a + r.skippedError, 0),
       seen: reports.reduce((a, r) => a + r.rowsSeen, 0),
     },
   });
+}
+
+/**
+ * Rehydrate top-level columns that legacy SQLite stored as JSON-stringified
+ * text (see sync/db.ts:prepareValue — every non-primitive value is
+ * JSON.stringify'd before INSERT). Without this, dot-paths like
+ * `id.record_id` return undefined because `row.id` is a string, not the
+ * nested object the live API returned.
+ *
+ * Only top-level fields are rehydrated — that matches the legacy storage
+ * shape. Values that don't parse or don't look like JSON containers
+ * (don't start with `{` or `[`) are left alone. We don't recurse because
+ * legacy rows never nest further.
+ */
+export function reviveStringifiedJson(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...row };
+  for (const [key, value] of Object.entries(out)) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) continue;
+    try {
+      out[key] = JSON.parse(trimmed);
+    } catch {
+      // Not JSON — could just be a string that happens to start with [ (e.g. markdown).
+      // Leave the original string in place.
+    }
+  }
+  return out;
 }
 
 function deriveIdentityPrefix(path: string): string {
