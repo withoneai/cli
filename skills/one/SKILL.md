@@ -203,9 +203,16 @@ one --agent sync init attio attioPeople --config '{
     ]
   }
 }'
+# Skip the "pick paths by reading knowledge" step — let the CLI rank them from a live sample
+one --agent sync suggest-searchable attio/attioPeople
+# → { suggestions: [{path, score, hitRate, avgLength, noiseFraction, sampleValue}], configPatch: {...paste-ready...} }
+
 one --agent sync test attio/attioPeople --show-searchable
-# → Returns { searchable: { mode: "declared", length, text, paths: [{path, found, sample}] } }
-# Iterate on paths until the preview text is clean (no UUIDs, timestamps, URLs).
+# → Previews across 5 samples. Each path has { hits, total, sample }:
+#     5/5 = path resolves on every record (clean)
+#     1/5 = field is real but sparse on this page
+#     0/5 = typo, or field never populated in sampled records
+# Iterate until the numbers match intent.
 
 # Run — memory is always written; pass --no-memory to skip (rare)
 one --agent sync run stripe

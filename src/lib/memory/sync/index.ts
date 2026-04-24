@@ -15,6 +15,7 @@ import { executeQuery } from './query.js';
 import { searchSyncedData } from './search.js';
 import { extractSearchableFromPaths, getSearchablePaths } from './mem-writer.js';
 import { defaultSearchableText } from '../embedding.js';
+import { suggestSearchablePaths } from './suggest-searchable.js';
 import { openDatabase, getDatabaseSize, dropTable, deleteDatabase, countRecords, listTables, deleteRecords, rebuildFtsIndex, tableExists, sanitizeTableName } from './db.js';
 import type { SyncProfile, SyncRunOptions, SyncQueryOptions } from './types.js';
 import { isSqliteAvailable, loadSqlite } from './sqlite-loader.js';
@@ -453,7 +454,7 @@ async function syncTestCommand(
   }
 
   const searchablePreview = options.showSearchable
-    ? buildSearchablePreview(profile!, report.sample)
+    ? buildSearchablePreview(profile!, report.samples)
     : null;
 
   if (output.isAgentMode()) {
@@ -477,18 +478,28 @@ async function syncTestCommand(
   }
 
   if (searchablePreview) {
-    console.log(`\n  ${pc.bold('Searchable preview')} ${pc.dim(`(${searchablePreview.mode})`)}`);
-    console.log(`    ${pc.dim('length:')}  ${searchablePreview.length} chars`);
+    console.log(`\n  ${pc.bold('Searchable preview')} ${pc.dim(`(${searchablePreview.mode}, ${searchablePreview.sampledRecords} sample${searchablePreview.sampledRecords === 1 ? '' : 's'})`)}`);
+    console.log(`    ${pc.dim('length:')}  ${searchablePreview.length} chars (first sample)`);
     console.log(`    ${pc.dim('text:')}    ${searchablePreview.text.slice(0, 300)}${searchablePreview.length > 300 ? pc.dim(' …') : ''}`);
     if (searchablePreview.paths) {
-      console.log(`    ${pc.dim('paths:')}`);
+      console.log(`    ${pc.dim('paths:')}  ${pc.dim('(hit rate across all samples — differentiates "wrong path" from "field sometimes missing")')}`);
       for (const p of searchablePreview.paths) {
-        const mark = p.found ? pc.green('✓') : pc.yellow('—');
-        console.log(`      ${mark} ${p.path}${p.sample ? pc.dim(` → ${p.sample}`) : pc.yellow(' (empty on this sample)')}`);
+        const rate = `${p.hits}/${p.total}`;
+        const mark = p.hits === p.total
+          ? pc.green('✓')
+          : p.hits === 0
+            ? pc.red('✗')
+            : pc.yellow('~');
+        const trailer = p.sample
+          ? pc.dim(` → "${p.sample}"`)
+          : p.hits === 0
+            ? pc.dim(' (no sample matched — typo, or field never populated in this page)')
+            : '';
+        console.log(`      ${mark} ${rate.padStart(5)} ${p.path}${trailer}`);
       }
     } else {
       console.log(`    ${pc.yellow('note:')} no memory.searchable declared — using the default walker (walks every field, often noisy).`);
-      console.log(`    ${pc.dim('tip:')}  pick dot-paths to the signal fields (name, title, description, email, ...) and add them to profile.memory.searchable, then re-run this preview.`);
+      console.log(`    ${pc.dim('tip:')}  run \`one sync suggest-searchable ${platform}/${model}\` for an auto-ranked starter list, or pick paths by hand and add them to profile.memory.searchable.`);
     }
   }
 
@@ -507,25 +518,55 @@ async function syncTestCommand(
  */
 function buildSearchablePreview(
   profile: SyncProfile,
-  sample: Record<string, unknown> | undefined,
+  samples: Array<Record<string, unknown>> | undefined,
 ):
   | {
       mode: 'declared' | 'default';
       text: string;
       length: number;
-      paths?: Array<{ path: string; found: boolean; sample: string }>;
+      sampledRecords: number;
+      /**
+       * Per-path resolution across the sampled records, with a hit rate.
+       * `hits / total` disambiguates the old single-sample `found` flag:
+       *   5/5 = path looks right
+       *   3/5 = path works, some records lack this field
+       *   0/5 = path doesn't exist (likely typo OR field always absent)
+       */
+      paths?: Array<{
+        path: string;
+        hits: number;
+        total: number;
+        sample: string;
+      }>;
     }
   | null {
-  if (!sample) return null;
+  if (!samples || samples.length === 0) return null;
+  const first = samples[0];
   const paths = getSearchablePaths(profile);
+
   if (paths) {
-    const { text, paths: perPath } = extractSearchableFromPaths(sample, paths);
-    return { mode: 'declared', text, length: text.length, paths: perPath };
+    // Aggregate per-path hits across all samples; keep the first non-
+    // empty sample value for display so the agent sees real data.
+    const perPathAgg = paths.map(path => ({ path, hits: 0, total: samples.length, sample: '' }));
+    for (const record of samples) {
+      const { paths: perPath } = extractSearchableFromPaths(record, paths);
+      perPath.forEach((p, i) => {
+        if (p.found) {
+          perPathAgg[i].hits++;
+          if (!perPathAgg[i].sample) perPathAgg[i].sample = p.sample;
+        }
+      });
+    }
+    // Text preview is built from the first sample so the "what would get
+    // embedded" snapshot is concrete, not synthetic across records.
+    const { text } = extractSearchableFromPaths(first, paths);
+    return { mode: 'declared', text, length: text.length, sampledRecords: samples.length, paths: perPathAgg };
   }
+
   // Mirror the runtime fallback so the preview reflects what WOULD be
   // embedded today (noisy).
-  const text = defaultSearchableText(sample);
-  return { mode: 'default', text, length: text.length };
+  const text = defaultSearchableText(first);
+  return { mode: 'default', text, length: text.length, sampledRecords: samples.length };
 }
 
 // ── sync run ──
@@ -810,6 +851,77 @@ async function maybeAutoMigrateLegacy(platform: string, models: string[]): Promi
 
   const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
   await memMigrateCommand({ platform, yes: true });
+}
+
+// ── sync suggest-searchable ──
+
+async function syncSuggestSearchableCommand(
+  platformModel: string,
+  options: { limit?: string } = {},
+): Promise<void> {
+  const [platform, model] = platformModel.split('/');
+  if (!platform || !model) {
+    output.error('Usage: one sync suggest-searchable <platform>/<model>. Example: one sync suggest-searchable attio/attioPeople');
+  }
+
+  const profile = readProfile(platform, model);
+  if (!profile) {
+    output.error(
+      `No sync profile found for ${platform}/${model}. ` +
+      `Create one with: one sync init ${platform} ${model}`,
+    );
+  }
+
+  const api = getApi();
+  const report = await testSyncProfile(api, profile!);
+  const samples = report.samples ?? [];
+  if (samples.length === 0) {
+    output.error(
+      'No sample records available to rank against. Fix the failures in `sync test` first, then re-run suggest-searchable.',
+    );
+  }
+
+  const limit = options.limit ? parseInt(options.limit, 10) : 15;
+  const suggestions = suggestSearchablePaths(samples, limit);
+
+  // Build a paste-ready config JSON that the agent can drop straight
+  // into `sync init --config`. Defaults to embed:true since opting for
+  // semantic search is the whole reason you ran this command.
+  const topPaths = suggestions.map(s => s.path);
+  const configPatch = { memory: { embed: true, searchable: topPaths } };
+
+  if (output.isAgentMode()) {
+    output.json({
+      platform,
+      model,
+      sampledRecords: samples.length,
+      suggestions,
+      configPatch,
+      hint: `To apply: one --agent sync init ${platform} ${model} --config '${JSON.stringify(configPatch)}'`,
+    });
+    return;
+  }
+
+  console.log(`\n  ${pc.bold('memory.searchable — ranked suggestions')} ${pc.dim(`(${samples.length} samples)`)}`);
+  if (suggestions.length === 0) {
+    console.log(`    ${pc.yellow('no high-signal leaves found')} — page may be all UUIDs / timestamps / enum markers. Inspect the sample with \`sync test\` and pick paths manually.`);
+    return;
+  }
+
+  for (const s of suggestions) {
+    const hitPct = Math.round(s.hitRate * 100);
+    const noisePct = Math.round(s.noiseFraction * 100);
+    const noiseBadge = noisePct > 0 ? pc.dim(` noise=${noisePct}%`) : '';
+    console.log(
+      `    ${pc.green(String(s.score).padStart(5))}  ${pc.cyan(s.path.padEnd(52))}` +
+      pc.dim(` ${hitPct}% hit`) + pc.dim(` avg=${s.avgLength}ch`) + noiseBadge +
+      (s.sampleValue ? pc.dim(`\n          → "${s.sampleValue.slice(0, 140)}"`) : '')
+    );
+  }
+
+  console.log(`\n  ${pc.bold('Paste-ready:')}`);
+  console.log('    ' + pc.cyan(`one sync init ${platform} ${model} --config '${JSON.stringify(configPatch)}'`));
+  console.log(`\n  ${pc.dim('then preview: ')}${pc.cyan(`one sync test ${platform}/${model} --show-searchable`)}`);
 }
 
 // ── sync list ──
@@ -1149,6 +1261,14 @@ function registerSyncSubcommands(sync: Command): void {
     .option('--show-searchable', 'Also preview the text that would be embedded / FTS-indexed, per memory.searchable', false)
     .action(async (platformModel: string, options: { showSearchable?: boolean }) => {
       await syncTestCommand(platformModel, { showSearchable: options.showSearchable });
+    });
+
+  sync
+    .command('suggest-searchable <platform/model>')
+    .description('Rank candidate memory.searchable paths by signal density (for profiles with memory.embed: true)')
+    .option('--limit <n>', 'Top N paths to return (default 15)')
+    .action(async (platformModel: string, options: { limit?: string }) => {
+      await syncSuggestSearchableCommand(platformModel, options);
     });
 
   sync

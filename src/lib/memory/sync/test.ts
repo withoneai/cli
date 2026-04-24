@@ -19,11 +19,21 @@ export interface SyncTestReport {
   ok: boolean;
   checks: SyncTestCheck[];
   sample?: Record<string, unknown>;
+  /**
+   * First N records from the fetched page. `sample` is still the first
+   * one (kept for back-compat); `samples` lets callers check how
+   * consistently a `memory.searchable` path resolves across real data
+   * instead of guessing from a single row.
+   */
+  samples?: Array<Record<string, unknown>>;
   detectedColumns?: Array<{ name: string; type: string }>;
   paginationPreview?: Record<string, unknown>;
   /** Fields that sync test auto-fixed from the real response (e.g. resultsPath). */
   autoFixed?: Record<string, string>;
 }
+
+/** How many records --show-searchable averages over when reporting hit rates. */
+export const SEARCHABLE_SAMPLE_SIZE = 5;
 
 function detectColumnType(value: unknown): string {
   if (value === null || value === undefined) return 'TEXT';
@@ -302,12 +312,13 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     });
   }
 
-  // Fill detected columns and sample
+  // Fill detected columns and sample(s)
   report.detectedColumns = Object.entries(first).map(([name, value]) => ({
     name,
     type: detectColumnType(value),
   }));
   report.sample = first;
+  report.samples = (records as Record<string, unknown>[]).slice(0, SEARCHABLE_SAMPLE_SIZE);
   report.ok = checks.every(c => c.ok);
 
   return report;

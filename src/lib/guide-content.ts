@@ -636,13 +636,21 @@ Profile field that drives what gets embedded + full-text-indexed. Without it, th
 }
 \`\`\`
 
-Preview before paying embedding cost:
+Get a ranked starter list from a real sample:
+
+\`\`\`bash
+one --agent sync suggest-searchable <platform>/<model>
+\`\`\`
+
+Walks the first page of records, ranks every leaf path by signal density (non-empty rate × log-length × noise penalty). UUIDs / ISO timestamps / URLs / numeric strings / boolean and number leaves are penalized or filtered; prose and enum-title fields rank high. The response includes a paste-ready \`configPatch\` the agent can drop into \`sync init --config\`.
+
+Preview what will actually be embedded across 5 sample records:
 
 \`\`\`bash
 one --agent sync test <platform>/<model> --show-searchable
 \`\`\`
 
-The response \`searchable.paths\` array shows each path's \`found\` flag and a sample of resolved values. Empty paths are silently dropped — watch for typos.
+The response \`searchable.paths\` array carries \`{path, hits, total, sample}\` per declared path. \`5/5\` means the path resolves on every record; \`1/5\` means it's real but sparse; \`0/5\` is a typo or a field that never appears on this page. Iterate until the numbers and samples match your intent, then \`sync run\` to ship.
 
 ## sync run — memory-primary
 
@@ -835,7 +843,8 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | \`sync doctor\` | Verify sync engine health |
 | \`sync models <platform>\` | Discover available models |
 | \`sync init <plat> <model>\` | Create/patch profile (seeds from built-in, auto-tests) |
-| \`sync test <plat>/<model>\` | Validate profile. \`--show-searchable\` previews embedded text |
+| \`sync test <plat>/<model>\` | Validate profile. \`--show-searchable\` previews embedded text across 5 samples with per-path hit rates |
+| \`sync suggest-searchable <plat>/<model>\` | Rank candidate \`memory.searchable\` paths by signal density; emits paste-ready config |
 | \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`, \`--no-memory\`) |
 | \`sync query <plat>/<model>\` | Query memory with \`--where\` (dotted paths), \`--after/before\` |
 | \`sync search "<query>"\` | Hybrid FTS + semantic across all synced data |
