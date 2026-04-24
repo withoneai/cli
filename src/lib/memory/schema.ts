@@ -202,6 +202,11 @@ $$;
 --   semantics for user-authored memories that get progressively enriched.
 -- p_replace=TRUE: REPLACE data with p_data. Right for synced rows — if the
 --   source removed a field, it must disappear from memory too.
+--
+-- Upsert-by-keys is the self-heal primitive for --full-refresh reconcile:
+-- if the upsert finds an archived row, the source re-surfaced it, so flip
+-- status back to 'active' and clear archived_reason. Without this, rows
+-- archived by a buggy reconcile would stay dead until manually un-archived.
 CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_type TEXT,
     p_data JSONB,
@@ -236,7 +241,9 @@ BEGIN
             weight = COALESCE(p_weight, r.weight),
             embedding = COALESCE(p_embedding, r.embedding),
             embedded_at = CASE WHEN p_embedding IS NOT NULL THEN NOW() ELSE r.embedded_at END,
-            embedding_model = COALESCE(p_embedding_model, r.embedding_model)
+            embedding_model = COALESCE(p_embedding_model, r.embedding_model),
+            status = 'active',
+            archived_reason = NULL
         WHERE r.id = existing_id;
 
         result_id := existing_id;

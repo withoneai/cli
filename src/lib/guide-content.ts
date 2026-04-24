@@ -664,6 +664,12 @@ The response \`searchable.paths\` array carries \`{path, hits, total, sample}\` 
 --to-memory     (deprecated — memory is now always written; kept for back-compat)
 \`\`\`
 
+**\`--full-refresh\` + \`--max-pages\` = reconcile is skipped.** Reconcile can only tell "not returned by the API" from "we didn't ask" if pagination actually exhausted. Truncated runs would mass-archive unseen rows as \`deleted_upstream\`, so the reconcile pass skips with \`reconcileSkipped: true\` and \`deletedStale: 0\`. Re-run without \`--max-pages\` to prune.
+
+**Upsert-by-keys is self-healing.** If a previous buggy run archived a row, the next \`--full-refresh\` that re-pulls its source key flips it back to \`active\` and clears \`archived_reason\`. No manual un-archive required.
+
+**Every sync output surfaces \`statusCounts: { active, archived }\`** — if archived is high after a run, the store needs a full \`--full-refresh\` (no \`--max-pages\`) to heal.
+
 ## Connection Resolution — late-bound by default
 
 Sync profiles use a late-bound connection ref instead of a hardcoded key, so re-auth (which always mints a new key) doesn't break the profile:

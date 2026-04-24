@@ -188,6 +188,15 @@ export interface SyncRunResult {
   status: 'complete' | 'failed' | 'dry-run';
   /** Rows removed by --full-refresh because they were no longer in the source. */
   deletedStale?: number;
+  /** Whether --full-refresh actually ran reconcile (skipped on truncated pagination). */
+  reconcileSkipped?: boolean;
+  /**
+   * Counts of memory rows for this type after the sync. Surfaces silent
+   * damage — if active is low and archived is high, reconcile destroyed
+   * data on a prior run and the store needs healing (upsert-by-keys
+   * self-heals to active on the next --full-refresh).
+   */
+  statusCounts?: { active: number; archived: number };
   /** Count of records that triggered onInsert/onChange hooks. */
   hooksInserted?: number;
   /** Count of records that triggered onUpdate/onChange hooks. */

@@ -195,6 +195,42 @@ describe('PGlite plugin — live integration', () => {
     assert.equal((await backend.getById(rec.id))?.status, 'active');
   });
 
+  it('upsertByKeys resurrects archived rows (self-heal for reconcile damage)', async () => {
+    // Simulates the scenario where a buggy --full-refresh reconcile
+    // archived a valid row. Next --full-refresh re-pulls the source
+    // and upserts — the row must flip back to 'active' so subsequent
+    // search / list calls see it again. Without this, rows stay dead.
+    const first = await backend.upsertByKeys({
+      type: 'gmail/messages',
+      data: { snippet: 'Important thread' },
+      keys: ['gmail/messages:msg-resurrect'],
+      sources: { 'gmail/messages:msg-resurrect': { last_synced_at: new Date().toISOString() } },
+    });
+    assert.equal(first.action, 'inserted');
+
+    // Archive as if reconcile did it.
+    const archived = await backend.archive(first.record.id, 'deleted_upstream');
+    assert.equal(archived, true);
+    assert.equal((await backend.getById(first.record.id))?.status, 'archived');
+
+    // Re-upsert as if --full-refresh re-pulled the source.
+    const second = await backend.upsertByKeys(
+      {
+        type: 'gmail/messages',
+        data: { snippet: 'Important thread (updated)' },
+        keys: ['gmail/messages:msg-resurrect'],
+        sources: { 'gmail/messages:msg-resurrect': { last_synced_at: new Date().toISOString() } },
+      },
+      { replace: true },
+    );
+    assert.equal(second.action, 'updated');
+    assert.equal(second.record.id, first.record.id);
+
+    const healed = await backend.getById(first.record.id);
+    assert.equal(healed?.status, 'active', 'upsertByKeys must un-archive on match');
+    assert.equal(healed?.archived_reason, null, 'archived_reason must clear on resurrection');
+  });
+
   it('sync state round-trips', async () => {
     await backend.setSyncState({
       platform: 'attio',

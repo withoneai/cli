@@ -634,6 +634,15 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
         ? pc.yellow('dry-run')
         : pc.red('failed');
     console.log(`  ${pc.bold(r.model)} — ${r.recordsSynced} records, ${r.pagesProcessed} pages, ${r.duration} [${status}]`);
+    if ((r as { reconcileSkipped?: boolean }).reconcileSkipped) {
+      console.log(`    ${pc.yellow('--full-refresh reconcile skipped — pagination truncated (e.g. --max-pages). Re-run without the cap to prune stale rows.')}`);
+    }
+    const sc = (r as { statusCounts?: { active: number; archived: number } }).statusCounts;
+    if (sc && (sc.archived > 0 || sc.active > 0)) {
+      // Highlight imbalance — archived > active suggests prior reconcile damage.
+      const archivedColor = sc.archived > sc.active ? pc.red : pc.dim;
+      console.log(`    memory: ${pc.green(String(sc.active))} active, ${archivedColor(String(sc.archived))} archived`);
+    }
     if ('error' in r && r.error) {
       console.log(`    ${pc.red(r.error as string)}`);
     }

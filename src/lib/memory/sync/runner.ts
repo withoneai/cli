@@ -176,6 +176,13 @@ export async function syncModel(
   // Source keys accumulated across pages for --full-refresh reconciliation
   // in the memory-only path. Old SQLite path uses `seenIds` below.
   const seenSourceKeys = new Set<string>();
+  // Only true when pagination exhausted naturally (empty page, or the
+  // profile's paginator signalled no more pages). False if we hit
+  // --max-pages or bailed on an error. Reconcile-by-absence must NEVER
+  // run unless this is true — otherwise records we simply didn't fetch
+  // this run get archived as `deleted_upstream`, which is catastrophic
+  // at scale (see --full-refresh --max-pages data-loss repro).
+  let paginationComplete = false;
 
   // Reset sync_state and release the lock if the process is killed mid-run
   // (SIGINT from Ctrl-C, SIGTERM from a process manager, cron job being
@@ -384,14 +391,18 @@ export async function syncModel(
       const records = extraction.records;
 
       if (records.length === 0 && page === 0) {
-        // Empty results on first page — not an error
+        // Empty results on first page — not an error. Treat as exhausted
+        // so a --full-refresh with no results doesn't trigger reconcile
+        // on a 0-result fetch (reconcile logic already guards on
+        // seenSourceKeys.size > 0, but defence in depth).
         if (!isAgentMode()) {
           process.stderr.write(`No records found for ${model} with the given filters.\n`);
         }
+        paginationComplete = true;
         break;
       }
 
-      if (records.length === 0) break;
+      if (records.length === 0) { paginationComplete = true; break; }
 
       // Dry-run: show first page results and exit
       if (options.dryRun) {
@@ -563,7 +574,7 @@ export async function syncModel(
         status: 'syncing',
       });
 
-      if (!nextParams) break;
+      if (!nextParams) { paginationComplete = true; break; }
 
       // Apply next page params
       currentPageQueryParams = { ...queryParams, ...nextParams.queryParams };
@@ -574,10 +585,25 @@ export async function syncModel(
     }
 
     // --full-refresh: archive records whose source didn't reappear this run.
-    // Only runs if we actually fetched pages (paranoia against wiping data
-    // when the API returned an empty first page due to some transient issue).
+    // Two preconditions — both must hold, or we silently destroy data:
+    //   1. We fetched at least one page (`pagesProcessed > 0`). Guards
+    //      against a transient empty first page wiping the store.
+    //   2. Pagination actually exhausted (`paginationComplete`). If we
+    //      bailed because --max-pages capped the run, or any other early
+    //      exit, the unseen pages haven't been fetched — everything that
+    //      would have lived there looks "deleted upstream" from our POV
+    //      and gets catastrophically archived. Observed: `sync run
+    //      fathom --max-pages 3 --full-refresh` archived 57 valid rows.
     let deletedStale = 0;
-    if (options.fullRefresh && pagesProcessed > 0) {
+    const shouldReconcile =
+      options.fullRefresh && pagesProcessed > 0 && paginationComplete;
+    if (options.fullRefresh && pagesProcessed > 0 && !paginationComplete && !isAgentMode()) {
+      process.stderr.write(
+        `Skipping --full-refresh reconcile: pagination did not complete ` +
+        `(likely --max-pages cap or early exit). Re-run without --max-pages to prune stale rows.\n`
+      );
+    }
+    if (shouldReconcile) {
       // SQLite path — active only when enrich is configured.
       if (db && tableCreated && seenIds.size > 0) {
         const safeTable = sanitizeTableName(model);
@@ -719,8 +745,35 @@ export async function syncModel(
 
     if (db) db.close();
     if (lock) lock.release();
+
+    // Post-sync status snapshot. Surfaces silent damage: if most of the
+    // type is archived, reconcile went wrong somewhere and the user
+    // needs to know without running SQL. Memory-only — the SQLite path
+    // doesn't track archive status.
+    let statusCounts: { active: number; archived: number } | undefined;
+    if (options.toMemory !== false) {
+      try {
+        const backend = await (await import('../runtime.js')).getBackend();
+        const typeName = `${platform}/${model}`;
+        const [active, archived] = await Promise.all([
+          backend.count(typeName, { status: 'active' }),
+          backend.count(typeName, { status: 'archived' }),
+        ]);
+        statusCounts = { active, archived };
+      } catch {
+        // non-fatal — status counts are advisory
+      }
+    }
+
+    const reconcileSkipped =
+      options.fullRefresh === true && pagesProcessed > 0 && !paginationComplete
+        ? true
+        : undefined;
+
     return {
       model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale,
+      ...(reconcileSkipped ? { reconcileSkipped } : {}),
+      ...(statusCounts ? { statusCounts } : {}),
       ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
       ...(profile.enrich ? { enriched: enrichedTotal, enrichSkipped, enrichRateLimited } : {}),
     };
