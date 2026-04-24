@@ -36,11 +36,22 @@ interface MigrateReport {
   rowsSeen: number;
   inserted: number;
   updated: number;
+  /**
+   * Rows that would have been a fresh insert under key-overlap semantics
+   * but were merged into an existing row because their identityKey value
+   * matched. Heals the common "re-migrate after idField fix" case where
+   * old rows have garbage sourceKeys and no identity keys at all.
+   */
+  mergedByIdentity: number;
   skipped: number;
   /** Rows skipped because the idField path resolved to nothing (missing profile, bad path, nested). */
   skippedUnresolvedId: number;
   /** Rows skipped because the upsert threw (key conflict, schema violation, etc). */
   skippedError: number;
+  /** Active count for this type before migrate ran (for doubling detection). */
+  activeBefore?: number;
+  /** Active count for this type after migrate ran. */
+  activeAfter?: number;
 }
 
 export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
@@ -80,12 +91,28 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         const total = countRecords(db, model);
         const rows = db.prepare(`SELECT * FROM "${model}"`).all() as Array<Record<string, unknown>>;
         const report: MigrateReport = {
-          platform, model, rowsSeen: total, inserted: 0, updated: 0, skipped: 0,
-          skippedUnresolvedId: 0, skippedError: 0,
+          platform, model, rowsSeen: total, inserted: 0, updated: 0, mergedByIdentity: 0,
+          skipped: 0, skippedUnresolvedId: 0, skippedError: 0,
         };
         const profile = readProfile(platform, model);
         const idField = profile?.idField;
         const identityKey = profile?.identityKey;
+        const type = `${platform}/${model}`;
+
+        // Pre-migrate active count — for doubling detection post-run.
+        try { report.activeBefore = await backend.count(type, { status: 'active' }); } catch { /* best effort */ }
+
+        // Identity-merge pre-pass. Targets the re-migrate-under-different-
+        // idField case: old rows have garbage sourceKeys (e.g. stringified
+        // JSON blob) and no identity keys in keys[]. A fresh upsertByKeys
+        // with clean sourceKey + identity doesn't overlap any existing
+        // row, so it inserts a duplicate. Pre-building
+        // `identityValue → existingRowId` lets us prepend the existing
+        // row's keys to our new keys array, forcing the upsert's overlap
+        // check to hit the update branch and merge cleanly.
+        //
+        // Non-fatal on failure — migrate falls back to plain key-overlap.
+        const identityMap = await buildIdentityMap(backend, type, identityKey);
 
         for (const row of rows) {
           // Legacy SQLite flattens first-level fields. Nested objects (e.g.
@@ -124,11 +151,23 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           const external = String(externalRaw);
           const sourceKey = `${platform}/${model}:${external}`;
           const keys = [sourceKey];
+          let identityValueNorm: string | null = null;
           if (identityKey) {
             const idValue = getByDotPath(hydrated, identityKey);
             if (idValue !== undefined && idValue !== null && idValue !== '' && typeof idValue !== 'object') {
-              keys.push(`${deriveIdentityPrefix(identityKey)}:${String(idValue).toLowerCase()}`);
+              identityValueNorm = String(idValue).toLowerCase().trim();
+              keys.push(`${deriveIdentityPrefix(identityKey)}:${identityValueNorm}`);
             }
+          }
+          // Identity-merge: if an existing row matched this identity in the
+          // pre-pass, fold in its keys so the upsert's overlap check finds
+          // it. Old garbage sourceKeys stay in the row (harmless — they
+          // deduplicate via the keys-array UNION in the upsert function).
+          let mergeTarget = false;
+          if (identityValueNorm && identityMap.has(identityValueNorm)) {
+            const hit = identityMap.get(identityValueNorm)!;
+            for (const k of hit.keys) keys.push(k);
+            mergeTarget = true;
           }
 
           const data = { ...hydrated };
@@ -137,15 +176,19 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           }
 
           if (flags.dryRun) {
-            if (await keyExists(keys)) report.updated++;
-            else report.inserted++;
+            if (await keyExists(keys)) {
+              if (mergeTarget) report.mergedByIdentity++;
+              else report.updated++;
+            } else {
+              report.inserted++;
+            }
             continue;
           }
 
           try {
             const res = await upsertRecord(
               {
-                type: `${platform}/${model}`,
+                type,
                 data,
                 keys,
                 sources: {
@@ -157,9 +200,15 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
                 tags: ['synced', platform],
                 embed: false,
               },
-              { embed: false },
+              // `replace: true` — legacy .db is the declared source of
+              // truth for the run. Without this, identity-merged rows
+              // keep their garbage stringified-JSON `data` shape from
+              // the pre-fix migrate because the merge would union the
+              // hydrated payload with the stringified one.
+              { embed: false, replace: true },
             );
             if (res.action === 'inserted') report.inserted++;
+            else if (mergeTarget) report.mergedByIdentity++;
             else report.updated++;
           } catch (err) {
             report.skippedError++;
@@ -170,18 +219,40 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
             }
           }
         }
+        // Post-migrate count — pair with activeBefore for doubling detection.
+        try { report.activeAfter = await backend.count(type, { status: 'active' }); } catch { /* best effort */ }
         reports.push(report);
         if (!output.isAgentMode()) {
-          const breakdown =
+          const skipDetail =
             report.skipped > 0
               ? ` skipped (${report.skippedUnresolvedId} unresolved id, ${report.skippedError} errors)`
               : ' skipped';
+          const mergedSuffix =
+            report.mergedByIdentity > 0 ? `, ${report.mergedByIdentity} merged by identity` : '';
           process.stderr.write(
-            `  ${platform}/${model}: ${report.inserted} inserted, ${report.updated} updated, ${report.skipped}${breakdown} (${report.rowsSeen} seen)\n`,
+            `  ${platform}/${model}: ${report.inserted} inserted, ${report.updated} updated${mergedSuffix}, ${report.skipped}${skipDetail} (${report.rowsSeen} seen)\n`,
           );
           if (report.skippedUnresolvedId === report.rowsSeen && report.rowsSeen > 0) {
             process.stderr.write(
               `    ⚠  Every row skipped — profile for ${platform}/${model} is missing or its idField doesn't resolve on legacy rows.\n`,
+            );
+          }
+          // Doubling detection. `inserted + mergedByIdentity` is the max
+          // growth we expect; if the active count grew further than that
+          // minus known merges, duplicates slipped in. Conservative: only
+          // warn when before was non-trivial so fresh migrates don't trip.
+          const before = report.activeBefore ?? 0;
+          const after = report.activeAfter ?? 0;
+          const growth = after - before;
+          const expectedMaxGrowth = report.inserted;
+          if (before > 10 && growth > expectedMaxGrowth + 2) {
+            process.stderr.write(
+              `    ⚠  Memory for ${type} grew from ${before} → ${after} (+${growth}) ` +
+              `but only ${report.inserted} new inserts were logged. ` +
+              `Likely a re-migrate under a different idField created duplicates. ` +
+              `Inspect with:\n` +
+              `      one mem sql "SELECT jsonb_typeof(data->'id') t, COUNT(*) FROM mem_records WHERE type='${type}' GROUP BY 1"\n` +
+              `    Rows where t='string' are the pre-fix cohort and can be dropped.\n`,
             );
           }
         }
@@ -217,12 +288,108 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
     totals: {
       inserted: reports.reduce((a, r) => a + r.inserted, 0),
       updated: reports.reduce((a, r) => a + r.updated, 0),
+      mergedByIdentity: reports.reduce((a, r) => a + r.mergedByIdentity, 0),
       skipped: reports.reduce((a, r) => a + r.skipped, 0),
       skippedUnresolvedId: reports.reduce((a, r) => a + r.skippedUnresolvedId, 0),
       skippedError: reports.reduce((a, r) => a + r.skippedError, 0),
       seen: reports.reduce((a, r) => a + r.rowsSeen, 0),
     },
   });
+}
+
+/**
+ * Build a `normalized-identity-value → {id, keys}` map for every active
+ * row of `type`, by reading the identityKey path out of `data JSONB`.
+ *
+ * This is the merge pre-pass for `mem migrate`. Old rows from a pre-fix
+ * migrate have garbage sourceKeys (e.g. a stringified JSON blob) and NO
+ * identity keys in their `keys[]` array, so a fresh upsert with the new
+ * correct sourceKey + identity key doesn't overlap anything and inserts
+ * a duplicate. With this map, the migrate loop can detect the identity
+ * match and fold the existing row's keys into the new keys array,
+ * forcing the upsert's overlap check to hit the update branch.
+ *
+ * Uses a projected jsonb expression (`data->'a'->'b'->>'c'`) so we don't
+ * read the full `data` blob across rows — PGlite's WASM ran into memory
+ * issues reading large JSONB columns at scale.
+ *
+ * Returns an empty map on any failure — migrate falls back to plain
+ * key-overlap.
+ */
+export async function buildIdentityMap(
+  backend: Awaited<ReturnType<typeof getBackend>>,
+  type: string,
+  identityKey: string | undefined,
+): Promise<Map<string, { id: string; keys: string[] }>> {
+  const map = new Map<string, { id: string; keys: string[] }>();
+  if (!identityKey || !backend.capabilities().rawSql || typeof backend.raw !== 'function') {
+    return map;
+  }
+  const jsonbExpr = dotPathToJsonbExpr(identityKey);
+  if (!jsonbExpr) return map;
+  try {
+    const res = await backend.raw(
+      `SELECT id, keys, (${jsonbExpr}) AS ident
+       FROM mem_records
+       WHERE type = $1 AND status = 'active'`,
+      [type],
+    );
+    for (const row of res.rows) {
+      const ident = row.ident;
+      if (ident === null || ident === undefined || typeof ident !== 'string') continue;
+      const norm = ident.toLowerCase().trim();
+      if (!norm) continue;
+      // First write wins — if two existing rows somehow share the same
+      // identity value, merge only into the first and leave the second
+      // as a legitimate duplicate (user problem, not ours to resolve).
+      if (!map.has(norm)) {
+        map.set(norm, {
+          id: String(row.id),
+          keys: Array.isArray(row.keys) ? (row.keys as string[]) : [],
+        });
+      }
+    }
+  } catch {
+    // Swallow — the path expression might not match any row, or the
+    // backend's dialect might disagree. The caller continues without
+    // the merge pre-pass, and re-migrates land duplicates (existing
+    // pre-fix behaviour, no regression).
+  }
+  return map;
+}
+
+/**
+ * Translate our dot-path syntax (values.email_addresses[0].email_address)
+ * to a PG jsonb accessor expression rooted at `data`:
+ *   data->'values'->'email_addresses'->0->>'email_address'
+ *
+ * Validates each segment against /^\w+$/ (a-z, 0-9, underscore) and
+ * returns null if anything looks unsafe — we inline segments into the
+ * SQL, so bad input can't be parameterized. Returning null aborts the
+ * identity pre-pass for that type and migrate continues without it.
+ */
+export function dotPathToJsonbExpr(dotPath: string): string | null {
+  const parts = dotPath.split('.').flatMap(p => {
+    const match = p.match(/^([^[]+)\[(\d+)\]$/);
+    if (match) return [match[1], match[2]];
+    return [p];
+  });
+  if (parts.length === 0) return null;
+  let expr = 'data';
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i];
+    const isLast = i === parts.length - 1;
+    if (/^\d+$/.test(seg)) {
+      // Array index — always -> (object/array navigation), final cast
+      // happens implicitly because we compare the value in JS.
+      expr += (isLast ? '->>' : '->') + seg;
+    } else if (/^\w+$/.test(seg)) {
+      expr += (isLast ? "->>'" : "->'") + seg + "'";
+    } else {
+      return null;
+    }
+  }
+  return expr;
 }
 
 /**
