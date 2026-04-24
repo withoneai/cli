@@ -21,6 +21,16 @@ export interface SearchResult {
 
 export interface SearchResponse {
   results: SearchResult[];
+  /** Number of results returned on this page (== results.length). */
+  returned: number;
+  /**
+   * Honest post-rank total across all searched types. Capped at `limit`
+   * per-type by the backend so a query that matches tens of thousands
+   * will still cap; this number is the real size of the returned set,
+   * not the raw match count. Better approximation than results.length
+   * (which can be smaller after sort-by-rank cap) and usable for
+   * "more results available" hints.
+   */
   total: number;
   searchMode: 'hybrid' | 'fts_only';
 }
@@ -79,11 +89,13 @@ export async function searchSyncedData(
   }
 
   allResults.sort((a, b) => a.rank - b.rank);
+  const totalAcrossTypes = allResults.length;
   const limited = allResults.slice(0, limit);
 
   return {
     results: limited,
-    total: limited.length,
+    returned: limited.length,
+    total: totalAcrossTypes,
     searchMode: queryEmbedding ? 'hybrid' : 'fts_only',
   };
 }

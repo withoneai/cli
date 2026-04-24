@@ -82,6 +82,13 @@ export interface MemBackend {
   archive(id: string, reason?: string): Promise<boolean>;
   unarchive(id: string): Promise<boolean>;
   list(type: string, opts?: ListOptions): Promise<MemRecord[]>;
+  /**
+   * True record count for a type, honoring the same `status` filter as
+   * `list`. Separate from `list(...).length` because that number is
+   * capped by the caller's `limit`. Pagers + agents that rely on
+   * knowing "how many total?" need this to be honest.
+   */
+  count(type: string, opts?: { status?: 'active' | 'archived' | 'all' }): Promise<number>;
 
   // Search
   search(q: string, opts: SearchOptions): Promise<SearchResult[]>;

@@ -102,12 +102,29 @@ interface ListFlags {
 export async function memListCommand(type: string, flags: ListFlags): Promise<void> {
   requireMemoryInit();
   const backend = await getBackend();
-  const records = await backend.list(type, {
-    limit: flags.limit ? parsePositiveInt(flags.limit, 100, 'limit') : undefined,
-    offset: flags.offset ? parsePositiveInt(flags.offset, 0, 'offset') : undefined,
-    status: flags.status,
-  });
-  printList(records);
+  const limit = flags.limit ? parsePositiveInt(flags.limit, 100, 'limit') : 100;
+  const offset = flags.offset ? parsePositiveInt(flags.offset, 0, 'offset') : 0;
+  const status = flags.status ?? 'active';
+  const [records, total] = await Promise.all([
+    backend.list(type, { limit, offset, status }),
+    backend.count(type, { status }),
+  ]);
+
+  // Honest counts: `total` is the backend COUNT(*), `returned` is the
+  // page size. Human/agent callers can tell at a glance whether they
+  // got all of it or just the first page.
+  if (output.isAgentMode()) {
+    output.json({ items: records, returned: records.length, total, limit, offset });
+    return;
+  }
+  if (records.length === 0) {
+    console.log('(no results)');
+  } else {
+    console.log(JSON.stringify(records, null, 2));
+    if (total > records.length) {
+      console.log(`\n${records.length} of ${total} — pass --offset ${offset + limit} to page.`);
+    }
+  }
 }
 
 interface SearchFlags {
@@ -145,9 +162,14 @@ export async function memSearchCommand(query: string, flags: SearchFlags): Promi
   // when semantic search is actually off — no noise otherwise.
   const upgrade = !queryEmbedding ? semanticSearchUpgradeHint() : null;
 
+  // The backend's hybrid search caps at `limit` per run, so `total` ==
+  // `returned` for now. When a more expensive "total matches" becomes
+  // worth surfacing (separate COUNT query), add it under `totalMatches`
+  // — but don't lie about what we have now.
   if (output.isAgentMode()) {
     output.json({
       items: results,
+      returned: results.length,
       total: results.length,
       searchMode: queryEmbedding ? 'hybrid' : 'fts_only',
       ...(upgrade ? { _upgrade: upgrade } : {}),

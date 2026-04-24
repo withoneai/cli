@@ -43,7 +43,18 @@ export interface QueryResult {
   platform: string;
   model: string;
   results: Record<string, unknown>[];
+  /** Number of rows returned on this page (== results.length). */
+  returned: number;
+  /**
+   * Honest total for the filter. For `--where`-filtered queries this is
+   * the count after filtering; for unfiltered queries it's the total
+   * record count for the type. Pagers / progress meters MUST use this
+   * instead of `results.length` — the two diverge past the first page.
+   */
   total: number;
+  /** Total record count for the type before --where filtering applies. */
+  totalRecordsOfType: number;
+  limit: number;
   query: string;
   source: 'local';
   lastSync: string | null;
@@ -105,13 +116,19 @@ export async function executeQuery(
   const backend = await getBackend();
   const type = `${platform}/${model}`;
 
-  const records = await backend.list(type, { limit: SCAN_CAP, status: 'active' });
+  const [records, totalRecordsOfType] = await Promise.all([
+    backend.list(type, { limit: SCAN_CAP, status: 'active' }),
+    backend.count(type, { status: 'active' }),
+  ]);
   if (records.length === 0) {
     return {
       platform,
       model,
       results: [],
+      returned: 0,
       total: 0,
+      totalRecordsOfType,
+      limit: options.limit ?? 50,
       query: `memory.list(type="${type}")`,
       source: 'local',
       lastSync: null,
@@ -148,6 +165,8 @@ export async function executeQuery(
   }
 
   const limit = options.limit ?? 50;
+  // Capture the post-filter total BEFORE truncating to the page.
+  const totalAfterFilters = rows.length;
   rows = rows.slice(0, limit);
 
   const state = await getModelState(platform, model);
@@ -158,7 +177,10 @@ export async function executeQuery(
     platform,
     model,
     results: rows,
-    total: rows.length,
+    returned: rows.length,
+    total: totalAfterFilters,
+    totalRecordsOfType,
+    limit,
     query: `memory.list(type="${type}") + ${options.where ? 'where' : 'no-where'}`,
     source: 'local',
     lastSync,

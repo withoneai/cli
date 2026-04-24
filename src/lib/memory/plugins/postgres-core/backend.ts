@@ -276,6 +276,22 @@ export class CoreBackend implements MemBackend {
     return res.rows.map(toRecord);
   }
 
+  async count(type: string, opts: { status?: 'active' | 'archived' | 'all' } = {}): Promise<number> {
+    const status = opts.status ?? 'active';
+    if (status === 'all') {
+      const res = await this.client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM mem_records WHERE type = $1`,
+        [type],
+      );
+      return Number(res.rows[0]?.count ?? 0);
+    }
+    const res = await this.client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM mem_records WHERE type = $1 AND status = $2`,
+      [type, status],
+    );
+    return Number(res.rows[0]?.count ?? 0);
+  }
+
   // ── Search ───────────────────────────────────────────────────────────
 
   async search(q: string, opts: SearchOptions): Promise<SearchResult[]> {

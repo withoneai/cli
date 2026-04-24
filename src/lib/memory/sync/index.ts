@@ -766,19 +766,33 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
 async function syncListCommand(platform?: string): Promise<void> {
   const profiles = listProfiles(platform);
   const state = await readSyncState();
+  const { getBackend } = await import('../runtime.js');
+  const backend = await getBackend();
 
-  const syncs = profiles.map(p => {
+  // Count records from the memory backend — the post-unified-memory
+  // source of truth. The sync-state `totalRecords` counter lags when
+  // multiple runs race against each other and can't be trusted for
+  // display; `dbSize` on the legacy .db file is worse — it can be
+  // non-zero even when memory holds the real data. Use COUNT(*) + the
+  // on-disk .db size as a "legacy footprint" tell.
+  const syncs = await Promise.all(profiles.map(async p => {
     const modelState = state[p.platform]?.[p.model];
+    const type = `${p.platform}/${p.model}`;
+    const totalRecords = await backend.count(type, { status: 'active' }).catch(() => 0);
+    const legacyDbSize = getDatabaseSize(p.platform);
     return {
       platform: p.platform,
       model: p.model,
       lastSync: modelState?.lastSync ?? null,
-      totalRecords: modelState?.totalRecords ?? 0,
+      totalRecords,
       pagesProcessed: modelState?.pagesProcessed ?? 0,
-      dbSize: getDatabaseSize(p.platform),
+      // Legacy .db footprint — non-zero means there's a stale file worth
+      // running `one mem migrate --cleanup` to remove. Kept distinct
+      // from totalRecords so the dashboard doesn't conflate the two.
+      legacyDbSize,
       status: modelState?.status ?? 'idle',
     };
-  });
+  }));
 
   if (output.isAgentMode()) {
     output.json({ syncs });
@@ -796,12 +810,15 @@ async function syncListCommand(platform?: string): Promise<void> {
       : s.status === 'syncing'
         ? pc.yellow(`syncing — page ${s.pagesProcessed}`)
         : pc.red('failed');
+    const legacy = s.legacyDbSize && s.legacyDbSize !== '0 B'
+      ? pc.yellow(`  legacy .db ${s.legacyDbSize}`)
+      : '';
     console.log(
       `  ${pc.bold(`${s.platform}/${s.model}`.padEnd(35))} ` +
       `${String(s.totalRecords).padStart(8)} records  ` +
-      `${s.dbSize.padStart(10)}  ` +
       `${status}  ` +
-      `${pc.dim(s.lastSync ? `last: ${s.lastSync}` : 'never synced')}`
+      `${pc.dim(s.lastSync ? `last: ${s.lastSync}` : 'never synced')}` +
+      legacy
     );
   }
 }
