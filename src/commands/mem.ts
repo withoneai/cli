@@ -97,9 +97,12 @@ export function registerMemoryCommands(program: Command): void {
     .action(memVacuumCommand);
 
   mem.command('reindex')
-    .description('Re-embed records (optionally under a new embedding model)')
+    .description('Backfill embeddings: re-embed records missing an embedding or under a different model')
+    .option('--type <type>', 'Restrict to one record type, e.g. attio/attioPeople')
     .option('--model <name>', 'Override the embedding model')
-    .option('--batch <n>', 'Batch size', '50')
+    .option('--force', 'Re-embed even rows that already have a matching embedding', false)
+    .option('--batch <n>', 'OpenAI calls per batch (default 50)', '50')
+    .option('--limit <n>', 'Safety cap on total records to scan (default 100000)')
     .action(memReindexCommand);
 
   mem.command('sql <query>')

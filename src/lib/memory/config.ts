@@ -76,13 +76,23 @@ export function memoryConfigExists(): boolean {
   return getMemoryConfig() !== null;
 }
 
-export function updateMemoryConfig(patch: Partial<MemoryConfig>): MemoryConfig {
+export function updateMemoryConfig(
+  patch: Partial<MemoryConfig>,
+  opts: { replace?: boolean } = {},
+): MemoryConfig {
   const config = readConfig();
   if (!config) {
     throw new Error('No One config found. Run `one init` first.');
   }
   const current = (config.memory as MemoryConfig | undefined) ?? DEFAULT_MEMORY_CONFIG;
-  const next: MemoryConfig = { ...current, ...patch };
+  // `replace: true` writes the patch as-is, allowing callers to remove
+  // top-level keys that exist on disk but aren't in the patch (e.g.
+  // `mem config unset embedOnSync` clearing an orphan). Default false
+  // keeps the historical "partial merge over existing" semantics so
+  // one-field updates don't clobber the rest.
+  const next: MemoryConfig = opts.replace
+    ? (patch as MemoryConfig)
+    : { ...current, ...patch };
   (config as Config & { memory?: MemoryConfig }).memory = next;
   writeConfig(config);
   return next;

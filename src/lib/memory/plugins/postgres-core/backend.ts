@@ -294,6 +294,65 @@ export class CoreBackend implements MemBackend {
     return Number(res.rows[0]?.count ?? 0);
   }
 
+  async listForReindex(opts: {
+    type?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<Array<{
+    id: string;
+    type: string;
+    searchable_text: string | null;
+    content_hash: string | null;
+    embedding_model: string | null;
+  }>> {
+    const limit = opts.limit ?? 1000;
+    const offset = opts.offset ?? 0;
+    const params: unknown[] = [];
+    let where = `status = 'active'`;
+    if (opts.type) {
+      params.push(opts.type);
+      where += ` AND type = $${params.length}`;
+    }
+    params.push(limit);
+    params.push(offset);
+    const res = await this.client.query<{
+      id: string;
+      type: string;
+      searchable_text: string | null;
+      content_hash: string | null;
+      embedding_model: string | null;
+    }>(
+      `SELECT id, type, searchable_text, content_hash, embedding_model
+         FROM mem_records
+        WHERE ${where}
+        ORDER BY updated_at DESC
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return res.rows;
+  }
+
+  async updateEmbedding(id: string, vector: number[], model: string): Promise<void> {
+    const literal = vectorLiteral(vector);
+    if (literal === null) return;
+    await this.client.query(
+      `UPDATE mem_records
+          SET embedding = $2::vector,
+              embedding_model = $3,
+              embedded_at = NOW()
+        WHERE id = $1`,
+      [id, literal, model],
+    );
+  }
+
+  async listKeysByType(type: string): Promise<Array<{ id: string; keys: string[] }>> {
+    const res = await this.client.query<{ id: string; keys: string[] }>(
+      `SELECT id, keys FROM mem_records WHERE type = $1 AND status = 'active'`,
+      [type],
+    );
+    return res.rows;
+  }
+
   // ── Search ───────────────────────────────────────────────────────────
 
   async search(q: string, opts: SearchOptions): Promise<SearchResult[]> {

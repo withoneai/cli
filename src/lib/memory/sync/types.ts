@@ -219,6 +219,13 @@ export interface SyncRunOptions {
    * proven on real data. See docs/plans/unified-memory.md §9.
    */
   toMemory?: boolean;
+  /**
+   * Per-run override for `memory.embed`. Wins over the profile flag and
+   * the config default. Used by `sync run --embed` when backfilling
+   * embeddings for data that was first synced with embedOnSync: false —
+   * flip on once without editing the profile. `--no-embed` sets false.
+   */
+  embed?: boolean;
 }
 
 export interface SyncQueryOptions {

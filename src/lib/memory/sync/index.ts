@@ -1161,11 +1161,13 @@ function registerSyncSubcommands(sync: Command): void {
     .option('--dry-run', 'Fetch first page only, show results without persisting')
     .option('--full-refresh', 'Fetch ALL records and delete local rows no longer in the source (handles deletions)')
     .option('--no-memory', 'Skip the unified memory dual-write (default: memory is always written)')
+    .option('--embed', 'Embed synced rows under the configured model, regardless of profile.memory.embed', false)
+    .option('--no-embed', 'Skip embedding even if the profile opts in')
     // Back-compat alias: `--to-memory` was opt-in during the dual-write
     // derisking window. Memory is now the primary target, so the flag is
     // a silent no-op retained so existing scripts keep running.
     .option('--to-memory', '(deprecated — memory is now always written; flag kept for back-compat)')
-    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; memory?: boolean; toMemory?: boolean }) => {
+    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; memory?: boolean; embed?: boolean; toMemory?: boolean }) => {
       await syncRunCommand(platform, {
         models: options.models?.split(',').map(m => m.trim()),
         since: options.since,
@@ -1173,8 +1175,12 @@ function registerSyncSubcommands(sync: Command): void {
         maxPages: options.maxPages ? parseInt(options.maxPages, 10) : undefined,
         dryRun: options.dryRun,
         fullRefresh: options.fullRefresh,
-        // Commander inverts `--no-memory` into options.memory === false.
+        // Commander inverts `--no-memory` / `--no-embed` into options.X === false.
         toMemory: options.memory !== false,
+        // Only override when the flag was actually passed — leaving
+        // options.embed as undefined means "defer to profile + config".
+        // Commander sets `false` for the `--no-embed` case.
+        embed: options.embed === undefined ? undefined : options.embed,
       });
     });
 

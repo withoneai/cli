@@ -472,7 +472,13 @@ export async function syncModel(
           const report = await writePageToMemory(
             profile,
             records as Record<string, unknown>[],
-            { capturePerAction: hasHooks && !db },
+            {
+              capturePerAction: hasHooks && !db,
+              // --embed / --no-embed on `sync run` threads through as a
+              // per-run override so you can backfill embeddings on a
+              // first-synced-without-embed platform in one shot.
+              embedOverride: options.embed,
+            },
           );
           pageReport = report;
           for (const key of report.sourceKeysSeen) seenSourceKeys.add(key);
@@ -599,10 +605,17 @@ export async function syncModel(
       // Memory path — archive records whose source key didn't reappear.
       // Runs in addition to the SQL path for enrich profiles so both stores
       // stay in sync; it's the only path for non-enrich profiles.
+      //
+      // Uses the lean `listKeysByType` scan which pulls ONLY `id, keys[]`
+      // (no JSONB `data`, no searchable_text, no embedding). At Attio-
+      // companies scale (~2k rows × ~8KB data) the old full-row scan
+      // triggered "memory access out of bounds" in PGlite WASM when the
+      // per-row `data` buffer got concatenated through the driver —
+      // reconciliation never needs `data`, so skip it.
       if (options.toMemory !== false && seenSourceKeys.size > 0) {
         const backend = await (await import('../runtime.js')).getBackend();
         const type = `${platform}/${model}`;
-        const existing = await backend.list(type, { limit: 100_000, status: 'active' });
+        const existing = await backend.listKeysByType(type);
         const sourcePrefix = `${type}:`;
         let archived = 0;
         for (const rec of existing) {

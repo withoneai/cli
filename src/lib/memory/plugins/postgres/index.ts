@@ -132,6 +132,9 @@ class LazyPostgresBackend implements MemBackend {
   async unarchive(...a: Parameters<MemBackend['unarchive']>): ReturnType<MemBackend['unarchive']> { return (await this.ensure()).unarchive(...a); }
   async list(...a: Parameters<MemBackend['list']>): ReturnType<MemBackend['list']> { return (await this.ensure()).list(...a); }
   async count(...a: Parameters<MemBackend['count']>): ReturnType<MemBackend['count']> { return (await this.ensure()).count(...a); }
+  async listForReindex(...a: Parameters<MemBackend['listForReindex']>): ReturnType<MemBackend['listForReindex']> { return (await this.ensure()).listForReindex(...a); }
+  async listKeysByType(...a: Parameters<MemBackend['listKeysByType']>): ReturnType<MemBackend['listKeysByType']> { return (await this.ensure()).listKeysByType(...a); }
+  async updateEmbedding(...a: Parameters<MemBackend['updateEmbedding']>): ReturnType<MemBackend['updateEmbedding']> { return (await this.ensure()).updateEmbedding(...a); }
   async raw(sql: string, params?: unknown[]): ReturnType<NonNullable<MemBackend['raw']>> {
     const b = await this.ensure();
     if (!b.raw) throw new Error('Backend does not support raw SQL');

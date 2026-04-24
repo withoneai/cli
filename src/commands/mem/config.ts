@@ -27,6 +27,61 @@ const SECRET_PATHS = new Set([
  */
 const EMBEDDING_API_KEY_PATH = 'embedding.apiKey';
 
+/**
+ * Dot-paths accepted by `mem config set`. Unknown paths are rejected
+ * with a hint pointing at the closest match — stops silent typos like
+ * `mem config set embedOnSync true` (missing the `defaults.` prefix)
+ * from writing a top-level key that nothing ever reads.
+ */
+const KNOWN_KEYS: readonly string[] = [
+  'backend',
+  'plugins',
+  'embedding.provider',
+  'embedding.apiKey', // redirected to config.openaiApiKey
+  'embedding.model',
+  'embedding.dimensions',
+  'defaults.trackAccessOnSearch',
+  'defaults.embedOnAdd',
+  'defaults.embedOnSync',
+  'pglite.dbPath',
+  'postgres.connectionString',
+];
+
+function suggestKey(bad: string): string | null {
+  // Tiny Levenshtein for the 11-key surface.
+  const distance = (a: string, b: string): number => {
+    const m = a.length, n = b.length;
+    if (!m || !n) return m || n;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        dp[i][j] = a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      }
+    }
+    return dp[m][n];
+  };
+  let best: { key: string; d: number } | null = null;
+  for (const k of KNOWN_KEYS) {
+    const d = distance(bad.toLowerCase(), k.toLowerCase());
+    if (!best || d < best.d) best = { key: k, d };
+  }
+  return best && best.d <= Math.max(3, Math.floor(bad.length / 3)) ? best.key : null;
+}
+
+function assertKnownSetKey(key: string): void {
+  if (KNOWN_KEYS.includes(key)) return;
+  const suggestion = suggestKey(key);
+  const lines = [
+    `Unknown config key "${key}". Known keys: ${KNOWN_KEYS.join(', ')}.`,
+  ];
+  if (suggestion) lines.push(`Did you mean \`${suggestion}\`?`);
+  output.error(lines.join(' '));
+}
+
 interface ConfigFlags {
   showSecrets?: boolean;
 }
@@ -60,6 +115,11 @@ export async function memConfigCommand(
   if (act === 'set') {
     if (!key) output.error('`set` requires a key (e.g. embedding.provider)');
     if (value === undefined) output.error('`set` requires a value');
+
+    // Reject typos before they land as orphan top-level fields no code
+    // will ever read (the previous behaviour silently wrote
+    // `embedOnSync: true` when the user meant `defaults.embedOnSync`).
+    assertKnownSetKey(key!);
 
     // `embedding.apiKey` is not stored in the memory block — it's a
     // top-level credential alongside config.apiKey. Redirect the write
@@ -95,6 +155,12 @@ export async function memConfigCommand(
 
   if (act === 'unset') {
     if (!key) output.error('`unset` requires a key');
+    // NOTE: unset does NOT reject unknown keys. The whole reason this
+    // command exists for stray keys is to clear orphans written by
+    // earlier buggy set paths (the pre-validation `mem config set
+    // embedOnSync true` that wrote a no-op top-level field). Blocking
+    // them here would make the garbage impossible to remove without
+    // editing ~/.one/config.json by hand.
 
     if (key === EMBEDDING_API_KEY_PATH) {
       // Clear from both locations so there's one clean state to observe.
@@ -116,7 +182,10 @@ export async function memConfigCommand(
 
     const current = getMemoryConfigOrDefault();
     const next = unsetPath({ ...current } as unknown as Record<string, unknown>, key);
-    const updated = updateMemoryConfig(next as unknown as Partial<MemoryConfig>);
+    // `replace: true` — persist exactly what `unsetPath` returned. The
+    // default merge semantics would re-add the deleted key from the
+    // on-disk copy, making unset a no-op for orphans.
+    const updated = updateMemoryConfig(next as unknown as Partial<MemoryConfig>, { replace: true });
     if (output.isAgentMode()) {
       output.json({ status: 'ok', updated: redactSecrets(projectEmbeddingApiKey(updated)) });
     } else {

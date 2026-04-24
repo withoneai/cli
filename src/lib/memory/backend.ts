@@ -136,6 +136,47 @@ export interface MemBackend {
    */
   raw?(sql: string, params?: unknown[]): Promise<RawSqlResult>;
 
+  /**
+   * Lean reindex scan — returns ONLY the columns needed to decide
+   * whether a row needs re-embedding, skipping the JSONB `data` buffer
+   * entirely. Critical on PGlite where reading a large `data` column
+   * at scale has hit WASM memory-access corruption; keep this path
+   * narrow so the rows-to-reindex pass can handle tens of thousands
+   * of rows without crashing.
+   *
+   * Caller filters rows where `content_hash` has changed or
+   * `embedding_model` doesn't match the configured model.
+   */
+  listForReindex(opts?: {
+    type?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<Array<{
+    id: string;
+    type: string;
+    searchable_text: string | null;
+    content_hash: string | null;
+    embedding_model: string | null;
+  }>>;
+
+  /**
+   * Lean reconcile scan — returns `{id, keys[]}` for every active
+   * record of `type`. Used by `--full-refresh` to compute the set of
+   * rows whose source didn't appear this run and archive them. Does
+   * NOT read `data` / `searchable_text` / `embedding`; the whole point
+   * is staying narrow enough to avoid the PGlite WASM readback issue
+   * that blows up on large per-row JSONB.
+   */
+  listKeysByType(type: string): Promise<Array<{ id: string; keys: string[] }>>;
+
+  /**
+   * Update ONLY the embedding + embedding_model + embedded_at columns
+   * on a single record. Separate from `update()` because the reindex
+   * path doesn't need (or want) to round-trip the full JSONB `data`
+   * buffer that `update` requires.
+   */
+  updateEmbedding(id: string, vector: number[], model: string): Promise<void>;
+
   // Hot columns (profile-driven partial expression indexes)
   ensureHotColumn(type: string, jsonPath: string): Promise<void>;
   dropHotColumn(type: string, jsonPath: string): Promise<void>;

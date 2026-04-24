@@ -154,7 +154,7 @@ export function getSearchablePaths(profile: SyncProfile): string[] | undefined {
 export async function writePageToMemory(
   profile: SyncProfile,
   records: Array<Record<string, unknown>>,
-  opts: { capturePerAction?: boolean } = {},
+  opts: { capturePerAction?: boolean; embedOverride?: boolean } = {},
 ): Promise<MemWriteReport> {
   const report: MemWriteReport = {
     attempted: 0,
@@ -167,7 +167,11 @@ export async function writePageToMemory(
   };
   const type = `${profile.platform}/${profile.model}`;
   const identityKey = profile.identityKey;
-  const embedFlag = deriveEmbedFlag(profile);
+  // `--embed` on `sync run` wins over the profile's memory.embed flag.
+  // Lets users flip on embeddings for one run (e.g. backfilling after
+  // a first sync done with embedOnSync: false) without editing the
+  // profile. No override → profile's choice → config default.
+  const embedFlag = opts.embedOverride ?? deriveEmbedFlag(profile);
   const searchablePaths = getSearchablePaths(profile);
 
   for (const record of records) {
