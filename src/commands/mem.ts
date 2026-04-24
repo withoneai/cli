@@ -32,6 +32,7 @@ import { memDoctorCommand } from './mem/doctor.js';
 import { memExportCommand, memImportCommand } from './mem/export.js';
 import { memMigrateCommand } from './mem/migrate.js';
 import { memVacuumCommand, memReindexCommand } from './mem/admin.js';
+import { memSqlCommand } from './mem/sql.js';
 
 function memStatusCommand(): void {
   const cfg = getMemoryConfig();
@@ -100,6 +101,10 @@ export function registerMemoryCommands(program: Command): void {
     .option('--model <name>', 'Override the embedding model')
     .option('--batch <n>', 'Batch size', '50')
     .action(memReindexCommand);
+
+  mem.command('sql <query>')
+    .description('Run a read-only SELECT / WITH / EXPLAIN against the memory store')
+    .action(memSqlCommand);
 
   // Records
   mem.command('add <type> <data>')

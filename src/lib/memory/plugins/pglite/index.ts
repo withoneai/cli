@@ -33,6 +33,7 @@ const CAPABILITIES: BackendCapabilities = {
   triggers: true,
   concurrentWriters: false,
   maxVectorDims: 2000,
+  rawSql: true,
 };
 
 function defaultDbPath(): string {
@@ -161,6 +162,11 @@ class LazyPgliteBackend implements MemBackend {
   async unarchive(...a: Parameters<MemBackend['unarchive']>): ReturnType<MemBackend['unarchive']> { return (await this.ensure()).unarchive(...a); }
   async list(...a: Parameters<MemBackend['list']>): ReturnType<MemBackend['list']> { return (await this.ensure()).list(...a); }
   async count(...a: Parameters<MemBackend['count']>): ReturnType<MemBackend['count']> { return (await this.ensure()).count(...a); }
+  async raw(sql: string, params?: unknown[]): ReturnType<NonNullable<MemBackend['raw']>> {
+    const b = await this.ensure();
+    if (!b.raw) throw new Error('Backend does not support raw SQL');
+    return b.raw(sql, params);
+  }
 
   async search(...a: Parameters<MemBackend['search']>): ReturnType<MemBackend['search']> { return (await this.ensure()).search(...a); }
   async context(...a: Parameters<MemBackend['context']>): ReturnType<MemBackend['context']> { return (await this.ensure()).context(...a); }

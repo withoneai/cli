@@ -11,7 +11,7 @@ import { loadBuiltinProfile, listBuiltinProfiles } from './builtin-profiles.js';
 import { addSchedule, listSchedules, removeSchedule, scheduleStatus, repairSchedule } from './schedule.js';
 import { parseCondition, splitConditions } from './where-parser.js';
 import { readSyncState, removeModelState, getModelState } from './state.js';
-import { executeQuery, executeRawSql } from './query.js';
+import { executeQuery } from './query.js';
 import { searchSyncedData } from './search.js';
 import { extractSearchableFromPaths, getSearchablePaths } from './mem-writer.js';
 import { defaultSearchableText } from '../embedding.js';
@@ -650,20 +650,14 @@ async function syncSearchCommand(query: string, options: { platform?: string; mo
 }
 
 // ── sync sql ──
+//
+// Delegates to the shared mem SQL surface via the platform/model-aware
+// helper in src/commands/mem/sql.ts. Read-only SELECT / WITH / EXPLAIN;
+// DDL / DML / session-control rejected by the backend's guard.
 
-async function syncSqlCommand(platform: string, sql: string): Promise<void> {
-  try {
-    const result = await executeRawSql(platform, sql);
-    if (output.isAgentMode()) {
-      output.json({ platform, ...result, total: result.results.length });
-      return;
-    }
-
-    console.log(JSON.stringify(result.results, null, 2));
-    console.log(`\n${result.results.length} rows`);
-  } catch (err) {
-    output.error(`SQL error: ${err instanceof Error ? err.message : String(err)}`);
-  }
+async function syncSqlCommand(platformModel: string, sql: string): Promise<void> {
+  const { syncSqlCommand: runSyncSql } = await import('../../../commands/mem/sql.js');
+  await runSyncSql(platformModel, sql);
 }
 
 // ── sync delete ──
@@ -1164,10 +1158,10 @@ function registerSyncSubcommands(sync: Command): void {
     });
 
   sync
-    .command('sql <platform> <sql>')
-    .description('Execute raw SQL against local sync database (SELECT only)')
-    .action(async (platform: string, sql: string) => {
-      await syncSqlCommand(platform, sql);
+    .command('sql <platform/model> <sql>')
+    .description('Run a read-only SELECT / WITH / EXPLAIN against the memory store (type-scoped helper)')
+    .action(async (platformModel: string, sql: string) => {
+      await syncSqlCommand(platformModel, sql);
     });
 
   sync

@@ -44,6 +44,18 @@ export interface BackendCapabilities {
   concurrentWriters: boolean;
   /** Max embedding dimensions supported (or null for unbounded). */
   maxVectorDims: number | null;
+  /**
+   * Supports raw read-only SQL via `backend.raw(sql, params?)`. First-
+   * party SQL backends (pglite, postgres) advertise true; third-party
+   * plugins that only expose high-level methods set this false.
+   */
+  rawSql: boolean;
+}
+
+export interface RawSqlResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
 }
 
 // ─── Backend ────────────────────────────────────────────────────────────────
@@ -115,6 +127,14 @@ export interface MemBackend {
    * drops every row for that platform. Used by `sync remove`.
    */
   removeSyncState(platform: string, model?: string): Promise<void>;
+
+  /**
+   * Execute a read-only SQL query. Only present when `capabilities().
+   * rawSql === true`. Backends MUST validate that the query is read-only
+   * before executing (SELECT / WITH / EXPLAIN only; no DDL/DML). The
+   * `one mem sql` / `one sync sql` commands go through this method.
+   */
+  raw?(sql: string, params?: unknown[]): Promise<RawSqlResult>;
 
   // Hot columns (profile-driven partial expression indexes)
   ensureHotColumn(type: string, jsonPath: string): Promise<void>;

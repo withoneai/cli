@@ -15,7 +15,9 @@ import type {
   BackendCapabilities,
   UpsertResult,
   UpsertOptions,
+  RawSqlResult,
 } from '../../backend.js';
+import { validateReadOnlySql } from './sql-guard.js';
 import type {
   MemRecord,
   MemRecordWithLinks,
@@ -507,6 +509,27 @@ export class CoreBackend implements MemBackend {
     } else {
       await this.client.query(`DELETE FROM mem_sync_state WHERE platform = $1`, [platform]);
     }
+  }
+
+  // ── Raw read-only SQL ───────────────────────────────────────────────
+  //
+  // Exposed to users via `one mem sql` and `one sync sql` so they can run
+  // joins / aggregates / JSONB paths that the high-level helpers can't.
+  // The guard rejects anything that isn't SELECT / WITH / EXPLAIN before
+  // the query reaches the client.
+
+  async raw(sql: string, params?: unknown[]): Promise<RawSqlResult> {
+    validateReadOnlySql(sql);
+    const res = await this.client.query<Record<string, unknown>>(sql, params ?? []);
+    // `columns` is the insertion order of the first row's keys. Good
+    // enough for display; pg drivers don't surface a universal metadata
+    // shape and we don't want to force one on third-party plugins.
+    const columns = res.rows.length > 0 ? Object.keys(res.rows[0]) : [];
+    return {
+      columns,
+      rows: res.rows,
+      rowCount: res.rows.length,
+    };
   }
 
   // ── Hot columns ──────────────────────────────────────────────────────
