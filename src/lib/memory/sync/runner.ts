@@ -612,18 +612,41 @@ export async function syncModel(
       // triggered "memory access out of bounds" in PGlite WASM when the
       // per-row `data` buffer got concatenated through the driver —
       // reconciliation never needs `data`, so skip it.
-      if (options.toMemory !== false && seenSourceKeys.size > 0) {
+      //
+      // Two archive criteria:
+      //   1. The row's source key doesn't appear in this run's
+      //      seenSourceKeys — the canonical "not returned by the API"
+      //      case.
+      //   2. The row has NO key starting with the `<type>:` prefix at
+      //      all — catches orphans written by earlier buggy versions
+      //      (e.g. the pre-fix Attio record whose key was
+      //      `attio/attioCompanies:[object Object]` — which actually
+      //      DOES start with the prefix, so it's covered by #1 too —
+      //      but also catches rows where the sources JSON was populated
+      //      but keys[] wasn't for whatever reason).
+      if (options.toMemory !== false) {
         const backend = await (await import('../runtime.js')).getBackend();
         const type = `${platform}/${model}`;
         const existing = await backend.listKeysByType(type);
         const sourcePrefix = `${type}:`;
         let archived = 0;
         for (const rec of existing) {
-          const sourceKey = (rec.keys ?? []).find(k => k.startsWith(sourcePrefix));
-          if (!sourceKey) continue;
-          if (seenSourceKeys.has(sourceKey)) continue;
-          await backend.archive(rec.id, 'deleted_upstream');
-          archived++;
+          const typeKeys = (rec.keys ?? []).filter(k => k.startsWith(sourcePrefix));
+          // Row has no source key for this type → orphan; archive.
+          if (typeKeys.length === 0) {
+            await backend.archive(rec.id, 'deleted_upstream');
+            archived++;
+            continue;
+          }
+          // Row's source key wasn't seen this run → stale upstream.
+          // Only triggers when we actually saw some keys (guard against
+          // mass-archiving on a 0-result fetch that shouldn't have
+          // happened in the first place).
+          if (seenSourceKeys.size === 0) continue;
+          if (typeKeys.every(k => !seenSourceKeys.has(k))) {
+            await backend.archive(rec.id, 'deleted_upstream');
+            archived++;
+          }
         }
         // Without SQLite, the archive count is the deletedStale figure.
         if (!db) deletedStale = archived;

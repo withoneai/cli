@@ -137,18 +137,26 @@ export interface MemBackend {
   raw?(sql: string, params?: unknown[]): Promise<RawSqlResult>;
 
   /**
-   * Lean reindex scan — returns ONLY the columns needed to decide
-   * whether a row needs re-embedding, skipping the JSONB `data` buffer
-   * entirely. Critical on PGlite where reading a large `data` column
-   * at scale has hit WASM memory-access corruption; keep this path
-   * narrow so the rows-to-reindex pass can handle tens of thousands
-   * of rows without crashing.
+   * Lean reindex scan — returns rows that NEED embedding work, ordered
+   * so NULL-embedded rows come first. Skips the JSONB `data` buffer
+   * entirely (only id / type / searchable_text / content_hash /
+   * embedding_model are pulled), critical on PGlite where reading a
+   * large `data` column at scale has hit WASM memory-access corruption.
    *
-   * Caller filters rows where `content_hash` has changed or
-   * `embedding_model` doesn't match the configured model.
+   * Filter semantics — rows are returned when, in order:
+   *   - `searchable_text` is not null (nothing to embed)
+   *   - `embedded_at` is null (never embedded) OR
+   *     `embedding_model` is not `targetEmbeddingModel` (wrong model)
+   * Unless `includeAlreadyEmbedded: true` (the `--force` path).
+   *
+   * Order: NULL embeddings first by `id` ascending, then model-
+   * mismatched rows. Deterministic so paginated runs don't re-see
+   * the same rows after each batch bumps their `updated_at`.
    */
   listForReindex(opts?: {
     type?: string;
+    targetEmbeddingModel?: string;
+    includeAlreadyEmbedded?: boolean;
     limit?: number;
     offset?: number;
   }): Promise<Array<{

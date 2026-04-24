@@ -62,33 +62,41 @@ export async function memReindexCommand(flags: ReindexFlags): Promise<void> {
   let reembedded = 0;
   let skipped = 0;
   let considered = 0;
-  let offset = 0;
+  // Target model as the backend stores it (prefix + name). Used to
+  // filter rows whose embedding_model doesn't match.
+  const targetFullModel = `openai:${targetModel}`;
+
+  // Fixed page size for the scan — large enough to amortize the
+  // embedding-generation cost against the SQL round-trip, small enough
+  // that a partial run reports reasonable progress. The per-batch
+  // OpenAI batching is separate (controlled by --batch).
+  const PAGE = 500;
 
   while (considered < totalCap) {
-    const pageSize = Math.min(batchSize * 4, totalCap - considered);
+    const remaining = totalCap - considered;
+    const pageSize = Math.min(PAGE, remaining);
     const rows = await backend.listForReindex({
       type: flags.type,
+      targetEmbeddingModel: targetFullModel,
+      includeAlreadyEmbedded: !!flags.force,
       limit: pageSize,
-      offset,
+      // Offset stays at 0: the SQL filter only returns rows that STILL
+      // need work, and each batch advances the pointer by embedding
+      // them (they drop out of the next page's result naturally).
+      // Paging with offset against a moving target would miss rows.
+      offset: 0,
     });
     if (rows.length === 0) break;
     considered += rows.length;
-    offset += rows.length;
 
-    // Filter to rows that need work: no embedding OR wrong model OR --force.
-    const candidates = rows.filter(r => {
-      if (!r.searchable_text) return false;
-      if (flags.force) return true;
-      if (!r.embedding_model) return true;
-      if (r.embedding_model !== `openai:${targetModel}`) return true;
-      return false;
-    });
-
-    // Batch the OpenAI calls to stay under rate limits / latency caps.
-    for (let i = 0; i < candidates.length; i += batchSize) {
-      const batch = candidates.slice(i, i + batchSize);
+    // Batch OpenAI calls to stay under rate limits. Sequential across
+    // batches so a rate-limit on one doesn't fan out concurrently to
+    // the next.
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
       await Promise.all(batch.map(async r => {
-        const res = await embed(r.searchable_text as string, { model: targetModel });
+        if (!r.searchable_text) { skipped++; return; }
+        const res = await embed(r.searchable_text, { model: targetModel });
         if (!res) { skipped++; return; }
         await backend.updateEmbedding(r.id, res.vector, res.model);
         reembedded++;
@@ -97,9 +105,6 @@ export async function memReindexCommand(flags: ReindexFlags): Promise<void> {
         process.stderr.write(`  re-embedded ${reembedded} / considered ${considered}\r`);
       }
     }
-
-    // Rows we looked at but didn't need work — count them for reporting.
-    skipped += rows.length - candidates.length;
   }
 
   if (!output.isAgentMode()) {

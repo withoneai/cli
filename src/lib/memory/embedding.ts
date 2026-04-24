@@ -8,6 +8,21 @@
 
 import { getEmbeddingApiKey, getMemoryConfigOrDefault } from './config.js';
 
+/**
+ * Per-request timeout for the OpenAI embeddings call. `fetch()` has no
+ * default timeout; when OpenAI (or something in between) accepts the TCP
+ * connection but never responds, the call hangs indefinitely and
+ * deadlocks the whole reindex/sync-with-embed run. 30s is comfortably
+ * above p99 for the embeddings endpoint.
+ */
+const FETCH_TIMEOUT_MS = 30_000;
+
+function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
 export interface EmbedOptions {
   /** Override the model from config (e.g. reindex under a new model). */
   model?: string;
@@ -37,7 +52,7 @@ export async function embed(text: string, opts: EmbedOptions = {}): Promise<Embe
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch('https://api.openai.com/v1/embeddings', {
+      const res = await fetchWithTimeout('https://api.openai.com/v1/embeddings', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -48,7 +63,7 @@ export async function embed(text: string, opts: EmbedOptions = {}): Promise<Embe
           input: clean.slice(0, 8000),
           dimensions,
         }),
-      });
+      }, FETCH_TIMEOUT_MS);
 
       if (!res.ok) {
         if (res.status === 429 || res.status >= 500) {
@@ -105,7 +120,7 @@ export async function embedBatch(texts: string[], opts: EmbedOptions = {}): Prom
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch('https://api.openai.com/v1/embeddings', {
+      const res = await fetchWithTimeout('https://api.openai.com/v1/embeddings', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -116,7 +131,7 @@ export async function embedBatch(texts: string[], opts: EmbedOptions = {}): Prom
           input: active.map(a => a.input),
           dimensions,
         }),
-      });
+      }, FETCH_TIMEOUT_MS);
       if (!res.ok) {
         if (res.status === 429 || res.status >= 500) {
           await sleep(500 * (attempt + 1));

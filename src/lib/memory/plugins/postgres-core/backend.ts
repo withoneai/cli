@@ -296,6 +296,8 @@ export class CoreBackend implements MemBackend {
 
   async listForReindex(opts: {
     type?: string;
+    targetEmbeddingModel?: string;
+    includeAlreadyEmbedded?: boolean;
     limit?: number;
     offset?: number;
   } = {}): Promise<Array<{
@@ -308,13 +310,42 @@ export class CoreBackend implements MemBackend {
     const limit = opts.limit ?? 1000;
     const offset = opts.offset ?? 0;
     const params: unknown[] = [];
-    let where = `status = 'active'`;
+    // Exclude empty searchable_text explicitly — not just NULL. Synced
+    // rows can land with an empty string when memory.searchable paths
+    // resolve to nothing (e.g. an Attio contact with no name / title /
+    // description / email) and an empty string is an OpenAI-rejectable
+    // input, so the loop would pull the same rows every iteration
+    // forever. Exclude them from consideration, full stop.
+    const clauses: string[] = [
+      `status = 'active'`,
+      `searchable_text IS NOT NULL`,
+      `searchable_text <> ''`,
+    ];
+
     if (opts.type) {
       params.push(opts.type);
-      where += ` AND type = $${params.length}`;
+      clauses.push(`type = $${params.length}`);
     }
+
+    // Without `includeAlreadyEmbedded`, filter at the SQL layer so the
+    // loop doesn't spin on already-done rows. The old code ordered by
+    // updated_at DESC, which sorted the *most recently embedded* rows
+    // to the top — backfill saw only skips and terminated early.
+    if (!opts.includeAlreadyEmbedded) {
+      if (opts.targetEmbeddingModel) {
+        params.push(opts.targetEmbeddingModel);
+        clauses.push(`(embedded_at IS NULL OR embedding_model IS DISTINCT FROM $${params.length})`);
+      } else {
+        clauses.push(`embedded_at IS NULL`);
+      }
+    }
+
     params.push(limit);
     params.push(offset);
+    // Deterministic order — NULL embeddings first so the earliest-
+    // needed rows drain first; model-mismatch rows follow. Using `id`
+    // as the secondary sort keeps pagination stable even when many
+    // rows share the same embedded_at timestamp (e.g. a batch update).
     const res = await this.client.query<{
       id: string;
       type: string;
@@ -324,8 +355,8 @@ export class CoreBackend implements MemBackend {
     }>(
       `SELECT id, type, searchable_text, content_hash, embedding_model
          FROM mem_records
-        WHERE ${where}
-        ORDER BY updated_at DESC
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY embedded_at ASC NULLS FIRST, id ASC
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
