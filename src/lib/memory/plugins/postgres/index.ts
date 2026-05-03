@@ -157,6 +157,7 @@ class LazyPostgresBackend implements MemBackend {
   async getSyncState(...a: Parameters<MemBackend['getSyncState']>): ReturnType<MemBackend['getSyncState']> { return (await this.ensure()).getSyncState(...a); }
   async setSyncState(...a: Parameters<MemBackend['setSyncState']>): ReturnType<MemBackend['setSyncState']> { return (await this.ensure()).setSyncState(...a); }
   async listSyncStates(): ReturnType<MemBackend['listSyncStates']> { return (await this.ensure()).listSyncStates(); }
+  async removeSyncState(...a: Parameters<MemBackend['removeSyncState']>): ReturnType<MemBackend['removeSyncState']> { return (await this.ensure()).removeSyncState(...a); }
 
   async ensureHotColumn(...a: Parameters<MemBackend['ensureHotColumn']>): ReturnType<MemBackend['ensureHotColumn']> { return (await this.ensure()).ensureHotColumn(...a); }
   async dropHotColumn(...a: Parameters<MemBackend['dropHotColumn']>): ReturnType<MemBackend['dropHotColumn']> { return (await this.ensure()).dropHotColumn(...a); }

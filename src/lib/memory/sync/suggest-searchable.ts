@@ -138,7 +138,8 @@ function walkRecord(
   // so the agent CAN pick them, but penalize their score later.
   if (typeof record === 'number' || typeof record === 'boolean') {
     const str = String(record);
-    if (str) recordSample(stats, path, str, typeof record, recordIndex, totalSamples);
+    const kind: 'number' | 'boolean' = typeof record === 'number' ? 'number' : 'boolean';
+    if (str) recordSample(stats, path, str, kind, recordIndex, totalSamples);
     return;
   }
 
