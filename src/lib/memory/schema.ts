@@ -14,11 +14,23 @@
 
 export const SCHEMA_VERSION = '2.0.0';
 
-// `vector` is loaded by the backend when `vectorSearch` is true.
 // `pg_trgm` was in the original mem schema but nothing in the unified query
-// layer uses it; dropped to keep PGlite happy out of the box. Can be added
-// back via an optional extension hook if fuzzy-match search lands.
-export const EXTENSIONS_SQL = `
+// layer uses it; dropped to keep optional-extension backends happy. Can be
+// added back via an optional extension hook if fuzzy-match search lands.
+//
+// EXTENSIONS_SQL is intentionally empty — the only required extension is
+// pgvector, and it's gated by `caps.vectorSearch` (see VECTOR_EXTENSION_SQL).
+// Backends without pgvector apply the schema cleanly; semantic search and the
+// embedding column are added separately when the capability is on.
+export const EXTENSIONS_SQL = ``;
+
+/**
+ * Loaded after EXTENSIONS_SQL, only when `caps.vectorSearch` is true.
+ * pgserve auto-installs vector on every database when configured with
+ * `pgvector: true`, but we keep the explicit CREATE for backends where
+ * the extension is available-but-not-yet-loaded.
+ */
+export const VECTOR_EXTENSION_SQL = `
 CREATE EXTENSION IF NOT EXISTS vector;
 `;
 
@@ -35,9 +47,6 @@ CREATE TABLE IF NOT EXISTS mem_records (
 
     searchable_text TEXT,
     searchable tsvector GENERATED ALWAYS AS (to_tsvector('english', COALESCE(searchable_text, ''))) STORED,
-    embedding vector(1536),
-    embedded_at TIMESTAMPTZ,
-    embedding_model TEXT,
 
     content_hash TEXT,
 
@@ -81,6 +90,20 @@ CREATE TABLE IF NOT EXISTS mem_meta (
     value TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+`;
+
+/**
+ * Add embedding columns to mem_records. Only applied when
+ * `caps.vectorSearch` is true — backends without pgvector get an
+ * embedding-column-free schema and skip the semantic codepaths in
+ * CoreBackend (see line ~397: `caps.vectorSearch && embedding !== null`).
+ *
+ * `IF NOT EXISTS` makes this safe to re-apply on every boot.
+ */
+export const VECTOR_COLUMNS_SQL = `
+ALTER TABLE mem_records ADD COLUMN IF NOT EXISTS embedding vector(1536);
+ALTER TABLE mem_records ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+ALTER TABLE mem_records ADD COLUMN IF NOT EXISTS embedding_model TEXT;
 `;
 
 export const INDEXES_SQL = `
@@ -207,6 +230,15 @@ $$;
 -- if the upsert finds an archived row, the source re-surfaced it, so flip
 -- status back to 'active' and clear archived_reason. Without this, rows
 -- archived by a buggy reconcile would stay dead until manually un-archived.
+-- Core (no-vector) variant of mem_upsert_by_keys. p_embedding and
+-- p_embedding_model are accepted for source compatibility with the
+-- vector variant but are ignored — the embedding column doesn't exist
+-- in this schema. The vector variant (VECTOR_FUNCTIONS_SQL) overrides
+-- this with CREATE OR REPLACE when caps.vectorSearch is true.
+--
+-- p_embedding is TEXT (not vector(1536)) so this function compiles on
+-- backends without pgvector loaded. The vector variant uses the same
+-- TEXT signature and casts to vector inside the body.
 CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_type TEXT,
     p_data JSONB,
@@ -216,7 +248,7 @@ CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_searchable_text TEXT,
     p_content_hash TEXT,
     p_weight INTEGER DEFAULT NULL,
-    p_embedding vector(1536) DEFAULT NULL,
+    p_embedding TEXT DEFAULT NULL,
     p_embedding_model TEXT DEFAULT NULL,
     p_replace BOOLEAN DEFAULT FALSE
 ) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
@@ -239,8 +271,80 @@ BEGIN
             searchable_text = COALESCE(p_searchable_text, r.searchable_text),
             content_hash = COALESCE(p_content_hash, r.content_hash),
             weight = COALESCE(p_weight, r.weight),
-            embedding = COALESCE(p_embedding, r.embedding),
-            embedded_at = CASE WHEN p_embedding IS NOT NULL THEN NOW() ELSE r.embedded_at END,
+            status = 'active',
+            archived_reason = NULL
+        WHERE r.id = existing_id;
+
+        result_id := existing_id;
+        result_action := 'updated';
+    ELSE
+        INSERT INTO mem_records (
+            type, data, tags, keys, sources, searchable_text, content_hash, weight
+        ) VALUES (
+            p_type,
+            p_data,
+            p_tags,
+            p_keys,
+            COALESCE(p_sources, '{}'::jsonb),
+            p_searchable_text,
+            p_content_hash,
+            COALESCE(p_weight, 5)
+        )
+        RETURNING mem_records.id INTO result_id;
+        result_action := 'inserted';
+    END IF;
+
+    RETURN QUERY SELECT result_id, result_action;
+END;
+$$;
+`;
+
+/**
+ * Vector-aware overrides for mem_upsert_by_keys. Loaded after
+ * VECTOR_COLUMNS_SQL adds the embedding columns. CREATE OR REPLACE
+ * supersedes the no-vector variant defined in FUNCTIONS_SQL — same
+ * signature, embedding-aware body. p_embedding is TEXT in both
+ * variants (callers send '[0.1,0.2,...]' literals); the cast to
+ * vector happens inside this body via `::vector`.
+ */
+export const VECTOR_FUNCTIONS_SQL = `
+CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
+    p_type TEXT,
+    p_data JSONB,
+    p_tags TEXT[],
+    p_keys TEXT[],
+    p_sources JSONB,
+    p_searchable_text TEXT,
+    p_content_hash TEXT,
+    p_weight INTEGER DEFAULT NULL,
+    p_embedding TEXT DEFAULT NULL,
+    p_embedding_model TEXT DEFAULT NULL,
+    p_replace BOOLEAN DEFAULT FALSE
+) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
+DECLARE
+    existing_id UUID;
+    result_id UUID;
+    result_action TEXT;
+    v_embedding vector(1536);
+BEGIN
+    v_embedding := CASE WHEN p_embedding IS NOT NULL THEN p_embedding::vector ELSE NULL END;
+
+    SELECT r.id INTO existing_id
+    FROM mem_records r
+    WHERE r.keys && p_keys
+    LIMIT 1;
+
+    IF existing_id IS NOT NULL THEN
+        UPDATE mem_records r
+        SET data = CASE WHEN p_replace THEN p_data ELSE r.data || p_data END,
+            tags = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}')))),
+            keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
+            sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
+            searchable_text = COALESCE(p_searchable_text, r.searchable_text),
+            content_hash = COALESCE(p_content_hash, r.content_hash),
+            weight = COALESCE(p_weight, r.weight),
+            embedding = COALESCE(v_embedding, r.embedding),
+            embedded_at = CASE WHEN v_embedding IS NOT NULL THEN NOW() ELSE r.embedded_at END,
             embedding_model = COALESCE(p_embedding_model, r.embedding_model),
             status = 'active',
             archived_reason = NULL
@@ -261,8 +365,8 @@ BEGIN
             p_searchable_text,
             p_content_hash,
             COALESCE(p_weight, 5),
-            p_embedding,
-            CASE WHEN p_embedding IS NOT NULL THEN NOW() ELSE NULL END,
+            v_embedding,
+            CASE WHEN v_embedding IS NOT NULL THEN NOW() ELSE NULL END,
             p_embedding_model
         )
         RETURNING mem_records.id INTO result_id;
@@ -347,18 +451,21 @@ export function getMetaInsertSQL(version: string): string {
 }
 
 /**
- * Full schema bundle for backends that can execute it in one shot
- * (e.g. PGlite). Order matters: extensions -> tables -> indexes -> functions
- * -> vector index -> hybrid search -> meta.
+ * Full schema bundle for backends that can execute it in one shot.
+ * Order matters: tables -> indexes -> core functions -> [vector
+ * extension -> vector columns -> vector functions -> vector index ->
+ * hybrid search] -> meta. The vector block is opt-in via `withVector`.
  */
-export function getFullSchemaSQL(): string {
-  return [
+export function getFullSchemaSQL(opts: { withVector: boolean } = { withVector: true }): string {
+  const blocks = [
     EXTENSIONS_SQL,
     TABLES_SQL,
     INDEXES_SQL,
     FUNCTIONS_SQL,
-    VECTOR_INDEX_SQL,
-    HYBRID_SEARCH_SQL,
-    getMetaInsertSQL(SCHEMA_VERSION),
-  ].join('\n\n');
+  ];
+  if (opts.withVector) {
+    blocks.push(VECTOR_EXTENSION_SQL, VECTOR_COLUMNS_SQL, VECTOR_FUNCTIONS_SQL, VECTOR_INDEX_SQL, HYBRID_SEARCH_SQL);
+  }
+  blocks.push(getMetaInsertSQL(SCHEMA_VERSION));
+  return blocks.filter(b => b.trim().length > 0).join('\n\n');
 }

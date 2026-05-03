@@ -49,7 +49,7 @@ export interface MemoryConfig {
 }
 
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
-  backend: 'pglite',
+  backend: 'embedded-postgres',
   plugins: [],
   embedding: {
     provider: 'none',

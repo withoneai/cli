@@ -25,7 +25,7 @@ export async function memDoctorCommand(): Promise<void> {
   const cfg = getMemoryConfig();
   if (!cfg) {
     checks.push({ name: 'memory config exists', ok: false, detail: 'run `one mem init`' });
-    return emit(checks);
+    return emit(checks, { vectorSearchAvailable: true });
   }
   checks.push({ name: 'memory config exists', ok: true, detail: `backend=${cfg.backend}` });
 
@@ -37,7 +37,7 @@ export async function memDoctorCommand(): Promise<void> {
       ok: false,
       detail: `available: ${available.join(', ') || '(none)'}. If this is a third-party plugin, add it to memory.plugins in config.`,
     });
-    return emit(checks);
+    return emit(checks, { vectorSearchAvailable: true });
   }
   checks.push({ name: `backend plugin "${cfg.backend}" resolves`, ok: true });
 
@@ -63,7 +63,7 @@ export async function memDoctorCommand(): Promise<void> {
           `Delete the data dir to reset: \`rm -rf ~/.one/mem.pglite\` (loses all memory records).`
         : msg,
     });
-    return emit(checks);
+    return emit(checks, { vectorSearchAvailable: true });
   }
 
   // 4. Schema version matches
@@ -132,13 +132,14 @@ export async function memDoctorCommand(): Promise<void> {
     checks.push({ name: 'capability ↔ config consistent', ok: true });
   }
 
+  const vectorSearchAvailable = backend.capabilities().vectorSearch;
   try { await backend.close(); } catch { /* ignore */ }
-  emit(checks);
+  emit(checks, { vectorSearchAvailable });
 }
 
-function emit(checks: Check[]): void {
+function emit(checks: Check[], capInfo: { vectorSearchAvailable: boolean }): void {
   const allOk = checks.every(c => c.ok);
-  const upgrade = semanticSearchUpgradeHint();
+  const upgrade = semanticSearchUpgradeHint({ vectorSearchAvailable: capInfo.vectorSearchAvailable });
 
   if (output.isAgentMode()) {
     output.json({ ok: allOk, checks, ...(upgrade ? { _upgrade: upgrade } : {}) });
@@ -156,6 +157,6 @@ function emit(checks: Check[]): void {
   } else {
     console.log('\n' + pc.green('Memory is healthy.'));
   }
-  const line = semanticSearchUpgradeLine();
+  const line = semanticSearchUpgradeLine({ vectorSearchAvailable: capInfo.vectorSearchAvailable });
   if (line) console.log(`\n${pc.dim(line)}`);
 }

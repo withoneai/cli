@@ -93,13 +93,37 @@ export interface UpgradeHint {
  * Call from any command whose output would be richer with embeddings
  * (`mem search`, `mem status`, `mem context`).
  *
+ * Three causes are diagnosed, in priority order:
+ *   1. Backend can't load pgvector (highest — even with key + provider
+ *      the DB has nowhere to put embeddings). Caller must pass
+ *      `vectorSearchAvailable: false`.
+ *   2. No OpenAI key.
+ *   3. Key present but `embedding.provider` is still `none` (legacy).
+ *
+ * Callers without a backend handle (commands that don't need to spin up
+ * the backend just to print a tip) can skip the `vectorSearchAvailable`
+ * arg — the hint then ignores the pgvector case.
+ *
  * The hint is intentionally short and actionable — agents shouldn't have
  * to translate a paragraph of prose into a user-facing instruction.
  */
-export function semanticSearchUpgradeHint(): UpgradeHint | null {
+export function semanticSearchUpgradeHint(opts: { vectorSearchAvailable?: boolean } = {}): UpgradeHint | null {
   const cfg = getMemoryConfigOrDefault();
   const keyPresent = !!getOpenAiApiKey();
   const providerOn = cfg.embedding.provider === 'openai';
+
+  // Backend can't store vectors — installing pgvector unlocks semantic
+  // search even when the OpenAI key + provider are already on. Show
+  // this case first because it's the harder one to discover.
+  if (opts.vectorSearchAvailable === false) {
+    return {
+      capability: 'semantic_search',
+      available: true,
+      currentMode: 'fts_only',
+      how: 'Install pgvector for the bundled Postgres: `brew install pgvector` (or point at a remote Postgres with pgvector via `one mem config set backend postgres`)',
+      benefit: 'Ranks memories by meaning, not just keyword overlap — finds relevant records even when the query and the data use different words.',
+    };
+  }
 
   if (providerOn && keyPresent) return null;
 
@@ -127,8 +151,8 @@ export function semanticSearchUpgradeHint(): UpgradeHint | null {
  * Human-facing one-liner for the same hint. Call from TTY output paths.
  * Returns empty string when there's nothing to say.
  */
-export function semanticSearchUpgradeLine(): string {
-  const hint = semanticSearchUpgradeHint();
+export function semanticSearchUpgradeLine(opts: { vectorSearchAvailable?: boolean } = {}): string {
+  const hint = semanticSearchUpgradeHint(opts);
   if (!hint) return '';
   return `tip: semantic search available — ${hint.how}`;
 }

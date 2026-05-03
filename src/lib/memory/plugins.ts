@@ -78,6 +78,8 @@ export async function loadBackendFromConfig(cfg: MemoryConfig): Promise<MemBacke
 
 import { pglitePlugin } from './plugins/pglite/index.js';
 import { postgresPlugin } from './plugins/postgres/index.js';
+import { embeddedPostgresPlugin } from './plugins/embedded-postgres/index.js';
 
-registerBackend(pglitePlugin);
+registerBackend(embeddedPostgresPlugin);
 registerBackend(postgresPlugin);
+registerBackend(pglitePlugin);

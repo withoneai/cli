@@ -40,6 +40,9 @@ import {
   TABLES_SQL,
   INDEXES_SQL,
   FUNCTIONS_SQL,
+  VECTOR_EXTENSION_SQL,
+  VECTOR_COLUMNS_SQL,
+  VECTOR_FUNCTIONS_SQL,
   VECTOR_INDEX_SQL,
   HYBRID_SEARCH_SQL,
   SCHEMA_VERSION,
@@ -119,14 +122,20 @@ export class CoreBackend implements MemBackend {
 
   async ensureSchema(): Promise<void> {
     const caps = this.caps;
-    // Execute each logical block separately so a backend with lower caps
-    // (e.g. vectorSearch: false) can skip the vector-specific DDL without
-    // parsing gymnastics.
-    await this.client.query(EXTENSIONS_SQL);
+    // Apply in logical blocks so a backend without pgvector skips the
+    // vector-specific DDL cleanly. The core blocks (tables, indexes,
+    // functions) never reference the vector type — the embedding column
+    // is added via VECTOR_COLUMNS_SQL only when the capability is on,
+    // and the upsert function gets a vector-aware override (same
+    // signature, p_embedding TEXT) from VECTOR_FUNCTIONS_SQL.
+    if (EXTENSIONS_SQL.trim()) await this.client.query(EXTENSIONS_SQL);
     await this.client.query(TABLES_SQL);
     await this.client.query(INDEXES_SQL);
     await this.client.query(FUNCTIONS_SQL);
     if (caps.vectorSearch) {
+      await this.client.query(VECTOR_EXTENSION_SQL);
+      await this.client.query(VECTOR_COLUMNS_SQL);
+      await this.client.query(VECTOR_FUNCTIONS_SQL);
       await this.client.query(VECTOR_INDEX_SQL);
       await this.client.query(HYBRID_SEARCH_SQL);
     }
@@ -144,26 +153,41 @@ export class CoreBackend implements MemBackend {
 
   async insert(row: RecordInput): Promise<MemRecord> {
     const embedding = vectorLiteral(row.embedding ?? null);
-    const res = await this.client.query<RecordRow>(
-      `INSERT INTO mem_records
-        (type, data, tags, keys, sources, searchable_text, content_hash, weight,
-         embedding, embedded_at, embedding_model)
-       VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8,
-               $9::vector, CASE WHEN $9 IS NOT NULL THEN NOW() ELSE NULL END, $10)
-       RETURNING *`,
-      [
-        row.type,
-        JSON.stringify(row.data),
-        row.tags ?? null,
-        row.keys ?? null,
-        JSON.stringify(row.sources ?? {}),
-        row.searchable_text ?? null,
-        row.content_hash ?? null,
-        row.weight ?? 5,
-        embedding,
-        row.embedding_model ?? null,
-      ],
-    );
+    const sql = this.caps.vectorSearch
+      ? `INSERT INTO mem_records
+          (type, data, tags, keys, sources, searchable_text, content_hash, weight,
+           embedding, embedded_at, embedding_model)
+         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8,
+                 $9::vector, CASE WHEN $9 IS NOT NULL THEN NOW() ELSE NULL END, $10)
+         RETURNING *`
+      : `INSERT INTO mem_records
+          (type, data, tags, keys, sources, searchable_text, content_hash, weight)
+         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8)
+         RETURNING *`;
+    const params = this.caps.vectorSearch
+      ? [
+          row.type,
+          JSON.stringify(row.data),
+          row.tags ?? null,
+          row.keys ?? null,
+          JSON.stringify(row.sources ?? {}),
+          row.searchable_text ?? null,
+          row.content_hash ?? null,
+          row.weight ?? 5,
+          embedding,
+          row.embedding_model ?? null,
+        ]
+      : [
+          row.type,
+          JSON.stringify(row.data),
+          row.tags ?? null,
+          row.keys ?? null,
+          JSON.stringify(row.sources ?? {}),
+          row.searchable_text ?? null,
+          row.content_hash ?? null,
+          row.weight ?? 5,
+        ];
+    const res = await this.client.query<RecordRow>(sql, params);
     return toRecord(res.rows[0]);
   }
 
@@ -173,8 +197,8 @@ export class CoreBackend implements MemBackend {
 
     const res = await this.client.query<{ id: string; action: 'inserted' | 'updated' }>(
       `SELECT id, action FROM mem_upsert_by_keys(
-          $1::text, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7,
-          $8::integer, $9::vector, $10::text, $11::boolean
+          $1::text, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6::text, $7::text,
+          $8::integer, $9::text, $10::text, $11::boolean
        )`,
       [
         row.type,
@@ -307,6 +331,10 @@ export class CoreBackend implements MemBackend {
     content_hash: string | null;
     embedding_model: string | null;
   }>> {
+    // No vector capability → no embedding columns in the schema → no
+    // rows can ever need (re)indexing. Short-circuit before touching
+    // SQL that references missing columns.
+    if (!this.caps.vectorSearch) return [];
     const limit = opts.limit ?? 1000;
     const offset = opts.offset ?? 0;
     const params: unknown[] = [];
@@ -364,6 +392,10 @@ export class CoreBackend implements MemBackend {
   }
 
   async updateEmbedding(id: string, vector: number[], model: string): Promise<void> {
+    // No vector capability → silent no-op. Callers gate on
+    // caps.vectorSearch already, but the defensive check keeps a
+    // mistakenly invoked update from crashing on a missing column.
+    if (!this.caps.vectorSearch) return;
     const literal = vectorLiteral(vector);
     if (literal === null) return;
     await this.client.query(
@@ -655,6 +687,12 @@ export class CoreBackend implements MemBackend {
   }
 
   async stats(): Promise<BackendStats> {
+    // The embedding column only exists when the backend advertises
+    // vectorSearch — gate the embedded_count subquery so this works on
+    // a no-vector schema too. Fixed at 0 when no vector capability.
+    const embeddedCountSql = this.caps.vectorSearch
+      ? `(SELECT COUNT(*) FROM mem_records WHERE embedding IS NOT NULL)`
+      : `(SELECT 0)`;
     const res = await this.client.query<{
       record_count: string;
       active_count: string;
@@ -667,7 +705,7 @@ export class CoreBackend implements MemBackend {
          (SELECT COUNT(*) FROM mem_records WHERE status = 'active')      AS active_count,
          (SELECT COUNT(*) FROM mem_records WHERE status = 'archived')    AS archived_count,
          (SELECT COUNT(*) FROM mem_links)                                AS link_count,
-         (SELECT COUNT(*) FROM mem_records WHERE embedding IS NOT NULL)  AS embedded_count`,
+         ${embeddedCountSql}                                             AS embedded_count`,
     );
     const r = res.rows[0];
     return {
