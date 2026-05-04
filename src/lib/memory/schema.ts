@@ -12,7 +12,7 @@
  * See docs/plans/unified-memory.md §4 for design rationale.
  */
 
-export const SCHEMA_VERSION = '2.0.0';
+export const SCHEMA_VERSION = '2.1.0';
 
 // `pg_trgm` was in the original mem schema but nothing in the unified query
 // layer uses it; dropped to keep optional-extension backends happy. Can be
@@ -257,19 +257,42 @@ DECLARE
     result_id UUID;
     result_action TEXT;
 BEGIN
+    -- Deterministic pick when more than one row's keys[] overlap p_keys
+    -- (e.g. the incoming row identity-merges with an old Attio-id row AND
+    -- a newer email-keyed row from a separate sync). Newest-updated wins;
+    -- ties broken by id. Without ORDER BY, PG returns whichever row the
+    -- planner happens to surface first, leaving the loser persisted with
+    -- overlapping keys and breaking the keys-are-unique invariant.
     SELECT r.id INTO existing_id
     FROM mem_records r
     WHERE r.keys && p_keys
+    ORDER BY r.updated_at DESC NULLS LAST, r.id ASC
     LIMIT 1;
 
     IF existing_id IS NOT NULL THEN
+        -- p_replace=TRUE: this call is the new ground truth for the row's
+        -- content (typical for sync runs where a field disappearing
+        -- upstream must disappear in memory). Replace data, tags,
+        -- searchable_text, content_hash with what the caller supplied.
+        -- Keys still union (never lose a key — losing the identity key
+        -- would orphan the row), and sources still merge (multi-source
+        -- provenance is independent of any single source's payload).
         UPDATE mem_records r
         SET data = CASE WHEN p_replace THEN p_data ELSE r.data || p_data END,
-            tags = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}')))),
+            tags = CASE
+                WHEN p_replace THEN COALESCE(p_tags, '{}'::text[])
+                ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}'))))
+            END,
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
-            searchable_text = COALESCE(p_searchable_text, r.searchable_text),
-            content_hash = COALESCE(p_content_hash, r.content_hash),
+            searchable_text = CASE
+                WHEN p_replace THEN p_searchable_text
+                ELSE COALESCE(p_searchable_text, r.searchable_text)
+            END,
+            content_hash = CASE
+                WHEN p_replace THEN p_content_hash
+                ELSE COALESCE(p_content_hash, r.content_hash)
+            END,
             weight = COALESCE(p_weight, r.weight),
             status = 'active',
             archived_reason = NULL
@@ -329,19 +352,34 @@ DECLARE
 BEGIN
     v_embedding := CASE WHEN p_embedding IS NOT NULL THEN p_embedding::vector ELSE NULL END;
 
+    -- See no-vector variant for ORDER BY rationale (deterministic pick
+    -- when multiple rows' keys overlap p_keys).
     SELECT r.id INTO existing_id
     FROM mem_records r
     WHERE r.keys && p_keys
+    ORDER BY r.updated_at DESC NULLS LAST, r.id ASC
     LIMIT 1;
 
     IF existing_id IS NOT NULL THEN
+        -- See no-vector variant for p_replace gating rationale (replace
+        -- data, tags, searchable_text, content_hash; keys union, sources
+        -- merge; embedding follows existing v_embedding logic).
         UPDATE mem_records r
         SET data = CASE WHEN p_replace THEN p_data ELSE r.data || p_data END,
-            tags = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}')))),
+            tags = CASE
+                WHEN p_replace THEN COALESCE(p_tags, '{}'::text[])
+                ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}'))))
+            END,
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
-            searchable_text = COALESCE(p_searchable_text, r.searchable_text),
-            content_hash = COALESCE(p_content_hash, r.content_hash),
+            searchable_text = CASE
+                WHEN p_replace THEN p_searchable_text
+                ELSE COALESCE(p_searchable_text, r.searchable_text)
+            END,
+            content_hash = CASE
+                WHEN p_replace THEN p_content_hash
+                ELSE COALESCE(p_content_hash, r.content_hash)
+            END,
             weight = COALESCE(p_weight, r.weight),
             embedding = COALESCE(v_embedding, r.embedding),
             embedded_at = CASE WHEN v_embedding IS NOT NULL THEN NOW() ELSE r.embedded_at END,
