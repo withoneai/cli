@@ -204,6 +204,7 @@ export function registerMemoryCommands(program: Command): void {
     .option('--dry-run', 'Report what would be migrated without writing', false)
     .option('--cleanup', 'After migration, delete legacy files', false)
     .option('-y, --yes', 'Skip confirmation prompts', false)
+    .option('--no-heal', 'Disable stale-idField self-healing against the built-in profile (default: heal enabled)')
     .action(memMigrateCommand);
 
   mem.command('export [outfile]')

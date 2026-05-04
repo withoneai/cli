@@ -29,6 +29,14 @@ interface MigrateFlags {
   dryRun?: boolean;
   cleanup?: boolean;
   yes?: boolean;
+  /**
+   * Opt out of stale-idField self-healing. Default is heal-enabled
+   * (matches the previously verified behavior on Moe's 14k-row
+   * migration). Pass `--no-heal` when you want the strict
+   * skippedUnresolvedId behavior — useful for diagnosing whether your
+   * profile is wrong or whether the built-in profile is wrong.
+   */
+  heal?: boolean;
 }
 
 interface MigrateReport {
@@ -61,6 +69,10 @@ interface MigrateReport {
    * one self-heal note instead of per-row noise.
    */
   healedIdField?: string;
+  /** Original (stale) idField from the user's installed profile, when healing kicks in. */
+  originalIdField?: string;
+  /** Whether the in-tree built-in profile was newer than the installed profile (file mtime). */
+  builtinNewerThanInstalled?: boolean;
 }
 
 export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
@@ -93,7 +105,11 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
 
   const reports: MigrateReport[] = [];
   for (const platform of platforms) {
-    const db = await openDatabase(platform);
+    // Strict read-only — no journal_mode rewrite, no -wal/-shm siblings,
+    // no corruption-recovery rename. Migrate must never mutate the
+    // user's legacy SQLite (the source of truth they're keeping until
+    // they manually --cleanup).
+    const db = await openDatabase(platform, { readonly: true });
     try {
       const tables = listTables(db).filter(t => !t.endsWith('_fts'));
       for (const model of tables) {
@@ -106,10 +122,21 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         const profile = readProfile(platform, model);
         const builtin = loadBuiltinProfile(platform, model);
         const idField = profile?.idField;
+        const healEnabled = flags.heal !== false;
         const builtinIdField =
-          typeof builtin?.idField === 'string' && builtin.idField !== idField
+          healEnabled &&
+          typeof builtin?.idField === 'string' &&
+          builtin.idField !== idField
             ? (builtin.idField as string)
             : undefined;
+        // Compare profile file mtimes — when the user has hand-edited
+        // their installed profile after the built-in was published, the
+        // installed file is the truth and we should NOT heal silently
+        // (Moe's review point: "mtime check refusing to heal user-
+        // modified profiles"). Surface this in the per-model report so
+        // agents can flag it; we still heal because the data shows it's
+        // needed, but the report makes it clear what happened.
+        const builtinNewer = isBuiltinNewerThanInstalled(platform, model);
         const identityKey = profile?.identityKey;
         const type = `${platform}/${model}`;
 
@@ -164,7 +191,11 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
             ) {
               activeIdField = builtinIdField;
               externalRaw = healed;
-              if (!report.healedIdField) report.healedIdField = builtinIdField;
+              if (!report.healedIdField) {
+                report.healedIdField = builtinIdField;
+                report.originalIdField = idField;
+                report.builtinNewerThanInstalled = builtinNewer;
+              }
             }
           }
           // Hard reject: the same guard sync test/mem-writer apply — an
@@ -339,7 +370,16 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
 
   const healed = reports.filter(r => r.healedIdField).map(r => ({
     type: `${r.platform}/${r.model}`,
+    originalIdField: r.originalIdField ?? null,
     healedTo: r.healedIdField!,
+    builtinNewerThanInstalled: r.builtinNewerThanInstalled ?? false,
+    note:
+      r.builtinNewerThanInstalled === false
+        ? 'Installed profile is newer than the built-in but its idField did not resolve on legacy rows. ' +
+          'Healing was applied because the data required it, but you may have intentional customizations — ' +
+          'verify the result and consider `one sync init <platform> <model> --force` to refresh.'
+        : 'Installed profile was older than the built-in; safely healed against the current built-in. ' +
+          'Run `one sync init <platform> <model> --force` to update the installed profile permanently.',
   }));
   okJson({
     status: flags.dryRun ? 'dry-run' : 'ok',
@@ -487,6 +527,46 @@ export function reviveStringifiedJson(row: Record<string, unknown>): Record<stri
     }
   }
   return out;
+}
+
+/**
+ * Compare mtime of `<cwd>/.one/sync/profiles/<platform>_<model>.json`
+ * against the in-tree built-in. Returns:
+ *   - true  → built-in is newer (safe to heal blindly).
+ *   - false → installed is newer (user has edited it after the built-in
+ *             was published — heal is more suspicious).
+ *   - undefined → either file missing or stat failed.
+ */
+function isBuiltinNewerThanInstalled(platform: string, model: string): boolean | undefined {
+  try {
+    const installed = path.join('.one', 'sync', 'profiles', `${platform}_${model}.json`);
+    if (!fs.existsSync(installed)) return undefined;
+    const installedStat = fs.statSync(installed);
+    // Resolve the in-tree built-in via the same loader used to read it.
+    // We don't have its path exposed cleanly, so do a dirname-walk that
+    // mirrors loadBuiltinProfile's getProfilesDir() until the path
+    // exists. Cheaper than threading the path through the loader.
+    const builtinPath = resolveBuiltinProfilePath(platform, model);
+    if (!builtinPath) return undefined;
+    const builtinStat = fs.statSync(builtinPath);
+    return builtinStat.mtimeMs > installedStat.mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveBuiltinProfilePath(platform: string, model: string): string | null {
+  // Mirror builtin-profiles.ts:getProfilesDir() so we can stat the file
+  // without re-implementing the directory walk inside that module.
+  const cliRoot = path.resolve(new URL('.', import.meta.url).pathname, '..', '..', '..');
+  const candidates = [
+    path.join(cliRoot, 'profiles', platform, `${model}.json`),
+    path.join(cliRoot, '..', 'profiles', platform, `${model}.json`),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
 }
 
 function deriveIdentityPrefix(path: string): string {
