@@ -19,7 +19,7 @@ import * as p from '@clack/prompts';
 import { getBackend } from '../../lib/memory/runtime.js';
 import { upsertRecord } from '../../lib/memory/runtime.js';
 import { readProfile } from '../../lib/memory/sync/profile.js';
-import { loadBuiltinProfile } from '../../lib/memory/sync/builtin-profiles.js';
+import { loadBuiltinProfile, getProfilesDir } from '../../lib/memory/sync/builtin-profiles.js';
 import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../../lib/memory/sync/db.js';
 import { okJson, requireMemoryInit } from './util.js';
 import { getByDotPath } from '../../lib/dot-path.js';
@@ -368,19 +368,40 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
     }
   }
 
-  const healed = reports.filter(r => r.healedIdField).map(r => ({
-    type: `${r.platform}/${r.model}`,
-    originalIdField: r.originalIdField ?? null,
-    healedTo: r.healedIdField!,
-    builtinNewerThanInstalled: r.builtinNewerThanInstalled ?? false,
-    note:
-      r.builtinNewerThanInstalled === false
-        ? 'Installed profile is newer than the built-in but its idField did not resolve on legacy rows. ' +
-          'Healing was applied because the data required it, but you may have intentional customizations — ' +
-          'verify the result and consider `one sync init <platform> <model> --force` to refresh.'
-        : 'Installed profile was older than the built-in; safely healed against the current built-in. ' +
-          'Run `one sync init <platform> <model> --force` to update the installed profile permanently.',
-  }));
+  const healed = reports.filter(r => r.healedIdField).map(r => {
+    // Three states for the mtime comparison — keep them distinct in the
+    // JSON so an agent can tell "mtime check failed" (couldn't stat one
+    // of the files) from "installed-is-newer" (user has hand-edited).
+    // Collapsing `undefined ?? false` would silently route the failed-
+    // check case into the "all clear" branch — exactly the regression
+    // Moe caught when the dist-build path resolution was broken.
+    let note: string;
+    if (r.builtinNewerThanInstalled === true) {
+      note =
+        'Installed profile was older than the built-in; safely healed against the current built-in. ' +
+        'Run `one sync init <platform> <model> --force` to update the installed profile permanently.';
+    } else if (r.builtinNewerThanInstalled === false) {
+      note =
+        'Installed profile is newer than the built-in but its idField did not resolve on legacy rows. ' +
+        'Healing was applied because the data required it, but you may have intentional customizations — ' +
+        'verify the result and consider `one sync init <platform> <model> --force` to refresh.';
+    } else {
+      // mtime check failed — could be a missing file, a stat error, or
+      // a layout where the in-tree built-in path can't be resolved.
+      // Don't claim either branch; tell the user we couldn't compare.
+      note =
+        'Healed using the built-in profile, but the mtime comparison between the installed and ' +
+        'built-in profiles could not be made. Verify the result and consider ' +
+        '`one sync init <platform> <model> --force` to refresh the installed profile.';
+    }
+    return {
+      type: `${r.platform}/${r.model}`,
+      originalIdField: r.originalIdField ?? null,
+      healedTo: r.healedIdField!,
+      builtinNewerThanInstalled: r.builtinNewerThanInstalled ?? null,
+      note,
+    };
+  });
   okJson({
     status: flags.dryRun ? 'dry-run' : 'ok',
     reports,
@@ -556,17 +577,16 @@ function isBuiltinNewerThanInstalled(platform: string, model: string): boolean |
 }
 
 function resolveBuiltinProfilePath(platform: string, model: string): string | null {
-  // Mirror builtin-profiles.ts:getProfilesDir() so we can stat the file
-  // without re-implementing the directory walk inside that module.
-  const cliRoot = path.resolve(new URL('.', import.meta.url).pathname, '..', '..', '..');
-  const candidates = [
-    path.join(cliRoot, 'profiles', platform, `${model}.json`),
-    path.join(cliRoot, '..', 'profiles', platform, `${model}.json`),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return null;
+  // Reuse builtin-profiles.ts's directory walk so this stays in sync
+  // with the loader. Earlier hand-rolled 3-level walk worked from src/
+  // but resolved to two levels too high in tsup-bundled dist/, so the
+  // mtime check returned `undefined` on every shipped build and the
+  // heal-transparency note never picked the "installed is newer"
+  // branch. Calling the shared resolver fixes both layouts.
+  const dir = getProfilesDir();
+  if (!dir) return null;
+  const candidate = path.join(dir, platform, `${model}.json`);
+  return fs.existsSync(candidate) ? candidate : null;
 }
 
 function deriveIdentityPrefix(path: string): string {
