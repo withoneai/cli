@@ -171,6 +171,12 @@ export async function syncModel(
   const needsSqlite = !!profile.enrich;
   let db: Database.Database | null = null;
   let totalRecords = 0;
+  // Records the writer refused (idField didn't resolve, validation
+  // failed, etc). Counted across all pages so a profile with a broken
+  // idField doesn't return a clean `0 records` while quietly dropping
+  // every page — the diagnostic surfaces in both the per-model report
+  // and as a stderr warning when the skip rate is suspiciously high.
+  let totalSkipped = 0;
   let pagesProcessed = 0;
   let lastCursor: unknown = null;
   // Source keys accumulated across pages for --full-refresh reconciliation
@@ -549,6 +555,7 @@ export async function syncModel(
         // Memory-only path: counter comes from the per-page mem report.
         totalRecords += (pageReport?.inserted ?? 0) + (pageReport?.updated ?? 0);
       }
+      totalSkipped += pageReport?.skipped ?? 0;
       pagesProcessed++;
 
       // Fire hooks after each page (not at the end) so long syncs get real-time events
@@ -795,8 +802,26 @@ export async function syncModel(
         ? true
         : undefined;
 
+    // Surface a hard warning when the writer skipped more rows than it
+    // stored — typical sign of a broken idField or stale profile against
+    // a paginated source. Without this, runs that drop every page
+    // returned a clean `recordsSynced: 0` and silently exited.
+    const recordsSeen = totalRecords + totalSkipped;
+    const skipRatio = recordsSeen > 0 ? totalSkipped / recordsSeen : 0;
+    const skippedWarning =
+      totalSkipped > 0 && skipRatio >= 0.5
+        ? `${totalSkipped} of ${recordsSeen} records skipped (${Math.round(skipRatio * 100)}%) — ` +
+          `most rows were rejected by the writer (likely a broken idField in the profile). ` +
+          `Inspect with \`one mem migrate --platform ${platform} --dry-run\` or refresh the profile via \`one sync init ${platform} ${model} --force\`.`
+        : undefined;
+    if (skippedWarning && !isAgentMode()) {
+      process.stderr.write(`\n  ⚠  ${skippedWarning}\n`);
+    }
+
     return {
       model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale,
+      ...(totalSkipped > 0 ? { recordsSkipped: totalSkipped, recordsSeen } : {}),
+      ...(skippedWarning ? { _warning: skippedWarning } : {}),
       ...(reconcileSkipped ? { reconcileSkipped } : {}),
       ...(statusCounts ? { statusCounts } : {}),
       ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
