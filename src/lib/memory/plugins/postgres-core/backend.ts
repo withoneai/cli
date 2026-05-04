@@ -134,54 +134,41 @@ export class CoreBackend implements MemBackend {
     // and the upsert function gets a vector-aware override (same
     // signature, p_embedding TEXT) from VECTOR_FUNCTIONS_SQL.
     //
-    // Serialize concurrent CLI processes with a Postgres session-level
-    // advisory lock. Without this, two processes hitting the daemon at
-    // once race on `CREATE EXTENSION` / `CREATE OR REPLACE FUNCTION`,
-    // producing `tuple concurrently updated` on pg_proc. The lock id is
-    // a stable arbitrary bigint scoped to the unified-memory schema.
-    // Backends that don't implement advisory locks (none of ours today;
-    // a defensive guard for future plugins) silently fall through —
-    // the race is only observable across processes anyway.
-    const lockHeld = await this.tryAcquireSchemaLock();
-    try {
-      if (EXTENSIONS_SQL.trim()) await this.client.query(EXTENSIONS_SQL);
-      await this.client.query(TABLES_SQL);
-      await this.client.query(INDEXES_SQL);
-      await this.client.query(FUNCTIONS_SQL);
+    // Serialize concurrent CLI processes with a Postgres transaction-
+    // scoped advisory lock. Without this, two processes hitting the
+    // daemon at once race on `CREATE EXTENSION` / `CREATE OR REPLACE
+    // FUNCTION`, producing `tuple concurrently updated` on pg_proc.
+    //
+    // Why xact_lock + transaction: the pg_advisory_lock variant is
+    // session-scoped, but the underlying pool may check out a different
+    // connection per query — so the lock would be acquired on conn A,
+    // DDL would run on B/C/D, and the unlock could land on a totally
+    // different connection (returning false), leaving the lock held by
+    // conn A's session until that connection idle-times-out. Wrapping
+    // the whole block in `client.transaction` pins it to a single
+    // connection and `pg_advisory_xact_lock` auto-releases on commit/
+    // rollback, so there's no path where the lock outlives the call.
+    await this.client.transaction(async (tx) => {
+      try {
+        await tx.query(`SELECT pg_advisory_xact_lock(${SCHEMA_LOCK_ID}::bigint)`);
+      } catch {
+        // Backends that don't implement advisory locks fall through —
+        // the race is only observable across processes anyway, and
+        // first-party plugins all support the function.
+      }
+      if (EXTENSIONS_SQL.trim()) await tx.query(EXTENSIONS_SQL);
+      await tx.query(TABLES_SQL);
+      await tx.query(INDEXES_SQL);
+      await tx.query(FUNCTIONS_SQL);
       if (caps.vectorSearch) {
-        await this.client.query(VECTOR_EXTENSION_SQL);
-        await this.client.query(VECTOR_COLUMNS_SQL);
-        await this.client.query(VECTOR_FUNCTIONS_SQL);
-        await this.client.query(VECTOR_INDEX_SQL);
-        await this.client.query(HYBRID_SEARCH_SQL);
+        await tx.query(VECTOR_EXTENSION_SQL);
+        await tx.query(VECTOR_COLUMNS_SQL);
+        await tx.query(VECTOR_FUNCTIONS_SQL);
+        await tx.query(VECTOR_INDEX_SQL);
+        await tx.query(HYBRID_SEARCH_SQL);
       }
-      await this.client.query(getMetaInsertSQL(SCHEMA_VERSION));
-    } finally {
-      if (lockHeld) {
-        try {
-          await this.client.query(
-            `SELECT pg_advisory_unlock(${SCHEMA_LOCK_ID}::bigint)`,
-          );
-        } catch {
-          /* connection may already be returning; nothing actionable */
-        }
-      }
-    }
-  }
-
-  private async tryAcquireSchemaLock(): Promise<boolean> {
-    try {
-      // Blocks until acquired. With concurrent processes, the second one
-      // waits here while the first finishes — by the time it gets the
-      // lock, the schema is already current and every IF NOT EXISTS / OR
-      // REPLACE statement is a no-op.
-      await this.client.query(
-        `SELECT pg_advisory_lock(${SCHEMA_LOCK_ID}::bigint)`,
-      );
-      return true;
-    } catch {
-      return false;
-    }
+      await tx.query(getMetaInsertSQL(SCHEMA_VERSION));
+    });
   }
 
   async getSchemaVersion(): Promise<string | null> {
