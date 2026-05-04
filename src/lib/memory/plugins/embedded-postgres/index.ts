@@ -1,7 +1,7 @@
 /**
  * Embedded Postgres backend plugin — bootstraps a real Postgres process
- * via pgserve (Postgres 18 + pgvector 0.8.1 bundled), then talks to it
- * over node-pg. Default backend for new installs.
+ * via pgserve (Postgres 18), then talks to it over node-pg. Default
+ * backend for new installs.
  *
  * pgserve is normally consumed via its Bun-based SDK, but the SDK
  * statically imports `bun` so it can't be loaded on Node. Instead we
@@ -10,12 +10,14 @@
  * ourselves. The child stays running across CLI invocations — every
  * later call finds the live process via the PID file and reuses it.
  *
- * Why pgserve at all: it's the only embedded-Postgres-on-Node package
- * we found that ships pgvector pre-built for darwin/linux/windows. Our
- * unified-memory schema requires pgvector, so the binary distribution
- * has to include it. one-run uses `embedded-postgres` directly because
- * it doesn't need vectors; the convergence story (one process for
- * both) waits on one-run swapping to pgserve too.
+ * pgvector caveat: pgserve advertises pgvector but its bundled binaries
+ * don't actually include the extension's `.so` / `.control` files, so on
+ * a true cold-start `CREATE EXTENSION vector` fails. We probe at runtime
+ * and downgrade `vectorSearch` to false when pgvector isn't loadable —
+ * memory still works (FTS-only) and the per-command `_upgrade` hint
+ * tells the user how to enable semantic search (`brew install pgvector`,
+ * or point at a remote Postgres that has it). Shipping pgvector binaries
+ * with the CLI is tracked as deferred work.
  */
 
 import fs from 'node:fs';
@@ -388,7 +390,7 @@ class LazyEmbeddedPostgresBackend implements MemBackend {
 
 export const embeddedPostgresPlugin: MemBackendPlugin = {
   name: 'embedded-postgres',
-  description: 'Local Postgres bootstrapped on-demand via pgserve (Postgres 18 + pgvector). Default backend for new installs.',
+  description: 'Local Postgres 18 bootstrapped on-demand via pgserve. Default backend for new installs. Semantic search (pgvector) auto-enables when the extension is locally installed; otherwise FTS-only with an upgrade hint.',
   version: '0.1.0',
   schemaVersion: SCHEMA_VERSION,
   capabilities: BASE_CAPABILITIES,

@@ -159,8 +159,12 @@ export async function memSearchCommand(query: string, flags: SearchFlags): Promi
   // Surface the upgrade path on every search that ran without embeddings.
   // Agents need this in structured form so they can tell their users;
   // humans get a dim one-liner after the results. The hint only appears
-  // when semantic search is actually off — no noise otherwise.
-  const upgrade = !queryEmbedding ? semanticSearchUpgradeHint() : null;
+  // when semantic search is actually off — no noise otherwise. Pass
+  // `vectorSearchAvailable` so the hint distinguishes "missing pgvector"
+  // (most actionable — `brew install pgvector`) from "missing OpenAI key".
+  const upgrade = !queryEmbedding
+    ? semanticSearchUpgradeHint({ vectorSearchAvailable: backend.capabilities().vectorSearch })
+    : null;
 
   // The backend's hybrid search caps at `limit` per run, so `total` ==
   // `returned` for now. When a more expensive "total matches" becomes
@@ -182,7 +186,9 @@ export async function memSearchCommand(query: string, flags: SearchFlags): Promi
   } else {
     console.log(JSON.stringify(results, null, 2));
   }
-  const line = !queryEmbedding ? semanticSearchUpgradeLine() : '';
+  const line = !queryEmbedding
+    ? semanticSearchUpgradeLine({ vectorSearchAvailable: backend.capabilities().vectorSearch })
+    : '';
   if (line) console.log(`\n${line}`);
 }
 
