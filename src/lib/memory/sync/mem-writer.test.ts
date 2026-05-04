@@ -8,6 +8,8 @@ import type { SyncProfile } from './types.js';
 import { updateMemoryConfig, DEFAULT_MEMORY_CONFIG } from '../config.js';
 import { writeConfig } from '../../config.js';
 import { getBackend, resetBackendSingleton } from '../runtime.js';
+import { registerBackend } from '../plugins.js';
+import { pglitePlugin } from '../plugins/pglite/index.js';
 
 /**
  * Exercises the dual-write helper end-to-end against a live PGlite. Proves
@@ -29,6 +31,10 @@ describe('sync mem-writer — dual-write into the unified memory store', () => {
       installedAgents: [],
       createdAt: new Date().toISOString(),
     });
+    // PGlite is no longer registered as a product backend, but we still
+    // use it as an in-memory fixture for unit tests. Register it
+    // explicitly here so the writer's getBackend() path can resolve it.
+    registerBackend(pglitePlugin);
     updateMemoryConfig({
       ...DEFAULT_MEMORY_CONFIG,
       backend: 'pglite',
