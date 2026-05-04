@@ -19,6 +19,7 @@ import * as p from '@clack/prompts';
 import { getBackend } from '../../lib/memory/runtime.js';
 import { upsertRecord } from '../../lib/memory/runtime.js';
 import { readProfile } from '../../lib/memory/sync/profile.js';
+import { loadBuiltinProfile } from '../../lib/memory/sync/builtin-profiles.js';
 import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../../lib/memory/sync/db.js';
 import { okJson, requireMemoryInit } from './util.js';
 import { getByDotPath } from '../../lib/dot-path.js';
@@ -52,6 +53,14 @@ interface MigrateReport {
   activeBefore?: number;
   /** Active count for this type after migrate ran. */
   activeAfter?: number;
+  /**
+   * When the installed profile's `idField` resolves to a nested object on
+   * legacy rows but the built-in profile's `idField` resolves cleanly, we
+   * silently use the built-in path for this run. Set to the healed path
+   * (e.g. "id.record_id") on first hit so the per-model summary surfaces
+   * one self-heal note instead of per-row noise.
+   */
+  healedIdField?: string;
 }
 
 export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
@@ -95,7 +104,12 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           skipped: 0, skippedUnresolvedId: 0, skippedError: 0,
         };
         const profile = readProfile(platform, model);
+        const builtin = loadBuiltinProfile(platform, model);
         const idField = profile?.idField;
+        const builtinIdField =
+          typeof builtin?.idField === 'string' && builtin.idField !== idField
+            ? (builtin.idField as string)
+            : undefined;
         const identityKey = profile?.identityKey;
         const type = `${platform}/${model}`;
 
@@ -124,13 +138,41 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           // skipped on attioCompanies).
           const hydrated = reviveStringifiedJson(row);
 
-          const externalRaw = idField ? getByDotPath(hydrated, idField) : undefined;
+          let activeIdField = idField;
+          let externalRaw = idField ? getByDotPath(hydrated, idField) : undefined;
+          // Self-heal: the installed profile's idField resolves to a nested
+          // object (the classic "stale profile from before idField fix" case
+          // — see Attio companies, where old profiles had `idField: "id"` but
+          // the API returns `id: { workspace_id, object_id, record_id }`).
+          // If the in-tree built-in profile has a different idField that
+          // resolves cleanly on this row, use it. We don't rewrite the
+          // user's profile file — too surprising, and `sync init <p> <m>
+          // --force` is the documented way to refresh.
+          if (
+            builtinIdField &&
+            (externalRaw === undefined ||
+              externalRaw === null ||
+              externalRaw === '' ||
+              typeof externalRaw === 'object')
+          ) {
+            const healed = getByDotPath(hydrated, builtinIdField);
+            if (
+              healed !== undefined &&
+              healed !== null &&
+              healed !== '' &&
+              typeof healed !== 'object'
+            ) {
+              activeIdField = builtinIdField;
+              externalRaw = healed;
+              if (!report.healedIdField) report.healedIdField = builtinIdField;
+            }
+          }
           // Hard reject: the same guard sync test/mem-writer apply — an
           // object id would String()-stringify to `[object Object]` and
           // collapse every row onto one key. Better to skip visibly than
           // to silently dedup the entire table.
           if (
-            !idField ||
+            !activeIdField ||
             externalRaw === undefined ||
             externalRaw === null ||
             externalRaw === '' ||
@@ -139,11 +181,11 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
             report.skippedUnresolvedId++;
             report.skipped++;
             if (!output.isAgentMode() && report.skippedUnresolvedId <= 3) {
-              const hint = !idField
+              const hint = !activeIdField
                 ? 'no profile found'
                 : typeof externalRaw === 'object'
-                  ? `idField "${idField}" resolved to a nested object (stringifies to [object Object]) — profile needs a dotted path`
-                  : `idField "${idField}" resolved to undefined/empty`;
+                  ? `idField "${activeIdField}" resolved to a nested object (stringifies to [object Object]) — profile needs a dotted path`
+                  : `idField "${activeIdField}" resolved to undefined/empty`;
               process.stderr.write(`  skip row ${report.skippedUnresolvedId}: ${hint}\n`);
             }
             continue;
@@ -237,6 +279,12 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
               `    ⚠  Every row skipped — profile for ${platform}/${model} is missing or its idField doesn't resolve on legacy rows.\n`,
             );
           }
+          if (report.healedIdField) {
+            process.stderr.write(
+              `    ↪  Self-healed stale idField "${idField}" → "${report.healedIdField}" for ${type} ` +
+                `(installed profile is out of date — refresh with \`one sync init ${platform} ${model} --force\`).\n`,
+            );
+          }
           // Doubling detection. `inserted + mergedByIdentity` is the max
           // growth we expect; if the active count grew further than that
           // minus known merges, duplicates slipped in. Conservative: only
@@ -262,26 +310,37 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
     }
   }
 
+  // List the legacy files cleanup would touch — surface them in the JSON
+  // output for both dry-run and live runs so agents can verify the blast
+  // radius before approving. `dataDir` is the only directory we ever touch;
+  // we never recurse, never glob outside it.
+  const dataDir = path.join('.one', 'sync', 'data');
+  let cleanupFiles: string[] = [];
+  if (flags.cleanup && fs.existsSync(dataDir)) {
+    cleanupFiles = fs.readdirSync(dataDir).map(f => path.join(dataDir, f));
+  }
+  let cleanupDeleted = false;
   if (flags.cleanup) {
     if (!flags.dryRun) {
       const confirm = flags.yes ?? (await p.confirm({
-        message: 'Delete legacy .one/sync/data/*.db files now?',
+        message: `Delete ${cleanupFiles.length} legacy .one/sync/data/* file(s) now?`,
         initialValue: false,
       }));
       if (p.isCancel(confirm) || !confirm) {
         output.note('Leaving legacy files in place. Run with --cleanup --yes to force.', 'one mem migrate');
       } else {
-        const dataDir = path.join('.one', 'sync', 'data');
-        if (fs.existsSync(dataDir)) {
-          for (const file of fs.readdirSync(dataDir)) {
-            const full = path.join(dataDir, file);
-            try { fs.unlinkSync(full); } catch { /* ignore */ }
-          }
+        for (const full of cleanupFiles) {
+          try { fs.unlinkSync(full); } catch { /* ignore */ }
         }
+        cleanupDeleted = true;
       }
     }
   }
 
+  const healed = reports.filter(r => r.healedIdField).map(r => ({
+    type: `${r.platform}/${r.model}`,
+    healedTo: r.healedIdField!,
+  }));
   okJson({
     status: flags.dryRun ? 'dry-run' : 'ok',
     reports,
@@ -294,6 +353,16 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
       skippedError: reports.reduce((a, r) => a + r.skippedError, 0),
       seen: reports.reduce((a, r) => a + r.rowsSeen, 0),
     },
+    ...(healed.length > 0 ? { healedProfiles: healed } : {}),
+    ...(flags.cleanup
+      ? {
+          cleanup: {
+            files: cleanupFiles,
+            deleted: cleanupDeleted,
+            ...(flags.dryRun ? { dryRun: true } : {}),
+          },
+        }
+      : {}),
   });
 }
 
