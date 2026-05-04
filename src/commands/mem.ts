@@ -70,10 +70,10 @@ export function registerMemoryCommands(program: Command): void {
 
   mem.command('init')
     .description('Tune memory config (backend, path, embeddings) — optional; memory auto-inits on first use')
-    .option('--backend <name>', 'Backend plugin name (pglite | postgres | third-party)')
+    .option('--backend <name>', 'Backend plugin name (embedded-postgres | postgres | third-party)')
     .option('--embedding <provider>', 'Embedding provider: openai | none', 'none')
     .option('--openai-key <key>', 'OpenAI API key (or set OPENAI_API_KEY)')
-    .option('--db-path <path>', 'PGlite database path')
+    .option('--db-path <path>', 'Embedded Postgres data directory')
     .option('--connection-string <url>', 'Postgres connection string')
     .option('--embed-on-add', 'Embed user memories by default', false)
     .option('--embed-on-sync', 'Embed synced records by default', false)

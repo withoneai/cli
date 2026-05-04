@@ -8,10 +8,10 @@ import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
 
 /**
  * Precondition check for every `one mem` command. We no longer require
- * `mem init` — memory auto-bootstraps with pglite defaults on first use
- * (see runtime.ts:getBackend). The one thing we still insist on is the
- * base One config, because memory writes live in the same config.json
- * alongside `apiKey` and nothing should run without that anchor.
+ * `mem init` — memory auto-bootstraps with embedded-postgres defaults on
+ * first use (see runtime.ts:getBackend). The one thing we still insist on
+ * is the base One config, because memory writes live in the same
+ * config.json alongside `apiKey` and nothing should run without that anchor.
  */
 export function requireMemoryInit(): void {
   if (!readConfig()) {

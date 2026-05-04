@@ -305,13 +305,18 @@ Note: `actions execute` is never cached — it always hits the API fresh.
 
 ### `one mem` — unified memory store
 
-One ships a local memory store (pglite default, Postgres pluggable) that backs both user-authored notes and synced platform data. **Zero-config** — the first `one mem` call on a fresh machine auto-initializes. No separate install step.
+One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled `embedded-postgres` plugin, with a `postgres` plugin for remote/self-hosted) that backs both user-authored notes and synced platform data. **Zero-config** — the first `one mem` call on a fresh machine auto-initializes the cluster at `~/.one/pg/cluster/` and writes a daemon PID file so subsequent CLI invocations reuse it.
 
 ```bash
 # User memories — works immediately on a new install
 one mem add note '{"content":"Design review is Thursday"}' --tags work --weight 7
 one mem search "design review"                       # hybrid FTS + semantic (if key set)
 one mem list note --limit 20
+
+# Listing synced platform rows — type is positional and namespaced as <platform>/<model>;
+# there is NO --platform flag and NO platform column in the schema.
+one mem list "gmail/threads"
+one mem list "attio/attioPeople" --limit 5
 
 # Enable semantic search (optional)
 one init                                             # re-run — prompts for OpenAI key

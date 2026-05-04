@@ -123,19 +123,19 @@ async function interactiveInit(flags: InitFlags): Promise<BuiltConfig> {
       label: plug.name,
       hint: plug.description,
     })),
-    initialValue: 'pglite',
+    initialValue: 'embedded-postgres',
   })) as string;
   if (p.isCancel(backend)) output.error('Cancelled.');
 
   const perBackend: Record<string, unknown> = {};
-  if (backend === 'pglite') {
-    const dbPath = flags.dbPath ?? (await p.text({
-      message: 'Database path (leave blank for default)',
-      placeholder: '~/.one/mem.pglite',
+  if (backend === 'embedded-postgres') {
+    const dataDir = flags.dbPath ?? (await p.text({
+      message: 'Postgres data directory (leave blank for default)',
+      placeholder: '~/.one/pg',
       initialValue: '',
     }));
-    if (p.isCancel(dbPath)) output.error('Cancelled.');
-    if (dbPath) perBackend.pglite = { dbPath };
+    if (p.isCancel(dataDir)) output.error('Cancelled.');
+    if (dataDir) perBackend['embedded-postgres'] = { dataDir };
   } else if (backend === 'postgres') {
     const connectionString = flags.connectionString ?? (await p.text({
       message: 'Postgres connection string',
@@ -210,10 +210,10 @@ async function interactiveInit(flags: InitFlags): Promise<BuiltConfig> {
 }
 
 function buildFromFlags(flags: InitFlags): BuiltConfig {
-  const backend = flags.backend ?? 'pglite';
+  const backend = flags.backend ?? 'embedded-postgres';
   const perBackend: Record<string, unknown> = {};
-  if (backend === 'pglite' && flags.dbPath) {
-    perBackend.pglite = { dbPath: flags.dbPath };
+  if (backend === 'embedded-postgres' && flags.dbPath) {
+    perBackend['embedded-postgres'] = { dataDir: flags.dbPath };
   }
   if (backend === 'postgres') {
     if (!flags.connectionString && !process.env.MEM_DATABASE_URL) {

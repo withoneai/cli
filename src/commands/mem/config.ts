@@ -43,7 +43,9 @@ const KNOWN_KEYS: readonly string[] = [
   'defaults.trackAccessOnSearch',
   'defaults.embedOnAdd',
   'defaults.embedOnSync',
-  'pglite.dbPath',
+  'embedded-postgres.dataDir',
+  'embedded-postgres.port',
+  'embedded-postgres.database',
   'postgres.connectionString',
 ];
 

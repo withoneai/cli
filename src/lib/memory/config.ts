@@ -37,7 +37,7 @@ export interface MemoryDefaults {
 
 /**
  * Top-level memory config block. Per-backend config lives keyed by plugin
- * name (e.g. `memory.pglite`, `memory.postgres`, `memory.turso`). Unknown
+ * name (e.g. `memory['embedded-postgres']`, `memory.postgres`). Unknown
  * keys are preserved on write so third-party plugins don't get clobbered.
  */
 export interface MemoryConfig {

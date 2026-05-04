@@ -1,9 +1,11 @@
 /**
  * Backend plugin registry + loader.
  *
- * First-party plugins (PGlite, Postgres) register statically when this
- * module loads. Third-party plugins are declared in `memory.plugins` and
- * dynamically imported by `loadBackendFromConfig()`.
+ * First-party plugins register statically when this module loads:
+ * `embedded-postgres` (default — bundled real-Postgres daemon with pgvector
+ * detect-and-degrade) and `postgres` (remote/self-hosted). Third-party
+ * plugins are declared in `memory.plugins` and dynamically imported by
+ * `loadBackendFromConfig()`.
  */
 
 import type { MemBackend, MemBackendPlugin } from './backend.js';
@@ -76,10 +78,8 @@ export async function loadBackendFromConfig(cfg: MemoryConfig): Promise<MemBacke
 
 // ─── First-party plugin registration ───────────────────────────────────────
 
-import { pglitePlugin } from './plugins/pglite/index.js';
 import { postgresPlugin } from './plugins/postgres/index.js';
 import { embeddedPostgresPlugin } from './plugins/embedded-postgres/index.js';
 
 registerBackend(embeddedPostgresPlugin);
 registerBackend(postgresPlugin);
-registerBackend(pglitePlugin);

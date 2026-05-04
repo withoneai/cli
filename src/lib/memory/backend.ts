@@ -46,8 +46,8 @@ export interface BackendCapabilities {
   maxVectorDims: number | null;
   /**
    * Supports raw read-only SQL via `backend.raw(sql, params?)`. First-
-   * party SQL backends (pglite, postgres) advertise true; third-party
-   * plugins that only expose high-level methods set this false.
+   * party SQL backends (embedded-postgres, postgres) advertise true;
+   * third-party plugins that only expose high-level methods set this false.
    */
   rawSql: boolean;
 }

@@ -150,9 +150,19 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 
 ## Unified Memory
 
-One ships a local memory store (pglite by default, Postgres pluggable) that backs both user-authored notes and synced platform data. `one mem <cmd>` is the primary surface; `one sync` is a namespaced alias (`one mem sync ...`) that writes synced rows into the same store.
+One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled `embedded-postgres` plugin, with a `postgres` plugin available for remote/self-hosted Postgres) that backs both user-authored notes and synced platform data. `one mem <cmd>` is the primary surface; `one sync` is a namespaced alias (`one mem sync ...`) that writes synced rows into the same store.
 
-**Zero-config.** The first `one mem` call on a new machine auto-initializes — no separate `mem init` step required. If an OpenAI key is already resolvable (env, `.onerc`, or `config.openaiApiKey`), embeddings enable automatically and search becomes hybrid FTS + semantic. Otherwise you get FTS-only with a structured `_upgrade` hint on every response telling the user how to upgrade.
+**Zero-config.** The first `one mem` call on a new machine auto-initializes — no separate `mem init` step required. The `embedded-postgres` plugin downloads its Postgres binaries on first run (~52MB) and writes a daemon PID/port file at `~/.one/pg/.pgserve.json` so subsequent CLI invocations reuse the running cluster. If an OpenAI key is already resolvable (env, `.onerc`, or `config.openaiApiKey`), embeddings enable automatically and search becomes hybrid FTS + semantic. Otherwise you get FTS-only with a structured `_upgrade` hint on every response telling the user how to upgrade.
+
+**Listing synced rows.** `mem list <type>` takes a positional namespaced type — there is no `--platform` flag. Synced rows live under `<platform>/<model>` types:
+
+```bash
+one --agent mem list "gmail/threads"
+one --agent mem list "attio/attioPeople" --limit 5
+one --agent mem list "google-calendar/events"
+```
+
+Underneath, the store has no `platform` column — `type` is the only platform-scoping mechanism. If you need raw SQL via `mem sql`, filter with `WHERE type LIKE 'platform/%'` (not `WHERE platform = ...`).
 
 ```bash
 # User memories

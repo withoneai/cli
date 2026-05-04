@@ -27,9 +27,9 @@ export async function getBackend(): Promise<MemBackend> {
 
   // Auto-bootstrap on first use. Zero-config UX: humans and agents can call
   // `one mem add` / `one mem search` on a fresh install without running
-  // `one mem init` first. Smart defaults: pglite backend + no embed (unless
-  // an OpenAI key is already resolvable, in which case flip to openai).
-  // Requires `one init` — the base One config must exist first.
+  // `one mem init` first. Smart defaults: embedded-postgres backend + no
+  // embed (unless an OpenAI key is already resolvable, in which case flip
+  // to openai). Requires `one init` — the base One config must exist first.
   if (!getMemoryConfig()) {
     bootstrapMemoryDefaults();
   }

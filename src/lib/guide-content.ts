@@ -94,7 +94,7 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
 
 ### 4. Memory + Sync — Unified store with hybrid FTS + semantic search
-One ships a local memory store (pglite default, Postgres pluggable) that backs both user-authored notes (\`one mem add\`) and synced platform data (\`one sync run\`). Auto-initializes on first use — no separate install step. Run \`one guide memory\` and \`one guide sync\` for the full references.
+One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled \`embedded-postgres\` plugin, with a \`postgres\` plugin for remote/self-hosted) that backs both user-authored notes (\`one mem add\`) and synced platform data (\`one sync run\`). Auto-initializes on first use — no separate install step. Run \`one guide memory\` and \`one guide sync\` for the full references.
 
 ## Topics
 
@@ -412,14 +412,16 @@ All cache commands respect \`--agent\` for JSON output.
 
 export const GUIDE_MEMORY = `# One Memory — Reference
 
-The unified memory store is a local, pluggable database (pglite by default) that backs both user-authored memories AND synced platform data. Every \`one mem\` and \`one sync\` call lands in the same store, keyed by a stable source id and searchable via FTS + optional semantic embedding.
+The unified memory store is a local, pluggable database (\`embedded-postgres\` by default — a real Postgres process bootstrapped on demand) that backs both user-authored memories AND synced platform data. Every \`one mem\` and \`one sync\` call lands in the same store, keyed by a stable source id and searchable via FTS + optional semantic embedding.
 
 ## Zero-config
 
 The first \`one mem\` call on a fresh install auto-initializes:
-- Backend: \`pglite\` (embedded Postgres, zero external deps)
-- DB path: \`~/.one/mem.pglite\`
-- Embedding provider: \`openai\` if a key is already resolvable, else \`none\`
+- Backend: \`embedded-postgres\` (Postgres 18 via pgserve; downloads ~52MB of binaries on first use, ~2s on later boots)
+- Cluster path: \`~/.one/pg/cluster/\`, daemon PID/port at \`~/.one/pg/.pgserve.json\`
+- Embedding provider: \`openai\` if a key is already resolvable AND pgvector is loadable; else \`none\`
+
+If pgvector isn't installed in the bundled Postgres (the default binary distribution doesn't ship it yet), the schema applies cleanly without an \`embedding\` column, all FTS paths work, and \`mem doctor\` emits an \`_upgrade\` block pointing at \`brew install pgvector\` when an OpenAI key is present.
 
 No \`mem init\` step needed. \`mem init\` still exists for power-user tuning (switch to Postgres, change paths, toggle defaults).
 
@@ -458,8 +460,12 @@ one --agent mem update <id> '{"status":"done"}'
 # Archive / unarchive
 one --agent mem archive <id> --reason superseded
 
-# List by type
+# List by type — type is positional. Synced rows are namespaced as <platform>/<model>.
+# There is NO --platform flag on \`mem list\`, and NO platform column in the schema.
 one --agent mem list note --limit 20
+one --agent mem list "gmail/threads" --limit 5
+one --agent mem list "attio/attioPeople"
+one --agent mem list "google-calendar/events"
 
 # Search (hybrid FTS + semantic when embeddings enabled)
 one --agent mem search "deadline next week"
@@ -468,6 +474,12 @@ one --agent mem search "..." --type note     # restrict to one type
 \`\`\`
 
 Every search response includes \`searchMode: "hybrid" | "fts_only"\`. Use it to detect when semantic ranking isn't actually running.
+
+If you need raw SQL via \`mem sql\`, filter by \`type\` (not \`platform\` — there is no such column):
+
+\`\`\`bash
+one --agent mem sql "SELECT type, COUNT(*) FROM mem_records WHERE type LIKE 'gmail/%' GROUP BY type"
+\`\`\`
 
 ## Graph
 
@@ -524,7 +536,7 @@ one --agent mem migrate --cleanup -y                  # migrate + delete .db fil
 
 ## Backends
 
-First-party plugins: \`pglite\` (default), \`postgres\` (Supabase, Neon, self-hosted). Third-party plugins declared in \`memory.plugins\` as npm package specs.
+First-party plugins: \`embedded-postgres\` (default — Postgres 18 via pgserve, daemon at \`~/.one/pg/\`), \`postgres\` (Supabase, Neon, self-hosted). Third-party plugins declared in \`memory.plugins\` as npm package specs.
 
 \`\`\`bash
 one --agent mem init --backend postgres --connection-string 'postgres://...'
@@ -540,7 +552,7 @@ Sync platform data into the unified memory store for instant queries, hybrid FTS
 
 ## Getting Started
 
-The local SQLite fallback installed by the old \`sync install\` flow is still present for backwards compatibility, but memory auto-initializes on first use with pglite — no install step needed.
+The local SQLite fallback installed by the old \`sync install\` flow is still present for backwards compatibility, but memory auto-initializes on first use with the bundled \`embedded-postgres\` backend (Postgres 18 via pgserve) — no install step needed.
 
 \`\`\`bash
 one --agent mem status              # confirms the backend + provider
@@ -789,7 +801,7 @@ one --agent mem find-by-source hubspot/contacts:<id>
 one --agent sync query hubspot/contacts --where 'email=jane@acme.com'
 \`\`\`
 
-\`sync sql\` was retired in the unified memory cutover — a raw-SQL surface can't safely span PGlite / Postgres / third-party backends without leaking specifics. Use \`mem search\` / \`sync search\` / \`sync query\` with dotted \`--where\` paths instead.
+\`sync sql\` was retired in the unified memory cutover — a raw-SQL surface can't safely span the embedded Postgres, remote Postgres, and third-party backends without leaking specifics. Use \`mem search\` / \`sync search\` / \`sync query\` with dotted \`--where\` paths instead.
 
 ## Exclude Fields
 
@@ -897,7 +909,9 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
   events/{platform}_{model}.jsonl     # change event logs (if onChange: "log")
   logs/{platform}.log                 # cron run logs
   locks/{platform}_{model}/           # cross-process sync locks
-~/.one/mem.pglite                     # unified memory store (synced rows + user memories)
+~/.one/pg/cluster/                    # unified memory store — embedded Postgres data dir
+~/.one/pg/.pgserve.json               # daemon PID/port file (cleared on stop)
+~/.one/pg/pgserve.log                 # daemon stdout/stderr
 ~/.one/config.json                    # apiKey + openaiApiKey + memory config block
 ~/.one/sync/
   schedules.json                      # global schedule registry
