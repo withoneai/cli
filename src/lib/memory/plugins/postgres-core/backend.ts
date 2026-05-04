@@ -55,6 +55,11 @@ import {
   hotColumnIndexName,
 } from './client.js';
 
+// Stable advisory-lock id for schema setup. Arbitrary 63-bit value; only
+// requirement is that it's distinct from any other advisory lock the host
+// app might use. Spells "ONEMEM__" loosely as ASCII bytes.
+const SCHEMA_LOCK_ID = 7193095520723763200n.toString();
+
 // ─── Row shape returned by Postgres ────────────────────────────────────────
 
 interface RecordRow {
@@ -128,18 +133,55 @@ export class CoreBackend implements MemBackend {
     // is added via VECTOR_COLUMNS_SQL only when the capability is on,
     // and the upsert function gets a vector-aware override (same
     // signature, p_embedding TEXT) from VECTOR_FUNCTIONS_SQL.
-    if (EXTENSIONS_SQL.trim()) await this.client.query(EXTENSIONS_SQL);
-    await this.client.query(TABLES_SQL);
-    await this.client.query(INDEXES_SQL);
-    await this.client.query(FUNCTIONS_SQL);
-    if (caps.vectorSearch) {
-      await this.client.query(VECTOR_EXTENSION_SQL);
-      await this.client.query(VECTOR_COLUMNS_SQL);
-      await this.client.query(VECTOR_FUNCTIONS_SQL);
-      await this.client.query(VECTOR_INDEX_SQL);
-      await this.client.query(HYBRID_SEARCH_SQL);
+    //
+    // Serialize concurrent CLI processes with a Postgres session-level
+    // advisory lock. Without this, two processes hitting the daemon at
+    // once race on `CREATE EXTENSION` / `CREATE OR REPLACE FUNCTION`,
+    // producing `tuple concurrently updated` on pg_proc. The lock id is
+    // a stable arbitrary bigint scoped to the unified-memory schema.
+    // Backends that don't implement advisory locks (none of ours today;
+    // a defensive guard for future plugins) silently fall through —
+    // the race is only observable across processes anyway.
+    const lockHeld = await this.tryAcquireSchemaLock();
+    try {
+      if (EXTENSIONS_SQL.trim()) await this.client.query(EXTENSIONS_SQL);
+      await this.client.query(TABLES_SQL);
+      await this.client.query(INDEXES_SQL);
+      await this.client.query(FUNCTIONS_SQL);
+      if (caps.vectorSearch) {
+        await this.client.query(VECTOR_EXTENSION_SQL);
+        await this.client.query(VECTOR_COLUMNS_SQL);
+        await this.client.query(VECTOR_FUNCTIONS_SQL);
+        await this.client.query(VECTOR_INDEX_SQL);
+        await this.client.query(HYBRID_SEARCH_SQL);
+      }
+      await this.client.query(getMetaInsertSQL(SCHEMA_VERSION));
+    } finally {
+      if (lockHeld) {
+        try {
+          await this.client.query(
+            `SELECT pg_advisory_unlock(${SCHEMA_LOCK_ID}::bigint)`,
+          );
+        } catch {
+          /* connection may already be returning; nothing actionable */
+        }
+      }
     }
-    await this.client.query(getMetaInsertSQL(SCHEMA_VERSION));
+  }
+
+  private async tryAcquireSchemaLock(): Promise<boolean> {
+    try {
+      // Blocks until acquired. With concurrent processes, the second one
+      // waits here while the first finishes — by the time it gets the
+      // lock, the schema is already current and every IF NOT EXISTS / OR
+      // REPLACE statement is a no-op.
+      await this.client.query(
+        `SELECT pg_advisory_lock(${SCHEMA_LOCK_ID}::bigint)`,
+      );
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async getSchemaVersion(): Promise<string | null> {
