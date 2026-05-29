@@ -3,7 +3,7 @@
 The One CLI can be configured at two scopes:
 
 - **Global** — `~/.one/config.json`. Applies everywhere the user runs `one`.
-- **Project** — `~/.one/projects/<slug>/config.json`, where `<slug>` is the project root path with slashes replaced by dashes (e.g. `/Users/jane/acme` → `-Users-jane-acme`). Only applies when running `one` from inside that project folder.
+- **Project** — `~/.one/projects/<slug>/config.json`, where `<slug>` is the project root path with path separators (and any character Windows forbids in a path component) replaced by dashes (e.g. `/Users/jane/acme` → `-Users-jane-acme`; on Windows, `C:\Users\jane\acme` → `C--Users-jane-acme`). Only applies when running `one` from inside that project folder.
 
 **Resolution order:** env vars → `.onerc` in cwd → project config → global config. Project config wins when present; otherwise the CLI falls back to the global config.
 
