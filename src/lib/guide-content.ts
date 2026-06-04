@@ -11,6 +11,17 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 You can also use \`one login\` / \`one logout\` to manage authentication separately (global or per-directory).
 
+### Agent-driven setup (no prompts)
+To onboard a user without any terminal interaction, pass \`--auth\` to \`one init\`. This disables every prompt, auto-installs the One skill, and skips the connect-a-platform step (run \`one add <platform>\` afterwards).
+
+\`\`\`bash
+one init --auth browser              # opens a login window; the user authenticates, the CLI saves the key
+one init --auth browser --project    # same, but scoped to this folder (default scope is global)
+one init --auth manual --api-key sk_live_...   # headless / CI — no browser
+\`\`\`
+
+With \`--auth browser\` the user sees a browser window, picks how to authenticate, and the window closes when done — the agent never blocks on stdin. Add \`--openai-key sk-...\` to enable semantic search in \`one mem\` during setup.
+
 ## The --agent Flag
 
 Always use \`--agent\` for machine-readable JSON output. It disables colors, spinners, and interactive prompts.
@@ -27,7 +38,7 @@ Before using any feature, read its guide section first: \`one guide actions\`, \
 
 ## Features
 
-### 1. Actions — Execute API calls on 250+ platforms
+### 1. Actions — Execute API calls on 400+ platforms
 Search for actions, read their docs, and execute them. This is the core workflow.
 
 **Quick start:**
@@ -110,7 +121,7 @@ Request specific sections:
 ## Important Notes
 
 - **Always use \`--agent\` flag** for structured JSON output
-- Platform names are always **kebab-case** (e.g., \`hub-spot\`, \`google-calendar\`)
+- Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`google-calendar\`)
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
@@ -210,7 +221,7 @@ All errors return JSON: \`{"error": "message"}\`. Check the \`error\` key.
 
 ## Notes
 
-- Platform names are **kebab-case** (e.g., \`hub-spot\`)
+- Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`ship-station\`)
 - JSON flags use single quotes around the JSON to avoid shell escaping
 - If search returns no results, try broader queries
 - Access control settings from \`one config\` may restrict execution
@@ -965,7 +976,7 @@ export const PLATFORM_DEMO_ACTIONS: Record<string, { description: string; query:
   'google-calendar': { description: 'List upcoming events', query: 'list events' },
   'slack': { description: 'List channels', query: 'list channels' },
   'shopify': { description: 'List products', query: 'list products' },
-  'hub-spot': { description: 'List contacts', query: 'list contacts' },
+  'hubspot': { description: 'List contacts', query: 'list contacts' },
   'github': { description: 'List repositories', query: 'list repos' },
   'stripe': { description: 'List customers', query: 'list customers' },
   'notion': { description: 'Search pages', query: 'search' },
@@ -980,7 +991,7 @@ export function getWorkflowExamples(connectedPlatforms: string[]): string[] {
   if (has('gmail') && has('slack')) examples.push('Gmail → Slack: Forward important emails to a channel');
   if (has('stripe') && has('slack')) examples.push('Stripe → Slack: Notify on new payments');
   if (has('shopify') && has('gmail')) examples.push('Shopify → Gmail: Send order confirmation emails');
-  if (has('hub-spot') && has('gmail')) examples.push('HubSpot → Gmail: Auto-email new leads');
+  if (has('hubspot') && has('gmail')) examples.push('HubSpot → Gmail: Auto-email new leads');
   if (has('github') && has('slack')) examples.push('GitHub → Slack: Notify on new issues/PRs');
 
   if (examples.length === 0) {

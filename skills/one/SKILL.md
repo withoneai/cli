@@ -1,28 +1,28 @@
 ---
 name: one
 description: |
-  Use the One CLI (`one`) to interact with 250+ third-party platforms — Gmail, Slack, Shopify, HubSpot, Stripe, GitHub, Notion, Salesforce, and more — through their APIs. One handles authentication, request building, and execution through a single unified interface.
+  Use the One CLI (`one`) to interact with 3rd-party platforms — Gmail, Slack, Stripe, Notion, etc. through their APIs. One handles auth, request building, and execution.
 
-  TRIGGER when the user wants to:
-  - Interact with ANY third-party platform or external service (e.g., "send an email", "create a Shopify order", "look up a HubSpot contact", "post to Slack")
-  - List their connected platforms or check what integrations are available
-  - Search for what they can do on a platform (e.g., "what can I do with Gmail")
-  - Execute any API call against a connected platform
+  TRIGGER when:
+  - Interact with ANY 3rd-party platform or external service (e.g., "send an email", "create a Shopify order", "find a HubSpot contact", "post to Slack")
+  - List their connected platforms or check available ones
+  - Search for available actions (e.g., "what can I do with Gmail")
+  - Execute API calls with a connected platform
   - Set up webhook-driven automations between platforms (e.g., "when a Stripe payment comes in, notify Slack")
   - Build multi-step workflows that chain actions across platforms (e.g., "fetch Stripe customers and email each one")
-  - Anything involving third-party APIs, integrations, or connected apps — even if they don't mention "One" by name
+  - Anything involving 3rd-party APIs, integrations, or connected apps — even if they don't mention "One" by name
 
   DO NOT TRIGGER for:
-  - Setting up One or installing MCP (that's `one init`)
-  - Adding new connections (that's `one add <platform>`)
-  - Configuring access control (that's `one config`)
+  - Setting up One or installing MCP (use `one init`)
+  - Adding new connections (use `one add <platform>`)
+  - Configuring access control (use `one config`)
 ---
 
 # One CLI
 
-You have access to the One CLI which lets you interact with 250+ third-party platforms through their APIs. Always include the `--agent` flag right after `one` for structured JSON output.
+You have access to the One CLI which lets you interact with 400+ third-party platforms through their APIs. Always include the `--agent` flag right after `one` for structured JSON output.
 
-If the user wants a separate API key / connections for a specific project (vs. their default), walk them through running `one init` from that project folder and picking the "project" scope — see `references/scoping.md`.
+If the user wants a separate API key / connections for a specific project (vs. their default), walk them through running `one init` from that project folder and picking the "project" scope — see `references/scoping.md`. For monorepo subprojects (where a parent already has `.git`/`package.json`), have them `mkdir .one` in the subproject first so the config is keyed to that dir, not the monorepo root.
 
 ## Authentication
 
@@ -31,7 +31,9 @@ one login                    # Browser-based login (opens app.withone.ai)
 one logout                   # Clear local credentials
 ```
 
-`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. If already logged in, the user can choose to log in globally or for the current directory. `one logout` shows current session info and confirms before clearing credentials. For CI/CD or headless environments, use `one init` to paste a key manually.
+`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. If already logged in, the user can choose to log in globally or for the current directory. `one logout` shows current session info and confirms before clearing credentials.
+
+**Onboarding a user with no prompts:** run `one init --auth browser` — it opens a login window (the user authenticates there), saves the key, and auto-installs this skill, all without blocking on stdin. Add `-g`/`-p` for scope (default global). For CI/CD or headless environments, use `one init --auth manual --api-key sk_live_...`.
 
 ## Core Workflow: search -> knowledge -> execute
 
@@ -59,7 +61,7 @@ Removes a connection. Returns `{"deleted": true, "platform": "...", "key": "..."
 one --agent actions search <platform> "<query>" -t execute
 ```
 
-- Platform names are always kebab-case: `gmail`, `hub-spot`, `ship-station`
+- Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`
 - Use `-t execute` when performing actions, `-t knowledge` when researching or writing code
 - If no results, broaden the query (e.g., `"list"` instead of `"list active premium customers"`)
 
@@ -97,7 +99,7 @@ Examples:
 one --agent actions execute shopify <actionId> <connectionKey>
 
 # POST with body data
-one --agent actions execute hub-spot <actionId> <connectionKey> \
+one --agent actions execute hubspot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # Path variables + query params
@@ -130,7 +132,7 @@ All errors return JSON: `{"error": "message"}`. Parse output as JSON and check f
 ## Important Rules
 
 - Always use `--agent` flag for structured JSON output
-- Platform names are always kebab-case (`hub-spot` not `HubSpot`)
+- Platform names are lowercase; multi-word names use dashes (`hubspot` not `HubSpot`, `google-calendar` not `googleCalendar`)
 - Always use the exact action ID from search results — never guess or construct them
 - Always read knowledge before executing — it has required params, validation rules, and caveats
 - JSON values passed to `-d`, `--path-vars`, `--query-params` must be valid JSON (use single quotes around JSON to avoid shell escaping)

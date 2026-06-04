@@ -24,7 +24,7 @@
   <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Ftools" alt="tools"></a>
 </p>
 
-One gives your AI agent authenticated access to 250+ platforms - Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else - through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
+One gives your AI agent authenticated access to 400+ platforms - Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else - through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
 
 ## Install
 
@@ -140,13 +140,25 @@ Supports Claude Code, Claude Desktop, Cursor, Windsurf, Codex, and Kiro.
 
 When you run `one` in a project, it uses the project config if one exists and falls back to the global config otherwise. Use `one config path` to see which config is active and the full resolution order.
 
+In a monorepo, the project root is the nearest ancestor with `.one/`, `.git`, or `package.json` — checked in that order. Run `mkdir .one` in a nested subproject to make it its own project root (so the config is keyed by the nested dir's slug instead of the monorepo's).
+
 If you've already set up, `one init` shows your current status for the active scope and lets you update your key, install to more agents, or reconfigure.
+
+**Agent-driven setup (no prompts).** Pass `--auth` and `one init` runs end-to-end without any terminal interaction — handy when an AI agent is onboarding you. It saves the key, auto-installs the One skill, and skips the connect step (`one add` later).
+
+```bash
+one init --auth browser            # opens a login window; you authenticate, the window closes — done
+one init --auth manual --api-key sk_live_...   # headless / CI, no browser
+```
 
 | Flag | What it does |
 |------|-------------|
 | `-y` | Skip confirmations |
 | `-g` | Non-interactive: write the One config globally (`~/.one/config.json`) |
 | `-p` | Non-interactive: write the One config for this project (`~/.one/projects/<slug>/config.json`) |
+| `--auth <browser\|manual>` | Run setup with **no prompts**. `browser` opens a login window; `manual` uses `--api-key`. Scope from `-g`/`-p` (default global). |
+| `--api-key <key>` | API key for `--auth manual` (`sk_live_…` / `sk_test_…`) |
+| `--openai-key <key>` | Optional OpenAI key for `one mem` semantic search |
 
 ### `one add <platform>`
 
@@ -154,11 +166,11 @@ Connect a new platform via OAuth.
 
 ```bash
 one add shopify
-one add hub-spot
+one add hubspot
 one add gmail
 ```
 
-Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case - run `one platforms` to see them all.
+Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are lowercase (with dashes for multi-word names) - run `one platforms` to see them all.
 
 ### `one list`
 
@@ -207,7 +219,7 @@ Search for API actions on a connected platform using natural language.
 
 ```bash
 one actions search shopify "list products"
-one actions search hub-spot "create contact" -t execute
+one actions search hubspot "create contact" -t execute
 one actions search gmail "send email"
 ```
 
@@ -232,7 +244,7 @@ Execute an API action on a connected platform.
 one actions execute shopify <actionId> <connectionKey>
 
 # POST with data
-one actions execute hub-spot <actionId> <connectionKey> \
+one actions execute hubspot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # With path variables
