@@ -524,6 +524,7 @@ interface SegmentResult {
   request?: unknown;
   response?: unknown;
   error?: string;
+  _preflight?: { cache: 'hit' | 'miss' };
 }
 
 function parseParallelSegments(): { segments: ParsedSegment[]; flags: GlobalParallelFlags } {
@@ -629,6 +630,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
     segment: ParsedSegment;
     index: number;
     actionDetails: ActionDetails;
+    preflightCacheHit: boolean;
     data?: unknown;
     pathVariables?: Record<string, unknown>;
     queryParams?: Record<string, unknown>;
@@ -653,9 +655,11 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
 
     // Fetch action details (cache-served when fresh)
     let actionDetails: ActionDetails | undefined;
+    let preflightCacheHit = false;
     try {
       const resolved = await resolveActionDetails(api, seg.actionId, { useCache: flags.useCache });
       actionDetails = resolved.details;
+      preflightCacheHit = resolved.cacheHit;
     } catch (err) {
       segErrors.push(`Action not found: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -704,7 +708,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
     if (segErrors.length > 0) {
       errors.push({ segment: i + 1, label, messages: segErrors });
     } else if (actionDetails) {
-      prepared.push({ segment: seg, index: i, actionDetails, data, pathVariables, queryParams, headers });
+      prepared.push({ segment: seg, index: i, actionDetails, preflightCacheHit, data, pathVariables, queryParams, headers });
     }
   }
 
@@ -750,6 +754,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
             mock: true,
             request: { method: action.actionDetails.method, url: action.actionDetails.path },
             response: mockResponse,
+            _preflight: { cache: action.preflightCacheHit ? 'hit' : 'miss' },
           };
         }
 
@@ -779,6 +784,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
             ...(flags.dryRun ? { headers: result.requestConfig.headers, data: result.requestConfig.data } : {}),
           },
           response: flags.dryRun ? undefined : result.responseData,
+          _preflight: { cache: action.preflightCacheHit ? 'hit' : 'miss' },
         };
       }),
     );
