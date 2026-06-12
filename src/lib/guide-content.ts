@@ -207,9 +207,9 @@ Each segment separated by \`--\` follows the same format: \`<platform> <actionId
 
 All segments are validated upfront before any execution starts — if one segment has bad params, nothing runs. Execution uses \`Promise.allSettled\` so if one action fails the rest still complete. Use \`--max-concurrency <n>\` (default 5) to control batch size.
 
-Agent-mode output:
+Agent-mode output (each result carries its own \`_preflight\` showing whether that action's details were served from cache):
 \`\`\`json
-{"parallel":true,"totalDurationMs":1234,"succeeded":2,"failed":0,"results":[{"segment":1,"platform":"gmail","actionId":"send-email","status":"success","durationMs":800,"response":{...}},{"segment":2,"platform":"slack","actionId":"post-message","status":"success","durationMs":600,"response":{...}}]}
+{"parallel":true,"totalDurationMs":1234,"succeeded":2,"failed":0,"results":[{"segment":1,"platform":"gmail","actionId":"send-email","status":"success","durationMs":800,"response":{...},"_preflight":{"cache":"hit"}},{"segment":2,"platform":"slack","actionId":"post-message","status":"success","durationMs":600,"response":{...},"_preflight":{"cache":"miss"}}]}
 \`\`\`
 
 ## Input Validation
@@ -357,7 +357,7 @@ Cache location: \`~/.one/cache/knowledge/\` and \`~/.one/cache/search/\`
 - **Subsequent calls (within TTL)**: serves from cache instantly, no API call
 - **After TTL expires**: makes a conditional request (ETag). If content unchanged, refreshes the cache timestamp. If changed, writes fresh data.
 - **Network failure with stale cache**: serves the stale cache with a warning — never fails hard when a cache exists
-- **Execute preflight**: \`actions execute\` reads action details (method, path, validation schema) from the same cache, and warms it on a miss — repeated executes of the same action skip the lookup even without a prior knowledge call
+- **Shared preflight**: \`actions execute\`, flow action steps, and \`sync\` all read action details (method, path, validation schema) from the same cache and warm it on a miss — so a knowledge call, a flow run, and a later execute of the same action all reuse one cached lookup
 
 Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \`cacheTtl\` in \`~/.one/config.json\`.
 
@@ -367,7 +367,7 @@ Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \
 |--------|-----------|
 | \`actions knowledge\` (API docs, change infrequently) | \`actions execute\` responses (live data, always fresh) |
 | \`actions search\` results | \`connection list\` (changes with add/remove) |
-| Action details used by execute's preflight (method, path, schema) | |
+| Action details used by execute / flow / sync preflight (method, path, schema) | |
 
 ## Agent Mode \`_cache\` Metadata
 

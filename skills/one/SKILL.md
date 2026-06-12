@@ -124,7 +124,7 @@ one --agent actions execute --parallel \
   -- slack post-message conn456 -d '{"text":"done"}'
 ```
 
-All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`.
+All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`. Each result carries `"_preflight":{"cache":"hit"|"miss"}` showing whether that action's details were served from cache.
 
 ## Error Handling
 

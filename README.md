@@ -290,7 +290,7 @@ Each segment follows the same format: `<platform> <actionId> <connectionKey> [-d
 | `--parallel` | Enable parallel mode |
 | `--max-concurrency <n>` | Max concurrent actions per batch (default: 5) |
 
-Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`response`, plus `totalDurationMs`, `succeeded`, and `failed` counts.
+Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`response`/`_preflight` (`{"cache":"hit"|"miss"}`), plus `totalDurationMs`, `succeeded`, and `failed` counts.
 
 ### `one cache`
 
