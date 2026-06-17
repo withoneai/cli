@@ -17,7 +17,7 @@ import {
 import { isAgentMode } from './output.js';
 
 /**
- * Anonymous CLI usage analytics for the One CLI.
+ * CLI usage analytics for the One CLI (identified — keyed to the One user).
  *
  * SCOPE — deliberately narrow. Emits ONLY CLI-specific signals the backend
  * can't see: which commands run, agent vs human, on which CLI version/OS. It
@@ -270,7 +270,7 @@ export function maybeShowTelemetryNotice(): void {
   markTelemetryNoticeShown();
   process.stderr.write(
     pc.dim(
-      'One CLI collects anonymous usage analytics (which commands run) to improve the product.\n' +
+      'One CLI collects usage analytics (which commands run, linked to your One account) to improve the product.\n' +
         'No arguments, inputs, or secrets are ever collected. Opt out anytime with ONE_NO_TELEMETRY=1.\n',
     ),
   );

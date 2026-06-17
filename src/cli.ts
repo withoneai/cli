@@ -147,7 +147,7 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (opts.agent) {
     setAgentMode(true);
   }
-  // Anonymous CLI usage telemetry (opt-out). Records only the command path —
+  // CLI usage telemetry (opt-out, linked to the One account). Records only the command path —
   // never args/flags. captureCommand() queues the event to disk instantly;
   // drainQueue() then sends it (plus any left over from prior runs) in the
   // background, overlapping the command. The postAction flush below stops any

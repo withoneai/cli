@@ -566,12 +566,12 @@ Run `one update` manually whenever you want to upgrade.
 
 ### Telemetry
 
-The CLI collects **anonymous usage analytics** — which command was run, the CLI version, OS/arch, and whether it ran in `--agent` mode — to help us prioritize improvements. Events are keyed to your One user id so they line up with your dashboard activity. **Command arguments, inputs, connection data, and secrets are never collected** (only the command name, e.g. `actions execute`). A one-time notice is shown on first run. Events are queued locally and sent in the background, so telemetry never slows down or blocks a command.
+The CLI collects **usage analytics** — which command was run, the CLI version, OS/arch, and whether it ran in `--agent` mode — to help us prioritize improvements. Events are linked to your One account (user id, email, name, org) so they line up with your dashboard activity. **Command arguments, inputs, connection data, and secrets are never collected** (only the command name, e.g. `actions execute`). A one-time notice is shown on first run. Events are queued locally and sent in the background, so telemetry never slows down or blocks a command.
 
-To opt out, set either:
+To opt out, set any of:
 
 ```bash
-export ONE_NO_TELEMETRY=1     # or the cross-tool standard: DO_NOT_TRACK=1
+export ONE_NO_TELEMETRY=1     # also accepted: ONE_DISABLE_TELEMETRY=1, or the cross-tool standard DO_NOT_TRACK=1
 ```
 
 Telemetry is also disabled automatically when `CI=1`. You can persist the choice by adding `"telemetry": "off"` to `~/.one/config.json`.

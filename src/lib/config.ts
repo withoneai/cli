@@ -407,7 +407,7 @@ function deviceIdFile(): string { return path.join(configDir(), 'device-id'); }
 function telemetryNoticeFile(): string { return path.join(configDir(), '.telemetry-notice'); }
 
 /**
- * Stable, anonymous per-install id used as the analytics distinct_id before
+ * Stable, random per-install id used as the analytics distinct_id before
  * the user authenticates (once logged in we key on the One user id instead,
  * so CLI + dashboard events unify on the same person). Stored once in
  * ~/.one/device-id. Best-effort: if the file can't be written we still return
