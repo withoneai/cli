@@ -145,7 +145,7 @@ Two rules: (1) prepend the stdin-read line, (2) replace `return X` with `process
 one --agent flow validate <key>
 ```
 
-`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source` and `transform.expression` and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
+`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source`, `transform.expression`, **and external `code.module` `.mjs` files**, and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
 
 ### Step 6: Execute
 
@@ -271,6 +271,10 @@ Selectors in data fields (`data`, `queryParams`, `pathVars`, `connectionKey`) ar
 
 The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expression`, and `code.source` fields **do** support full JavaScript expressions (e.g., `$.input.email && $.input.email.length > 0`).
 
+**Condition null-safety:** `if`/`unless`, `while.condition`, and `condition.expression` are null-safe. A condition that walks into a skipped or not-yet-run step's output — e.g. `$.steps.maybeSkipped.output.value` — evaluates to `false` instead of throwing `Cannot read properties of undefined`. (This applies to *conditions* only; `transform.expression` and `code.source` still throw on undefined access, since their output feeds downstream steps and should fail loudly.)
+
+**Large results:** pass `--output-file <path>` to `flow execute` to stream the full result to a file instead of stdout. Use it when a flow aggregates large outputs that would otherwise be truncated on stdout or exceed the JSON string-size limit. stdout (and `--agent` output) then carries `{"event":"workflow:result", ..., "outputFile":"<path>"}` instead of inline `steps` — read the file for the full result.
+
 ## Step Types
 
 ### `action` — Execute a One API action
@@ -387,7 +391,7 @@ Use when fetching from 2+ independent data sources before combining results. Eac
 }
 ```
 
-After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`.
+After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`. Each substep also carries its own result metadata — `$.steps.<id>.status` (`"success"` | `"failed"` | `"timeout"` | `"skipped"`), `.error`, `.errorCode` (e.g. `"TIMEOUT"`), `.durationMs` — so a downstream gate can tell a timed-out substep (retry-able) from one that genuinely returned nothing: `$.steps.fetchEvents.status === 'timeout'`. These substep references resolve at runtime (the engine stores each child in the context) and `flow validate` recognizes them — referencing a parallel/`loop`/`while`/`condition` child from a later step is not a forward-reference error.
 
 ### `file-read` / `file-write` — Filesystem access
 
