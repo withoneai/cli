@@ -68,6 +68,7 @@ interface RecordRow {
   data: Record<string, unknown>;
   tags: string[] | null;
   keys: string[] | null;
+  identity_keys: string[] | null;
   sources: SourcesMap;
   searchable_text: string | null;
   embedding: unknown;
@@ -90,6 +91,7 @@ function toRecord(row: RecordRow): MemRecord {
     data: row.data,
     tags: row.tags ?? undefined,
     keys: row.keys ?? undefined,
+    identity_keys: row.identity_keys ?? undefined,
     sources: row.sources ?? {},
     searchable_text: row.searchable_text,
     embedded_at: row.embedded_at,
@@ -184,14 +186,14 @@ export class CoreBackend implements MemBackend {
     const embedding = vectorLiteral(row.embedding ?? null);
     const sql = this.caps.vectorSearch
       ? `INSERT INTO mem_records
-          (type, data, tags, keys, sources, searchable_text, content_hash, weight,
+          (type, data, tags, keys, identity_keys, sources, searchable_text, content_hash, weight,
            embedding, embedded_at, embedding_model)
-         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8,
-                 $9::vector, CASE WHEN $9 IS NOT NULL THEN NOW() ELSE NULL END, $10)
+         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::text[], $6::jsonb, $7, $8, $9,
+                 $10::vector, CASE WHEN $10 IS NOT NULL THEN NOW() ELSE NULL END, $11)
          RETURNING *`
       : `INSERT INTO mem_records
-          (type, data, tags, keys, sources, searchable_text, content_hash, weight)
-         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8)
+          (type, data, tags, keys, identity_keys, sources, searchable_text, content_hash, weight)
+         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::text[], $6::jsonb, $7, $8, $9)
          RETURNING *`;
     const params = this.caps.vectorSearch
       ? [
@@ -199,6 +201,7 @@ export class CoreBackend implements MemBackend {
           JSON.stringify(row.data),
           row.tags ?? null,
           row.keys ?? null,
+          row.identity_keys ?? null,
           JSON.stringify(row.sources ?? {}),
           row.searchable_text ?? null,
           row.content_hash ?? null,
@@ -211,6 +214,7 @@ export class CoreBackend implements MemBackend {
           JSON.stringify(row.data),
           row.tags ?? null,
           row.keys ?? null,
+          row.identity_keys ?? null,
           JSON.stringify(row.sources ?? {}),
           row.searchable_text ?? null,
           row.content_hash ?? null,
@@ -227,7 +231,7 @@ export class CoreBackend implements MemBackend {
     const res = await this.client.query<{ id: string; action: 'inserted' | 'updated' }>(
       `SELECT id, action FROM mem_upsert_by_keys(
           $1::text, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6::text, $7::text,
-          $8::integer, $9::text, $10::text, $11::boolean
+          $8::integer, $9::text, $10::text, $11::boolean, $12::text[]
        )`,
       [
         row.type,
@@ -241,6 +245,7 @@ export class CoreBackend implements MemBackend {
         embedding,
         embeddingModel,
         opts.replace ?? false,
+        row.identity_keys ?? null,
       ],
     );
     const { id, action } = res.rows[0];
@@ -597,6 +602,37 @@ export class CoreBackend implements MemBackend {
       [sourceKey],
     );
     return res.rows[0] ? toRecord(res.rows[0]) : null;
+  }
+
+  async findByKeys(
+    keys: string[],
+    opts: { type?: string; status?: 'active' | 'archived' | 'all'; limit?: number } = {},
+  ): Promise<MemRecord[]> {
+    if (!keys.length) return [];
+    // A match means the record carries ALL given keys across EITHER column —
+    // `keys[]` (entity/source keys) or `identity_keys[]` (participant
+    // associations, #128). One key → every record carrying it; many → the
+    // intersection. Params only — no string interpolation.
+    const params: unknown[] = [keys];
+    const where: string[] = [`(COALESCE(keys, '{}'::text[]) || COALESCE(identity_keys, '{}'::text[])) @> $1::text[]`];
+    const status = opts.status ?? 'active';
+    if (status !== 'all') {
+      params.push(status);
+      where.push(`status = $${params.length}`);
+    }
+    if (opts.type) {
+      params.push(opts.type);
+      where.push(`type = $${params.length}`);
+    }
+    params.push(Math.min(opts.limit ?? 2000, 5000));
+    const res = await this.client.query<RecordRow>(
+      `SELECT * FROM mem_records
+        WHERE ${where.join(' AND ')}
+        ORDER BY type ASC, updated_at DESC NULLS LAST
+        LIMIT $${params.length}`,
+      params,
+    );
+    return res.rows.map(toRecord);
   }
 
   async listSources(recordId: string): Promise<SourcesMap> {

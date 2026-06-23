@@ -27,6 +27,7 @@ import {
   memLinkedCommand,
   memSourcesCommand,
   memFindBySourceCommand,
+  memFindByKeyCommand,
 } from './mem/records.js';
 import { memDoctorCommand } from './mem/doctor.js';
 import { memExportCommand, memImportCommand } from './mem/export.js';
@@ -189,6 +190,13 @@ export function registerMemoryCommands(program: Command): void {
   mem.command('find-by-source <sourceKey>')
     .description('Look up the record owning "<system>/<model>:<external_id>"')
     .action(memFindBySourceCommand);
+
+  mem.command('find-by-key <key> [secondKey]')
+    .description('Records sharing an identity key (e.g. email:jane@acme.com), grouped by type. Two keys = intersection.')
+    .option('--type <type>', 'Only this record type (e.g. gmail/gmailThreads)')
+    .option('--limit <n>', 'Max records shown per type (default 10)')
+    .action((key: string, secondKey: string | undefined, flags: { type?: string; limit?: string }) =>
+      memFindByKeyCommand(key, secondKey, flags));
 
   // Sync subverb: mounted as a full alias of `one sync`. Same handlers, same
   // options — only the command path differs. Keeps `one mem sync` feeling

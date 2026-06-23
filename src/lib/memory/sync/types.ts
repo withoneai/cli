@@ -68,12 +68,27 @@ export interface SyncProfile {
   limitLocation?: 'query' | 'body';
   /**
    * Dot-path to a field that identifies this record across platforms.
-   * The value is extracted, lowercased, and stored as `_identity` on every
-   * record. Use a stable cross-platform identifier like email address.
+   * The value is extracted, lowercased, and stored as a prefixed entry in the
+   * record's `keys[]` array (e.g. `email:jane@acme.com`). Use a stable
+   * cross-platform identifier like email address.
    *
    * Example: "properties.email", "email", "email_addresses[0].email_address"
    */
   identityKey?: string;
+  /**
+   * Multiple cross-platform identity keys per record (issue #128). Use for
+   * records with N participants — a Gmail thread's From/To/Cc, calendar
+   * attendees, meeting invitees — where a single `identityKey` can't capture
+   * everyone. Each entry's `path` resolves via the dot-path walker, with `[]`
+   * wildcards expanding to ONE key per array element; each resolved value is
+   * lowercased/trimmed and emitted as `${prefix}:${value}` into the record's
+   * `keys[]` array (deduped). Combine freely with `identityKey`.
+   *
+   * Example:
+   *   [{ "prefix": "email", "path": "attendees[].email" },
+   *    { "prefix": "email", "path": "organizer.email" }]
+   */
+  identityKeys?: Array<{ prefix: string; path: string }>;
   /**
    * Dot-path field names to strip from each record before storing.
    * Supports array notation: "messages[].body" strips `body` from each

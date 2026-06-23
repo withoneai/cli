@@ -166,7 +166,6 @@ export async function writePageToMemory(
     updates: [],
   };
   const type = `${profile.platform}/${profile.model}`;
-  const identityKey = profile.identityKey;
   // `--embed` on `sync run` wins over the profile's memory.embed flag.
   // Lets users flip on embeddings for one run (e.g. backfilling after
   // a first sync done with embedOnSync: false) without editing the
@@ -194,14 +193,12 @@ export async function writePageToMemory(
     }
 
     const sourceKey = `${type}:${String(externalId)}`;
-    const keys = [sourceKey];
-
-    if (identityKey) {
-      const raw = getByDotPath(record, identityKey);
-      if (raw !== null && raw !== undefined && raw !== '') {
-        keys.push(`${deriveIdentityPrefix(identityKey)}:${String(raw).toLowerCase().trim()}`);
-      }
-    }
+    // keys[] = entity/merge identifiers (source key + singular identityKey).
+    // identity_keys[] = participant associations (plural identityKeys, #128) —
+    // a SEPARATE column that never triggers merge, so a Gmail thread carrying
+    // many participant emails stays its own record. See schema.ts.
+    const keys = [sourceKey, ...collectEntityKeys(record, profile)];
+    const identityKeys = collectAssociationKeys(record, profile);
 
     // Strip sync-internal bookkeeping from the payload
     const data = { ...record };
@@ -222,6 +219,7 @@ export async function writePageToMemory(
           type,
           data,
           keys,
+          identity_keys: identityKeys.length ? identityKeys : undefined,
           searchable_text,
           sources: {
             [sourceKey]: {
@@ -264,4 +262,165 @@ function deriveIdentityPrefix(dotPath: string): string {
   if (lower.includes('phone')) return 'phone';
   if (lower.includes('domain')) return 'domain';
   return 'id';
+}
+
+// Liberal email matcher — used to pull addresses out of mail-header values like
+// `"Jane Smith <jane@acme.com>"` or comma-lists `"a@x.com, Bob <b@y.com>"` (#129).
+const EMAIL_RE = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/**
+ * Turn one resolved raw value into zero or more normalized key values for the
+ * given prefix. For `email` keys we extract every email address found in the
+ * value (so display-name headers and comma-lists work, and already-clean
+ * emails pass through unchanged). For every other prefix we lowercase/trim the
+ * whole scalar value. Objects/arrays/empties yield nothing.
+ */
+function identityValuesFor(prefix: string, raw: unknown): string[] {
+  if (raw === null || raw === undefined || typeof raw === 'object') return [];
+  const s = String(raw);
+  if (prefix === 'email') {
+    return (s.match(EMAIL_RE) ?? []).map(e => e.toLowerCase());
+  }
+  const v = s.toLowerCase().trim();
+  return v ? [v] : [];
+}
+
+type PathToken =
+  | { type: 'field'; name: string }
+  | { type: 'index'; i: number }
+  | { type: 'wild' }
+  | { type: 'filter'; field: string; value: string };
+
+/**
+ * Tokenize an identity dot-path. Beyond plain fields it supports:
+ *   `[]`            array wildcard (fan out over every element)
+ *   `[0]`           numeric index
+ *   `[name=From]`   equality filter — keep array elements whose `name` field
+ *                   equals `From` (case-insensitive; quotes optional). Needed
+ *                   for Gmail headers (#129): `payload.headers[name=From].value`.
+ */
+function tokenizeIdentityPath(path: string): PathToken[] {
+  const tokens: PathToken[] = [];
+  const re = /([^.[\]]+)|\[([^\]]*)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(path)) !== null) {
+    if (m[1] !== undefined) {
+      tokens.push({ type: 'field', name: m[1] });
+    } else {
+      const inner = m[2];
+      if (inner === '') tokens.push({ type: 'wild' });
+      else if (/^\d+$/.test(inner)) tokens.push({ type: 'index', i: Number(inner) });
+      else {
+        const eq = inner.indexOf('=');
+        if (eq > 0) {
+          const field = inner.slice(0, eq).trim();
+          const value = inner.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+          tokens.push({ type: 'filter', field, value });
+        }
+        // Unknown bracket content is ignored (no match → no keys).
+      }
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Resolve an identity path against a record, returning a flat list of leaf
+ * values. Walks a "frontier" of values so `[]` wildcards and `[name=From]`
+ * filters fan out naturally. Superset of the plain dot-path / `[]` resolver.
+ */
+function resolveIdentityPath(root: unknown, path: string): unknown[] {
+  let frontier: unknown[] = [root];
+  for (const tok of tokenizeIdentityPath(path)) {
+    const next: unknown[] = [];
+    for (const cur of frontier) {
+      if (cur === null || cur === undefined) continue;
+      if (tok.type === 'field') {
+        if (typeof cur === 'object' && !Array.isArray(cur)) next.push((cur as Record<string, unknown>)[tok.name]);
+      } else if (tok.type === 'index') {
+        if (Array.isArray(cur)) next.push(cur[tok.i]);
+      } else if (tok.type === 'wild') {
+        if (Array.isArray(cur)) next.push(...cur);
+      } else { // filter
+        if (Array.isArray(cur)) {
+          for (const el of cur) {
+            if (el && typeof el === 'object' &&
+                String((el as Record<string, unknown>)[tok.field] ?? '').toLowerCase() === tok.value.toLowerCase()) {
+              next.push(el);
+            }
+          }
+        }
+      }
+    }
+    frontier = next;
+  }
+  return frontier;
+}
+
+/** Resolve one {prefix, path} entry to its (possibly many) prefixed keys. */
+function keysForEntry(record: Record<string, unknown>, prefix: string, path: string): string[] {
+  if (!prefix || !path) return [];
+  const out: string[] = [];
+  for (const raw of resolveIdentityPath(record, path)) {
+    for (const value of identityValuesFor(prefix, raw)) out.push(`${prefix}:${value}`);
+  }
+  return out;
+}
+
+function dedupe(keys: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const k of keys) {
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
+/**
+ * ENTITY keys — from a profile's singular `identityKey`. These mean "this
+ * record IS this entity" and go into `keys[]`, where the store uses them to
+ * merge cross-platform records for the same entity (Attio + HubSpot for the
+ * same person). Scalar/dot-path resolve, `email`-aware extraction. Deduped.
+ */
+export function collectEntityKeys(
+  record: Record<string, unknown>,
+  profile: Pick<SyncProfile, 'identityKey'>,
+): string[] {
+  if (!profile.identityKey) return [];
+  return dedupe(keysForEntry(record, deriveIdentityPrefix(profile.identityKey), profile.identityKey));
+}
+
+/**
+ * ASSOCIATION keys — from a profile's plural `identityKeys` (#128). These mean
+ * "this record INVOLVES these people" (thread participants, event attendees)
+ * and go into the separate `identity_keys[]` column, which does NOT drive
+ * merge/uniqueness — so a many-participant record keeps its own identity.
+ * Each entry's `path` supports `[]` wildcard + `[name=From]` filter fan-out;
+ * `email`-prefixed values are email-extracted (handles `"Jane <j@x.com>"` and
+ * comma-lists). Deduped, first-seen order preserved.
+ */
+export function collectAssociationKeys(
+  record: Record<string, unknown>,
+  profile: Pick<SyncProfile, 'identityKeys'>,
+): string[] {
+  const out: string[] = [];
+  for (const entry of profile.identityKeys ?? []) {
+    if (!entry || !entry.path || !entry.prefix) continue;
+    out.push(...keysForEntry(record, entry.prefix, entry.path));
+  }
+  return dedupe(out);
+}
+
+/**
+ * All cross-platform identity keys for a record (entity ∪ association),
+ * deduped. Used by `sync test` previews and tests; the writer routes the two
+ * kinds into their separate columns via the functions above.
+ */
+export function collectIdentityKeys(
+  record: Record<string, unknown>,
+  profile: Pick<SyncProfile, 'identityKey' | 'identityKeys'>,
+): string[] {
+  return dedupe([...collectEntityKeys(record, profile), ...collectAssociationKeys(record, profile)]);
 }

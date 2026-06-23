@@ -810,21 +810,37 @@ Transform, exclude, identityKey, and hooks all fire in **both** phases. In Phase
 
 ## Cross-Platform Identity
 
-Add \`identityKey\` to a sync profile to extract a stable cross-platform identifier (e.g. email) into a normalized \`_identity\` column:
+Two ways to tag a record with a cross-platform identifier (e.g. email), depending on whether the record IS an entity or INVOLVES many:
+
+**\`identityKey\` (singular)** — "this record IS this entity". The value goes into the record's \`keys[]\`, which the store uses to MERGE records for the same entity across platforms (Attio + HubSpot for the same person collapse into one):
 
 \`\`\`json
 {"platform": "hubspot", "model": "contacts", "identityKey": "properties.email"}
-{"platform": "stripe",  "model": "customers", "identityKey": "email"}
 {"platform": "attio",   "model": "attioPeople", "identityKey": "email_addresses[0].email_address"}
 \`\`\`
 
-The value is lowercased and trimmed, stored as a prefixed key on the mem record (e.g. \`email:jane@acme.com\`). Look up across platforms:
+**\`identityKeys\` (plural, #128)** — "this record INVOLVES these people". For records with N participants (Gmail thread From/To/Cc, calendar attendees, meeting invitees) where a single key can't capture everyone. These go into a separate \`identity_keys[]\` column that does NOT merge — so a thread with many participants stays its own record:
+
+\`\`\`json
+{"platform": "google-calendar", "model": "events", "identityKeys": [
+  {"prefix": "email", "path": "organizer.email"},
+  {"prefix": "email", "path": "attendees[].email"}
+]}
+\`\`\`
+
+Each \`path\` supports \`[]\` wildcards (one key per element) and a \`[name=From]\` equality filter (e.g. Gmail \`messages[].payload.headers[name=From].value\`). \`email\`-prefixed values are email-extracted, so display-name headers (\`"Jane <jane@acme.com>"\`) and comma-lists normalize cleanly. Values are lowercased/trimmed/deduped. \`sync test\` previews how many identity keys each record resolves.
+
+Query everything sharing an identity key, grouped by type:
 
 \`\`\`bash
+one --agent mem find-by-key email:jane@acme.com               # all records carrying this key
+one --agent mem find-by-key email:jane@acme.com --type gmail/gmailThreads
+one --agent mem find-by-key email:jane@acme.com email:bob@acme.com   # intersection (both keys)
+# Look up the single record owning a source key:
 one --agent mem find-by-source hubspot/contacts:<id>
-# Or via the dotted --where path on the identity key:
-one --agent sync query hubspot/contacts --where 'email=jane@acme.com'
 \`\`\`
+
+\`find-by-key\` spans BOTH columns — entity keys in \`keys[]\` and association keys in \`identity_keys[]\`.
 
 \`sync sql\` was retired in the unified memory cutover — a raw-SQL surface can't safely span the embedded Postgres, remote Postgres, and third-party backends without leaking specifics. Use \`mem search\` / \`sync search\` / \`sync query\` with dotted \`--where\` paths instead.
 
@@ -912,7 +928,8 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | limitLocation | no | "query" (default) or "body" for POST endpoints |
 | enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
 | transform | no | Shell command to transform records (stdin: JSON array, stdout: JSON array) |
-| identityKey | no | Dot-path to cross-platform identifier (e.g. email) → stored as \`_identity\` column |
+| identityKey | no | "This record IS this entity" — dot-path to a cross-platform id (e.g. email) → \`keys[]\` (drives entity merge) |
+| identityKeys | no | "This record INVOLVES these people" — \`[{prefix, path}]\` for N participants (#128) → non-merging \`identity_keys[]\`; query with \`mem find-by-key\` |
 | exclude | no | Dot-path fields to strip before storing (e.g. \`["messages[].body"]\`) |
 | onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
 

@@ -4,10 +4,12 @@
  * link, unlink, linked.
  */
 
+import pc from 'picocolors';
 import * as output from '../../lib/output.js';
 import { getBackend, addRecord } from '../../lib/memory/runtime.js';
 import { embed } from '../../lib/memory/embedding.js';
 import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
+import type { MemRecord } from '../../lib/memory/types.js';
 import { okJson, parseCsv, parseJsonArg, parsePositiveInt, printList, printRecord, requireMemoryInit, semanticSearchUpgradeHint, semanticSearchUpgradeLine } from './util.js';
 
 interface AddFlags {
@@ -260,4 +262,87 @@ export async function memFindBySourceCommand(sourceKey: string): Promise<void> {
   const record = await backend.findBySource(sourceKey);
   if (!record) output.error(`No record owns source "${sourceKey}"`);
   printRecord(record as unknown as Record<string, unknown>);
+}
+
+interface FindByKeyFlags {
+  type?: string;
+  limit?: string;
+}
+
+/** Best-effort human label for a record (the first present common title-ish field). */
+function summarizeRecord(r: MemRecord): string {
+  const d = r.data ?? {};
+  for (const field of ['title', 'subject', 'name', 'full_name', 'display_name', 'summary', 'headline', 'email']) {
+    const v = (d as Record<string, unknown>)[field];
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 80);
+  }
+  return pc.dim(r.id.slice(0, 8));
+}
+
+/** Compact "2d ago" style relative time. */
+function relativeTime(iso?: string): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24); if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30); if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+/**
+ * `one mem find-by-key <key> [<key2>]` — list every record whose `keys[]`
+ * contains the given identity key (e.g. `email:jane@acme.com`), grouped by
+ * type. Two keys → the intersection (records carrying BOTH). This is the
+ * cross-platform-join query surface for #131 (issue proposed `mem linked`, but
+ * that name is already taken by the relation-graph command, so this mirrors the
+ * existing `find-by-source`). Works for any prefix — `email:`, `domain:`, etc.
+ */
+export async function memFindByKeyCommand(key: string, secondKey: string | undefined, flags: FindByKeyFlags): Promise<void> {
+  requireMemoryInit();
+  const backend = await getBackend();
+  const keys = secondKey ? [key, secondKey] : [key];
+  const perType = parsePositiveInt(flags.limit, 10, '--limit');
+  const records = await backend.findByKeys(keys, { type: flags.type });
+
+  // Group by type, preserving the query's type-then-recency ordering.
+  const byType = new Map<string, MemRecord[]>();
+  for (const r of records) {
+    const list = byType.get(r.type) ?? [];
+    list.push(r);
+    byType.set(r.type, list);
+  }
+
+  if (output.isAgentMode()) {
+    const grouped: Record<string, { count: number; items: MemRecord[] }> = {};
+    for (const [type, list] of byType) {
+      grouped[type] = { count: list.length, items: list.slice(0, perType) };
+    }
+    output.json({ keys, total: records.length, byType: grouped });
+    return;
+  }
+
+  const label = keys.map(k => pc.cyan(k)).join(pc.dim(' + '));
+  if (records.length === 0) {
+    console.log(`\n  No records linked to ${label}.\n`);
+    return;
+  }
+
+  console.log();
+  console.log(`  ${label} ${pc.dim('—')} ${records.length} record${records.length === 1 ? '' : 's'} across ${byType.size} type${byType.size === 1 ? '' : 's'}`);
+  console.log();
+  const typeWidth = Math.min(30, Math.max(...[...byType.keys()].map(t => t.length)));
+  for (const [type, list] of byType) {
+    console.log(`  ${pc.bold(type.padEnd(typeWidth))}  ${pc.dim(`${list.length} record${list.length === 1 ? '' : 's'}`)}`);
+    for (const r of list.slice(0, perType)) {
+      console.log(`    ${pc.dim('·')} ${summarizeRecord(r)}  ${pc.dim(relativeTime(r.updated_at))}`);
+    }
+    if (list.length > perType) {
+      console.log(`    ${pc.dim(`… and ${list.length - perType} more (raise --limit)`)}`);
+    }
+  }
+  console.log();
 }
