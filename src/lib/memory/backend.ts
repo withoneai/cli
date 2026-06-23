@@ -116,6 +116,14 @@ export interface MemBackend {
   addSource(recordId: string, ref: SourceRefInput): Promise<void>;
   removeSource(recordId: string, sourceKey: string): Promise<boolean>;
   findBySource(sourceKey: string): Promise<MemRecord | null>;
+  /**
+   * Find every record whose `keys[]` array contains ALL of the given keys
+   * (cross-platform identity join, #131). One key → every record carrying it;
+   * multiple keys → the intersection (records carrying all of them). Excludes
+   * archived records unless `status` says otherwise. Results are ordered by
+   * type, then most-recent. Powers `one mem find-by-key`.
+   */
+  findByKeys(keys: string[], opts?: { type?: string; status?: 'active' | 'archived' | 'all'; limit?: number }): Promise<MemRecord[]>;
   listSources(recordId: string): Promise<SourcesMap>;
 
   // Sync state

@@ -12,7 +12,7 @@
  * See docs/plans/unified-memory.md §4 for design rationale.
  */
 
-export const SCHEMA_VERSION = '2.1.0';
+export const SCHEMA_VERSION = '2.2.0';
 
 // `pg_trgm` was in the original mem schema but nothing in the unified query
 // layer uses it; dropped to keep optional-extension backends happy. Can be
@@ -42,6 +42,14 @@ CREATE TABLE IF NOT EXISTS mem_records (
     data JSONB NOT NULL,
     tags TEXT[],
     keys TEXT[],
+    -- Cross-platform identity keys (#128): queryable associations like
+    -- email:jane@acme.com for every participant of a record. UNLIKE keys[],
+    -- these are NOT merge identifiers — they are exempt from the
+    -- key-uniqueness trigger and the upsert overlap-merge, so a Gmail thread
+    -- carrying many participant emails stays its own record instead of
+    -- collapsing into a contact (or into every other thread that shares a
+    -- participant). Queried by "mem find-by-key".
+    identity_keys TEXT[],
 
     sources JSONB NOT NULL DEFAULT '{}',
 
@@ -90,6 +98,12 @@ CREATE TABLE IF NOT EXISTS mem_meta (
     value TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Additive migration for stores created before identity_keys existed (#128).
+-- Safe to re-run; existing rows get identity_keys populated lazily on their
+-- next sync. CREATE TABLE IF NOT EXISTS above won't add columns to a table
+-- that already exists, so the ALTER is required for upgrades.
+ALTER TABLE mem_records ADD COLUMN IF NOT EXISTS identity_keys TEXT[];
 `;
 
 /**
@@ -110,6 +124,7 @@ export const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_records_type         ON mem_records(type);
 CREATE INDEX IF NOT EXISTS idx_records_status       ON mem_records(status);
 CREATE INDEX IF NOT EXISTS idx_records_keys         ON mem_records USING GIN(keys);
+CREATE INDEX IF NOT EXISTS idx_records_identity_keys ON mem_records USING GIN(identity_keys);
 CREATE INDEX IF NOT EXISTS idx_records_tags         ON mem_records USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_records_data         ON mem_records USING GIN(data jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS idx_records_sources      ON mem_records USING GIN(sources jsonb_path_ops);
@@ -250,7 +265,8 @@ CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_weight INTEGER DEFAULT NULL,
     p_embedding TEXT DEFAULT NULL,
     p_embedding_model TEXT DEFAULT NULL,
-    p_replace BOOLEAN DEFAULT FALSE
+    p_replace BOOLEAN DEFAULT FALSE,
+    p_identity_keys TEXT[] DEFAULT NULL
 ) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
 DECLARE
     existing_id UUID;
@@ -284,6 +300,12 @@ BEGIN
                 ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}'))))
             END,
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
+            -- identity_keys: replace on a replace-sync, otherwise union (never
+            -- drop an association). NOT part of the overlap-merge above.
+            identity_keys = CASE
+                WHEN p_replace THEN COALESCE(p_identity_keys, '{}'::text[])
+                ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.identity_keys, '{}') || COALESCE(p_identity_keys, '{}'))))
+            END,
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
             searchable_text = CASE
                 WHEN p_replace THEN p_searchable_text
@@ -302,12 +324,13 @@ BEGIN
         result_action := 'updated';
     ELSE
         INSERT INTO mem_records (
-            type, data, tags, keys, sources, searchable_text, content_hash, weight
+            type, data, tags, keys, identity_keys, sources, searchable_text, content_hash, weight
         ) VALUES (
             p_type,
             p_data,
             p_tags,
             p_keys,
+            p_identity_keys,
             COALESCE(p_sources, '{}'::jsonb),
             p_searchable_text,
             p_content_hash,
@@ -342,7 +365,8 @@ CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_weight INTEGER DEFAULT NULL,
     p_embedding TEXT DEFAULT NULL,
     p_embedding_model TEXT DEFAULT NULL,
-    p_replace BOOLEAN DEFAULT FALSE
+    p_replace BOOLEAN DEFAULT FALSE,
+    p_identity_keys TEXT[] DEFAULT NULL
 ) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
 DECLARE
     existing_id UUID;
@@ -371,6 +395,12 @@ BEGIN
                 ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}'))))
             END,
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
+            -- identity_keys: replace on replace-sync, else union. Not part of
+            -- the overlap-merge (see no-vector variant).
+            identity_keys = CASE
+                WHEN p_replace THEN COALESCE(p_identity_keys, '{}'::text[])
+                ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.identity_keys, '{}') || COALESCE(p_identity_keys, '{}'))))
+            END,
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
             searchable_text = CASE
                 WHEN p_replace THEN p_searchable_text
@@ -392,13 +422,14 @@ BEGIN
         result_action := 'updated';
     ELSE
         INSERT INTO mem_records (
-            type, data, tags, keys, sources, searchable_text, content_hash,
+            type, data, tags, keys, identity_keys, sources, searchable_text, content_hash,
             weight, embedding, embedded_at, embedding_model
         ) VALUES (
             p_type,
             p_data,
             p_tags,
             p_keys,
+            p_identity_keys,
             COALESCE(p_sources, '{}'::jsonb),
             p_searchable_text,
             p_content_hash,

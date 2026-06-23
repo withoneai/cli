@@ -6,6 +6,7 @@ import { getNextPageParams } from './pagination.js';
 import type { SyncProfile } from './types.js';
 import { extractRecords, isRootPath } from './extract.js';
 import { resolveProfileConnectionKey } from './profile.js';
+import { collectIdentityKeys } from './mem-writer.js';
 
 export interface SyncTestCheck {
   name: string;
@@ -30,6 +31,15 @@ export interface SyncTestReport {
   paginationPreview?: Record<string, unknown>;
   /** Fields that sync test auto-fixed from the real response (e.g. resultsPath). */
   autoFixed?: Record<string, string>;
+  /**
+   * Resolved cross-platform identity keys across the sampled records (#128):
+   * how many keys each sampled record produced, and a few example values. Only
+   * present when the profile declares `identityKey` and/or `identityKeys`.
+   */
+  identityKeysPreview?: {
+    perRecord: number[];
+    sampleKeys: string[];
+  };
 }
 
 /** How many records --show-searchable averages over when reporting hit rates. */
@@ -319,6 +329,23 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
   }));
   report.sample = first;
   report.samples = (records as Record<string, unknown>[]).slice(0, SEARCHABLE_SAMPLE_SIZE);
+
+  // Preview resolved cross-platform identity keys (#128) so authors can see
+  // how many keys each record yields (e.g. all thread participants) and a few
+  // sample values, without running a real sync.
+  if (profile.identityKey || (profile.identityKeys && profile.identityKeys.length > 0)) {
+    const perRecord: number[] = [];
+    const sampleKeys = new Set<string>();
+    for (const rec of report.samples) {
+      const keys = collectIdentityKeys(rec, profile);
+      perRecord.push(keys.length);
+      for (const k of keys) {
+        if (sampleKeys.size < 8) sampleKeys.add(k);
+      }
+    }
+    report.identityKeysPreview = { perRecord, sampleKeys: [...sampleKeys] };
+  }
+
   report.ok = checks.every(c => c.ok);
 
   return report;

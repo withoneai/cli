@@ -478,6 +478,21 @@ async function syncTestCommand(
     }
   }
 
+  if (report.identityKeysPreview) {
+    const { perRecord, sampleKeys } = report.identityKeysPreview;
+    const total = perRecord.reduce((a, b) => a + b, 0);
+    const min = perRecord.length ? Math.min(...perRecord) : 0;
+    const max = perRecord.length ? Math.max(...perRecord) : 0;
+    const mark = total === 0 ? pc.yellow('~') : pc.green('✓');
+    console.log(`\n  ${pc.bold('Identity keys')} ${pc.dim(`(cross-platform — #128)`)}`);
+    console.log(`    ${mark} ${perRecord.length} sample${perRecord.length === 1 ? '' : 's'}, ${min}–${max} key${max === 1 ? '' : 's'} per record`);
+    if (sampleKeys.length > 0) {
+      console.log(`    ${pc.dim('e.g.')} ${sampleKeys.slice(0, 8).map(k => pc.cyan(k)).join(', ')}`);
+    } else {
+      console.log(`    ${pc.yellow('note:')} no identity keys resolved on these samples — check the identityKey/identityKeys paths.`);
+    }
+  }
+
   if (searchablePreview) {
     console.log(`\n  ${pc.bold('Searchable preview')} ${pc.dim(`(${searchablePreview.mode}, ${searchablePreview.sampledRecords} sample${searchablePreview.sampledRecords === 1 ? '' : 's'})`)}`);
     console.log(`    ${pc.dim('length:')}  ${searchablePreview.length} chars (first sample)`);

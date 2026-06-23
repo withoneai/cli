@@ -33,7 +33,7 @@ describe('PGlite plugin — live integration', () => {
 
   it('reports the schema version after ensureSchema', async () => {
     const v = await backend.getSchemaVersion();
-    assert.equal(v, '2.1.0');
+    assert.equal(v, '2.2.0');
   });
 
   it('advertises capabilities the CoreBackend relies on', () => {
@@ -255,5 +255,62 @@ describe('PGlite plugin — live integration', () => {
     assert.ok(s.recordCount > 0);
     assert.ok(s.activeCount >= 0);
     assert.equal(s.recordCount, s.activeCount + s.archivedCount);
+  });
+
+  // #128/#131: identity_keys[] is a SEPARATE column that must NOT drive the
+  // upsert overlap-merge. This is the regression guard for the bug that
+  // motivated the redesign — participant emails in keys[] collapsed
+  // multi-participant records into each other / into contacts.
+  it('identity_keys do NOT merge records that share one (the #128 fix)', async () => {
+    const attio = await backend.upsertByKeys({
+      type: 'attio/people',
+      data: { name: 'Jane' },
+      keys: ['attio/people:JANE'],
+      identity_keys: ['email:jane@acme.com'],
+      sources: { 'attio/people:JANE': { last_synced_at: new Date().toISOString() } },
+    });
+    const thread = await backend.upsertByKeys({
+      type: 'gmail/gmailThreads',
+      data: { subject: 'hello' },
+      keys: ['gmail/gmailThreads:T1'],
+      identity_keys: ['email:jane@acme.com', 'email:moe@withone.ai'],
+      sources: { 'gmail/gmailThreads:T1': { last_synced_at: new Date().toISOString() } },
+    });
+    assert.notEqual(thread.record.id, attio.record.id, 'thread must NOT merge into the contact');
+    assert.equal(thread.record.type, 'gmail/gmailThreads', 'thread keeps its own type');
+    assert.deepEqual((thread.record.identity_keys ?? []).sort(), ['email:jane@acme.com', 'email:moe@withone.ai'].sort());
+  });
+
+  it('findByKeys joins records across types by a shared identity key (#131)', async () => {
+    const key = 'email:link@acme.com';
+    await backend.upsertByKeys({ type: 'attio/people', data: { name: 'Link Person' }, keys: ['attio/people:LP'], identity_keys: [key], sources: { 'attio/people:LP': { last_synced_at: new Date().toISOString() } } });
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'one' }, keys: ['gmail/gmailThreads:LT1'], identity_keys: [key], sources: { 'gmail/gmailThreads:LT1': { last_synced_at: new Date().toISOString() } } });
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'two' }, keys: ['gmail/gmailThreads:LT2'], identity_keys: [key], sources: { 'gmail/gmailThreads:LT2': { last_synced_at: new Date().toISOString() } } });
+
+    const found = await backend.findByKeys([key]);
+    assert.equal(found.length, 3, 'three records share the identity key');
+    const types = new Set(found.map(r => r.type));
+    assert.ok(types.has('attio/people') && types.has('gmail/gmailThreads'));
+
+    // --type filter
+    const onlyThreads = await backend.findByKeys([key], { type: 'gmail/gmailThreads' });
+    assert.equal(onlyThreads.length, 2);
+  });
+
+  it('findByKeys with two keys returns the intersection (#131)', async () => {
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'jane+bob' }, keys: ['gmail/gmailThreads:IX1'], identity_keys: ['email:jane@acme.com', 'email:bob@acme.com'], sources: { 'gmail/gmailThreads:IX1': { last_synced_at: new Date().toISOString() } } });
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'jane only' }, keys: ['gmail/gmailThreads:IX2'], identity_keys: ['email:jane@acme.com'], sources: { 'gmail/gmailThreads:IX2': { last_synced_at: new Date().toISOString() } } });
+
+    const both = await backend.findByKeys(['email:jane@acme.com', 'email:bob@acme.com']);
+    assert.ok(both.every(r => (r.identity_keys ?? []).includes('email:bob@acme.com')), 'only records with BOTH keys');
+    assert.ok(both.some(r => r.data.subject === 'jane+bob'));
+    assert.ok(!both.some(r => r.data.subject === 'jane only'));
+  });
+
+  it('findByKeys also matches entity keys in keys[] (union of both columns)', async () => {
+    // A contact whose own email is the singular identityKey lands in keys[].
+    await backend.upsertByKeys({ type: 'attio/people', data: { name: 'Entity Keyed' }, keys: ['attio/people:EK', 'email:entity@acme.com'], sources: { 'attio/people:EK': { last_synced_at: new Date().toISOString() } } });
+    const found = await backend.findByKeys(['email:entity@acme.com']);
+    assert.ok(found.some(r => r.data.name === 'Entity Keyed'), 'find-by-key spans keys[] and identity_keys[]');
   });
 });

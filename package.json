@@ -1,6 +1,10 @@
 {
   "name": "@withone/cli",
+<<<<<<< feature/int-3255-cli-cross-platform-identity-keys-identitykeys-built-in
+  "version": "1.47.12",
+=======
   "version": "1.47.11",
+>>>>>>> main
   "description": "CLI for managing One",
   "type": "module",
   "files": [
