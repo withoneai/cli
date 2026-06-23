@@ -168,9 +168,14 @@ Connect a new platform via OAuth.
 one add shopify
 one add hubspot
 one add gmail
+one add gmail --tag work        # tag the connection
 ```
 
 Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are lowercase (with dashes for multi-word names) - run `one platforms` to see them all.
+
+| Flag | What it does |
+|------|-------------|
+| `--tag <name>` | Tag the new connection once it's created. Lets sync/flow profiles target a specific connection via `"connection": { "platform": "gmail", "tag": "work" }` when you have several connections for one platform (e.g. personal vs work Gmail). |
 
 ### `one list`
 
@@ -488,6 +493,9 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 | `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
+| `--output-file <path>` | Stream the full result to a file instead of stdout — for large results that would otherwise be truncated or exceed the JSON string-size limit. stdout (and `--agent` output) then carries an `outputFile` pointer instead of inline `steps`. |
+
+Step-level `if`/`unless` conditions (and `while`/`condition` steps) are null-safe: a condition that references a skipped or not-yet-run step's output (e.g. `$.steps.maybeSkipped.output.x`) evaluates to `false` rather than crashing the run.
 
 ### `one flow list`
 

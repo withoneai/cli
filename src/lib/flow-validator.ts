@@ -39,6 +39,19 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
     errors.push({ path: 'version', message: '"version" must be a string' });
   }
 
+  // Flow-level default error strategy (cli#93) — inherited by steps without
+  // their own `onError`. Validate its strategy the same way step `onError` is.
+  if (f.defaultOnError !== undefined) {
+    if (!f.defaultOnError || typeof f.defaultOnError !== 'object' || Array.isArray(f.defaultOnError)) {
+      errors.push({ path: 'defaultOnError', message: '"defaultOnError" must be an object (e.g. { "strategy": "continue" })' });
+    } else {
+      const oe = f.defaultOnError as Record<string, unknown>;
+      if (!FLOW_SCHEMA.errorStrategies.includes(oe.strategy as string)) {
+        errors.push({ path: 'defaultOnError.strategy', message: `Error strategy must be one of: ${FLOW_SCHEMA.errorStrategies.join(', ')}` });
+      }
+    }
+  }
+
   // ── Validate inputs ──
 
   if (!f.inputs || typeof f.inputs !== 'object' || Array.isArray(f.inputs)) {
@@ -368,7 +381,7 @@ export function validateStepIds(flow: Flow): ValidationError[] {
 
 // ── Selector reference validation ──
 
-export function validateSelectorReferences(flow: Flow): ValidationError[] {
+export function validateSelectorReferences(flow: Flow, rootDir?: string): ValidationError[] {
   const errors: ValidationError[] = [];
   const inputNames = new Set(Object.keys(flow.inputs));
   const nestedKeys = getNestedStepsKeys();
@@ -464,7 +477,16 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     }
   }
 
-  function checkStep(step: FlowStep, pathPrefix: string, preceding: Set<string>): void {
+  // Returns the set of step ids declared *within this step's nested subtree*
+  // (a parallel block's children, a loop/while body, a condition's branches).
+  // The engine stores those children directly in the shared `context.steps`
+  // when the block runs, so steps that come AFTER the block can legitimately
+  // reference them (e.g. a gate reading `$.steps.parallelChild.status`). The
+  // caller merges this set into `preceding` so those downstream references
+  // don't false-positive as forward references (cli#58). Intra-block ordering
+  // is unaffected — children are still only visible to *later* siblings.
+  function checkStep(step: FlowStep, pathPrefix: string, preceding: Set<string>): Set<string> {
+    const subtreeIds = new Set<string>();
     // if/unless are JS expressions — validate selector references but allow operators
     if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`, preceding);
     if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`, preceding);
@@ -511,6 +533,23 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
             const fieldName = step.type === 'code' ? 'source' : 'expression';
             checkSelectors(extractSelectors(text), `${pathPrefix}.${descriptor.configKey}.${fieldName}`, preceding);
           }
+          // External code modules: scan the .mjs file's $.steps.X / $.input.X
+          // tokens through the same ordering + undefined checks as inline
+          // source, so a module reading a later/undefined step is caught at
+          // validate time too (cli#75). Skipped when the file is missing —
+          // validateCodeModules already reports that.
+          const modulePath = step.type === 'code' ? (c.module as string | undefined) : undefined;
+          if (rootDir && typeof modulePath === 'string' && modulePath.length > 0) {
+            const abs = path.resolve(rootDir, modulePath);
+            if (fs.existsSync(abs)) {
+              try {
+                const moduleText = fs.readFileSync(abs, 'utf-8');
+                checkSelectors(extractSelectors(moduleText), `${pathPrefix}.${descriptor.configKey}.module`, preceding);
+              } catch {
+                // Unreadable file — validateCodeModules surfaces I/O errors.
+              }
+            }
+          }
         }
       }
 
@@ -523,19 +562,27 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
           if (c && Array.isArray(c[fieldName])) {
             const childPreceding = new Set(preceding);
             (c[fieldName] as FlowStep[]).forEach((s, i) => {
-              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`, childPreceding);
+              const childSubtree = checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`, childPreceding);
+              // Earlier siblings (and their subtrees) are visible to later
+              // siblings within the same block — preserves intra-block ordering.
               childPreceding.add(s.id);
+              for (const id of childSubtree) childPreceding.add(id);
+              // Surface this child + its descendants to the parent's later siblings.
+              subtreeIds.add(s.id);
+              for (const id of childSubtree) subtreeIds.add(id);
             });
           }
         }
       }
     }
+    return subtreeIds;
   }
 
   const preceding = new Set<string>();
   flow.steps.forEach((step, i) => {
-    checkStep(step, `steps[${i}]`, preceding);
+    const subtree = checkStep(step, `steps[${i}]`, preceding);
     preceding.add(step.id);
+    for (const id of subtree) preceding.add(id);
   });
   return errors;
 }
@@ -728,7 +775,7 @@ export function validateFlow(flow: unknown, rootDir?: string): ValidationError[]
   const f = flow as Flow;
   return [
     ...validateStepIds(f),
-    ...validateSelectorReferences(f),
+    ...validateSelectorReferences(f, rootDir),
     ...validateOutputSchemas(f),
     ...(rootDir ? validateCodeModules(f, rootDir) : []),
   ];

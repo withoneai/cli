@@ -267,6 +267,26 @@ export function evaluateExpression(expr: string, context: FlowContext): unknown 
   return fn(context);
 }
 
+/**
+ * Evaluate a boolean condition (`if`/`unless`, `while`, and `condition`
+ * steps). Unlike a transform — whose output feeds downstream steps and so
+ * must fail loudly — a condition that walks into a skipped or not-yet-
+ * produced step output should not crash the flow. Accessing
+ * `$.steps.skippedStep.output.x` throws a `TypeError` ("Cannot read
+ * properties of undefined"); we treat that as `false` so a missing upstream
+ * value simply makes the condition falsy. Syntax/reference errors still
+ * throw so genuinely malformed expressions surface (the validator also
+ * catches these at flow-create time). See issue #89.
+ */
+export function evaluateCondition(expr: string, context: FlowContext): boolean {
+  try {
+    return Boolean(evaluateExpression(expr, context));
+  } catch (err) {
+    if (err instanceof TypeError) return false;
+    throw err;
+  }
+}
+
 // ── Dot-path Helpers (for pagination) ──
 
 // getByDotPath and setByDotPath imported from ./dot-path.js
@@ -554,7 +574,7 @@ async function executeConditionStep(
   flowStack: string[],
 ): Promise<StepResult> {
   const condition = step.condition!;
-  const result = evaluateExpression(condition.expression, context);
+  const result = evaluateCondition(condition.expression, context);
 
   const branch = result ? condition.then : (condition.else || []);
   const branchResults = await executeSteps(branch, context, api, permissions, allowedActionIds, options, undefined, flowStack);
@@ -754,7 +774,7 @@ async function executeWhileStep(
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Do-while: skip condition check on iteration 0
     if (iteration > 0) {
-      const conditionResult = evaluateExpression(config.condition, context);
+      const conditionResult = evaluateCondition(config.condition, context);
       if (!conditionResult) break;
     }
 
@@ -1096,7 +1116,7 @@ export async function executeSingleStep(
 ): Promise<StepResult> {
   // Conditional execution
   if (step.if) {
-    const condResult = evaluateExpression(step.if, context);
+    const condResult = evaluateCondition(step.if, context);
     if (!condResult) {
       const result: StepResult = { status: 'skipped' };
       context.steps[step.id] = result;
@@ -1104,7 +1124,7 @@ export async function executeSingleStep(
     }
   }
   if (step.unless) {
-    const condResult = evaluateExpression(step.unless, context);
+    const condResult = evaluateCondition(step.unless, context);
     if (condResult) {
       const result: StepResult = { status: 'skipped' };
       context.steps[step.id] = result;
@@ -1114,17 +1134,21 @@ export async function executeSingleStep(
 
   const startTime = Date.now();
   let lastError: Error | undefined;
-  const maxAttempts = (step.onError?.strategy === 'retry' && step.onError.retries) ? step.onError.retries + 1 : 1;
+  // Effective error config: the step's own `onError`, else the flow-level
+  // `defaultOnError` (cli#93). Resolved once and used for every retry/strategy
+  // decision below so a step inherits the flow default unless it overrides.
+  const onError = step.onError ?? context._defaultOnError;
+  const maxAttempts = (onError?.strategy === 'retry' && onError.retries) ? onError.retries + 1 : 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) {
-        const delay = computeRetryDelay(step.onError!, attempt);
+        const delay = computeRetryDelay(onError!, attempt);
         options.onEvent?.({
           event: 'step:retry',
           stepId: step.id,
           attempt,
-          maxRetries: step.onError!.retries!,
+          maxRetries: onError!.retries!,
           delayMs: delay,
         });
         await sleep(delay);
@@ -1236,9 +1260,9 @@ export async function executeSingleStep(
 
       // Conditional retry (cli#53): if retryOn/failFastOn are set, decide
       // whether THIS particular error should be retried at all.
-      if (step.onError?.strategy === 'retry' &&
-          (step.onError.retryOn || step.onError.failFastOn)) {
-        const decision = shouldRetryError(lastError, step.onError);
+      if (onError?.strategy === 'retry' &&
+          (onError.retryOn || onError.failFastOn)) {
+        const decision = shouldRetryError(lastError, onError);
         if (!decision.retry) {
           options.onEvent?.({
             event: 'step:retry-skip',
@@ -1254,7 +1278,7 @@ export async function executeSingleStep(
 
   // Handle error with strategy
   const errorMessage = lastError?.message || 'Unknown error';
-  const strategy = step.onError?.strategy || 'fail';
+  const strategy = onError?.strategy || 'fail';
   const retriesUsed = Math.max(0, maxAttempts - 1);
   const isTimeout = lastError instanceof StepTimeoutError;
   const errorCode = (lastError as { errorCode?: string } | undefined)?.errorCode;
@@ -1271,7 +1295,7 @@ export async function executeSingleStep(
     return result;
   }
 
-  if (strategy === 'fallback' && step.onError?.fallbackStepId) {
+  if (strategy === 'fallback' && onError?.fallbackStepId) {
     // The fallback step must already be defined in the flow
     // We mark this step as failed and the caller should handle fallback
     const result: StepResult = {
@@ -1434,6 +1458,10 @@ export async function executeFlow(
     loop: {},
   };
   context.input = resolvedInputs;
+  // Per-flow error default — steps without their own `onError` inherit this.
+  // Set on the context (not options) so a sub-flow's executeFlow scopes its
+  // own default rather than leaking the parent's. See cli#93.
+  context._defaultOnError = flow.defaultOnError;
 
   const completedStepIds = resumeState
     ? new Set(resumeState.completedSteps)
