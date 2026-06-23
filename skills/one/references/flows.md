@@ -8,7 +8,7 @@ Nothing about a flow's runtime requirements is guessable from its name. Before `
 
 1. **Recommended:** `one --agent flow list` — the JSON output includes `requiresBash`, `usesCodeModules`, `inputs` (with `autoResolvable`), `stepTypes`, and the flow's `description`. Fastest path to knowing what you need.
 2. Read the flow's `description` field from the JSON. Authors are required (see "Author conventions" below) to state `--allow-bash` requirements and non-auto-resolving inputs there.
-3. `one --agent flow execute <key> --dry-run` to see resolved inputs and step plan without side effects.
+3. `one --agent flow execute <key> --dry-run` to resolve every step's interpolations and see what they evaluate to — without side effects (see "Debugging a flow" below).
 
 If you skip this, you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* — the CLI pre-flights and fails fast, but the error is entirely avoidable by reading first.
 
@@ -639,11 +639,23 @@ one --agent flow validate <key>
 one --agent flow execute <key> -i key=value
 one --agent flow execute <key> --dry-run -i key=value
 one --agent flow execute <key> --dry-run --mock -i key=value
+one --agent flow execute <key> --stop-after <stepId> -i key=value
+one --agent flow execute <key> --dry-run --stop-after <stepId> -i key=value
 one --agent flow execute <key> --skip-validation -i key=value
 one --agent flow execute <key> --allow-bash -i key=value
 one --agent flow runs [flowKey]
+one --agent flow inspect <runId>          # per-step outputs of a past run (add --full for untruncated)
 one --agent flow resume <runId>
 ```
+
+## Debugging a flow
+
+Three tools that turn "re-run the whole 40-step flow to debug step 30" into near-zero-cost inspection:
+
+- **`--dry-run`** — resolves every step's interpolations and shows what they evaluate to, *without executing any step*. `$.input.*` / `$.env.*` resolve immediately; `$.steps.*` references are reported as `deferred` (they're produced at runtime). Transform/condition/while steps show their *evaluated* result. Catches wiring bugs (typo'd input names, wrong field paths) with zero API spend. In `--agent` mode this is the `flow:dry-run` event whose `steps[]` carry a `references` table (`{selector, value, status}` where status is `resolved` | `deferred` | `missing`) plus the evaluated `resolved` value.
+- **`--stop-after <stepId>`** — executes steps up to and including `<stepId>`, then stops; later steps don't run. Isolates where a long flow breaks. Emits a `flow:stopped` event; the run's partial state is saved.
+- **`--dry-run --stop-after <stepId>`** — runs the steps *before* `<stepId>` for real, then dry-resolves `<stepId>` against that **real** accumulated context (so its `$.steps.*` references resolve to actual upstream output) and stops without executing it. The honest way to preview "what will step N actually receive". Emits a `step:dry-resolve` event for the target.
+- **`flow inspect <runId>`** — prints a past run's per-step status, durations, errors, and outputs from its persisted state file (post-mortem, no re-run). Use after `--stop-after`, or on any failed run, to see exactly what each step produced. `--full` disables output truncation.
 
 ## Important Notes
 

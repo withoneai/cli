@@ -11,6 +11,7 @@ import { validateActionInput } from './validate.js';
 import type {
   Flow,
   FlowStep,
+  FlowStepType,
   FlowContext,
   StepResult,
   FlowEvent,
@@ -18,6 +19,7 @@ import type {
   FlowActionConfig,
 } from './flow-types.js';
 import { getByDotPath, setByDotPath } from './dot-path.js';
+import { getNestedStepsKeys } from './flow-schema.js';
 
 const execAsync = promisify(exec);
 
@@ -285,6 +287,168 @@ export function evaluateCondition(expr: string, context: FlowContext): boolean {
     if (err instanceof TypeError) return false;
     throw err;
   }
+}
+
+// ── Debug / Inspect (issue #97) ──
+
+/**
+ * Internal control-flow signal thrown to halt a flow cleanly once the
+ * `--stop-after` target has run (or been dry-resolved). It is NOT an error:
+ * `executeSteps` lets it propagate without emitting a `step:error`, and
+ * `executeFlow` catches it and returns the partial context as a clean stop.
+ */
+export class FlowStopSignal extends Error {
+  constructor(public readonly stepId: string) {
+    super(`Flow stopped after step "${stepId}"`);
+    this.name = 'FlowStopSignal';
+  }
+}
+
+export type DryRefStatus = 'resolved' | 'deferred' | 'missing';
+
+export interface DryResolvedRef {
+  /** The `$.`-selector exactly as it appears in the step config. */
+  selector: string;
+  /** What the selector resolves to against the current context (undefined if unresolved). */
+  value: unknown;
+  status: DryRefStatus;
+}
+
+export interface DryResolvedStep {
+  stepId: string;
+  name?: string;
+  type: FlowStepType;
+  /** Per-selector resolution for declarative steps (action data, paths, etc.). */
+  references: DryResolvedRef[];
+  /** Fully-resolved config (declarative) or the evaluated value (transform/condition/while). */
+  resolved?: unknown;
+  /** Populated when evaluating an expression step's expression threw. */
+  error?: string;
+}
+
+// Matches a `$.`-rooted selector token, e.g. `$.input.email`,
+// `$.steps.fetch.output.items`, `$.steps.list.output[0].id`.
+const DRY_SELECTOR_TOKEN = /\$\.[A-Za-z0-9_$]+(?:[.[][A-Za-z0-9_$*\]]+)*/g;
+
+function extractSelectors(str: string): string[] {
+  return str.match(DRY_SELECTOR_TOKEN) ?? [];
+}
+
+/** Invoke `visit` for every string value inside an arbitrary config value. */
+function walkConfigStrings(value: unknown, visit: (s: string) => void): void {
+  if (typeof value === 'string') {
+    visit(value);
+  } else if (Array.isArray(value)) {
+    for (const v of value) walkConfigStrings(v, visit);
+  } else if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) walkConfigStrings(v, visit);
+  }
+}
+
+function classifyDryRef(selector: string, value: unknown): DryRefStatus {
+  if (value !== undefined) return 'resolved';
+  // `$.steps.*` / `$.loop.*` are populated as the flow runs, so an undefined
+  // value pre-execution just means "not produced yet", not a wiring bug.
+  if (selector.startsWith('$.steps.') || selector.startsWith('$.loop.')) return 'deferred';
+  // `$.input.*` / `$.env.*` are known up front — an undefined value here is the
+  // actionable signal (typo, missing input, wrong field name).
+  return 'missing';
+}
+
+/**
+ * The declarative, interpolation-bearing subset of a step's config — the part
+ * worth resolving in a dry run. Excludes nested step arrays (those are visited
+ * as their own steps) and `$`-driven JS expressions (handled by evaluation).
+ */
+function stepInterpolationSource(step: FlowStep): unknown {
+  switch (step.type) {
+    case 'action': {
+      const a = step.action;
+      if (!a) return {};
+      return {
+        platform: a.platform, actionId: a.actionId,
+        connectionKey: a.connectionKey, connection: a.connection,
+        pathVars: a.pathVars, queryParams: a.queryParams, headers: a.headers, data: a.data,
+      };
+    }
+    case 'paginate': {
+      const a = step.paginate?.action;
+      return a
+        ? { platform: a.platform, actionId: a.actionId, connectionKey: a.connectionKey, connection: a.connection, pathVars: a.pathVars, queryParams: a.queryParams, headers: a.headers, data: a.data }
+        : {};
+    }
+    case 'file-read': return { path: step.fileRead?.path };
+    case 'file-write': return { path: step.fileWrite?.path, content: step.fileWrite?.content };
+    case 'loop': return { over: step.loop?.over };
+    case 'flow': return { inputs: step.flow?.inputs };
+    case 'bash': return { command: step.bash?.command, cwd: step.bash?.cwd, env: step.bash?.env };
+    default: return {};
+  }
+}
+
+/**
+ * Resolve a single step's interpolations against the current context WITHOUT
+ * executing it. Declarative steps report a per-selector reference table plus a
+ * fully-substituted config; expression steps (transform/condition/while) report
+ * the evaluated value (or the evaluation error). Powers `--dry-run` (issue #97).
+ */
+export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolvedStep {
+  const base = { stepId: step.id, name: step.name, type: step.type };
+
+  // Expression steps: evaluating the whole expression is more honest than
+  // tokenizing arbitrary JS (which would misread `.map(...)`/`.length` as paths).
+  const expr =
+    step.type === 'transform' ? step.transform?.expression :
+    step.type === 'condition' ? step.condition?.expression :
+    step.type === 'while' ? step.while?.condition :
+    undefined;
+  if (step.type === 'transform' || step.type === 'condition' || step.type === 'while') {
+    if (!expr) return { ...base, references: [] };
+    try {
+      return { ...base, references: [], resolved: evaluateExpression(expr, context) };
+    } catch (err) {
+      return { ...base, references: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // Declarative steps: collect every `$.`-selector, resolve and classify each.
+  const src = stepInterpolationSource(step);
+  const references: DryResolvedRef[] = [];
+  const seen = new Set<string>();
+  walkConfigStrings(src, s => {
+    for (const selector of extractSelectors(s)) {
+      if (seen.has(selector)) continue;
+      seen.add(selector);
+      const value = resolveSelector(selector, context);
+      references.push({ selector, value, status: classifyDryRef(selector, value) });
+    }
+  });
+  let resolved: unknown;
+  try { resolved = resolveValue(src, context); } catch { /* leave undefined */ }
+  return { ...base, references, resolved };
+}
+
+/**
+ * Dry-resolve every step in a flow (recursing into nested blocks) against the
+ * given context. Used by the no-stop `--dry-run` plan view, where nothing runs,
+ * so `$.steps.*` / `$.loop.*` refs are reported as `deferred`.
+ */
+export function dryResolveAllSteps(steps: FlowStep[], context: FlowContext): DryResolvedStep[] {
+  const out: DryResolvedStep[] = [];
+  const visit = (list: FlowStep[]): void => {
+    for (const step of list) {
+      out.push(dryResolveStep(step, context));
+      const config = step as unknown as Record<string, unknown>;
+      for (const { configKey, fieldName } of getNestedStepsKeys()) {
+        const block = config[configKey] as Record<string, unknown> | undefined;
+        if (block && Array.isArray(block[fieldName])) {
+          visit(block[fieldName] as FlowStep[]);
+        }
+      }
+    }
+  };
+  visit(steps);
+  return out;
 }
 
 // ── Dot-path Helpers (for pagination) ──
@@ -1247,6 +1411,11 @@ export async function executeSingleStep(
       context.steps[step.id] = result;
       return result;
     } catch (err) {
+      // A stop signal raised inside a nested block (loop/parallel/condition/
+      // while/flow) is control flow, not a step failure: never retry it and
+      // never route it through onError — let it unwind to executeFlow. See #97.
+      if (err instanceof FlowStopSignal) throw err;
+
       lastError = err instanceof Error ? err : new Error(String(err));
 
       if (attempt === maxAttempts) {
@@ -1321,11 +1490,28 @@ export async function executeSteps(
 ): Promise<StepResult[]> {
   const results: StepResult[] = [];
 
+  // Treat `--dry-run` (without `--mock`) as "resolve, don't execute". With
+  // `--mock` the flow still executes against mocked APIs, so stop-after there
+  // means "stop after the (mock-)executed target", not "dry-resolve it".
+  const isDryResolve = !!options.dryRun && !options.mock;
+
   for (const step of steps) {
     // Skip already-completed steps (for resume)
     if (completedStepIds?.has(step.id)) {
       results.push(context.steps[step.id] || { status: 'success' });
       continue;
+    }
+
+    // --dry-run --stop-after=<target>: steps before the target ran for real;
+    // resolve the target's interpolations against that real context and halt
+    // WITHOUT executing it. See #97.
+    if (isDryResolve && options.stopAfter === step.id) {
+      options.onEvent?.({
+        event: 'step:dry-resolve',
+        ...dryResolveStep(step, context),
+        timestamp: new Date().toISOString(),
+      });
+      throw new FlowStopSignal(step.id);
     }
 
     options.onEvent?.({
@@ -1348,6 +1534,10 @@ export async function executeSteps(
         retries: result.retries,
       });
     } catch (error) {
+      // A stop signal raised by a nested block is control flow, not a failure —
+      // let it bubble without emitting a spurious step:error for the parent.
+      if (error instanceof FlowStopSignal) throw error;
+
       const errorMsg = error instanceof Error ? error.message : String(error);
 
       options.onEvent?.({
@@ -1358,6 +1548,12 @@ export async function executeSteps(
       });
 
       throw error;
+    }
+
+    // --stop-after=<target> (real or mock execution): the target just ran, so
+    // halt before any later step. See #97.
+    if (!isDryResolve && options.stopAfter === step.id) {
+      throw new FlowStopSignal(step.id);
     }
   }
 
@@ -1459,13 +1655,16 @@ export async function executeFlow(
     ? new Set(resumeState.completedSteps)
     : undefined;
 
-  // Feature 7: dry-run without mock — existing behavior
-  if (options.dryRun && !options.mock) {
+  // Feature 7: dry-run without mock — resolve interpolations, don't execute.
+  // When combined with `--stop-after`, we DON'T take this early path: the
+  // steps before the target must run for real so the target resolves against
+  // real upstream output (handled in executeSteps). See #97.
+  if (options.dryRun && !options.mock && !options.stopAfter) {
     options.onEvent?.({
       event: 'flow:dry-run',
       flowKey: flow.key,
       resolvedInputs,
-      steps: flow.steps.map(s => ({ id: s.id, name: s.name, type: s.type })),
+      steps: dryResolveAllSteps(flow.steps, context),
       timestamp: new Date().toISOString(),
     });
     return context;
@@ -1498,6 +1697,25 @@ export async function executeFlow(
       stepsSkipped: skipped,
     });
   } catch (error) {
+    // --stop-after halts via a FlowStopSignal once the target step is done
+    // (or dry-resolved). That's a clean stop, not a failure: report what ran
+    // and return the partial context. See #97.
+    if (error instanceof FlowStopSignal) {
+      const stepEntries = Object.values(context.steps);
+      options.onEvent?.({
+        event: 'flow:stopped',
+        flowKey: flow.key,
+        stoppedAfter: error.stepId,
+        dryRun: !!options.dryRun && !options.mock,
+        durationMs: Date.now() - flowStart,
+        stepsCompleted: stepEntries.filter(s => s.status === 'success').length,
+        stepsFailed: stepEntries.filter(s => s.status === 'failed').length,
+        stepsSkipped: stepEntries.filter(s => s.status === 'skipped').length,
+        timestamp: new Date().toISOString(),
+      });
+      return context;
+    }
+
     const errorMsg = error instanceof Error ? error.message : String(error);
 
     options.onEvent?.({
