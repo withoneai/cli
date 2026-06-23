@@ -318,11 +318,22 @@ export interface DryResolvedStep {
   stepId: string;
   name?: string;
   type: FlowStepType;
-  /** Per-selector resolution for declarative steps (action data, paths, etc.). */
+  /**
+   * Per-selector resolution for declarative steps (action data, paths, etc.).
+   * For a `deferred` expression step, holds the `$.steps.*`/`$.loop.*` entries
+   * it's waiting on.
+   */
   references: DryResolvedRef[];
   /** Fully-resolved config (declarative) or the evaluated value (transform/condition/while). */
   resolved?: unknown;
-  /** Populated when evaluating an expression step's expression threw. */
+  /**
+   * Expression step whose evaluation can't complete yet because it reads the
+   * output of a step (or loop var) that hasn't run — i.e. it WILL resolve at
+   * runtime, it's not a bug. Distinct from `error`, which flags a genuine
+   * problem (syntax error, missing input, missing field on a step that ran).
+   */
+  deferred?: boolean;
+  /** Populated when evaluating an expression step's expression threw for a real reason. */
   error?: string;
 }
 
@@ -353,6 +364,29 @@ function classifyDryRef(selector: string, value: unknown): DryRefStatus {
   // `$.input.*` / `$.env.*` are known up front — an undefined value here is the
   // actionable signal (typo, missing input, wrong field name).
   return 'missing';
+}
+
+/**
+ * For a JS expression that threw while dry-resolving, find the `$.steps.X` /
+ * `$.loop.X` ENTRIES it reads that don't exist in the context yet. A non-empty
+ * result means the throw is almost certainly "depends on a step that runs
+ * later" (deferred), not a real bug.
+ *
+ * We test the entry root (`$.steps.greet`), not the full selector: if the step
+ * ran but a sub-field is missing (`$.steps.greet.output.typo`), the root
+ * resolves, so it's NOT reported here and the original error stands — that's a
+ * genuine wiring mistake worth surfacing.
+ */
+function expressionDeferredOn(expr: string, context: FlowContext): string[] {
+  const deps = new Set<string>();
+  for (const selector of extractSelectors(expr)) {
+    if (!selector.startsWith('$.steps.') && !selector.startsWith('$.loop.')) continue;
+    const parts = selector.split(/[.[]/); // ['$', 'steps', 'greet', 'output', ...]
+    if (parts.length < 3) continue;
+    const root = `${parts[0]}.${parts[1]}.${parts[2]}`; // '$.steps.greet'
+    if (resolveSelector(root, context) === undefined) deps.add(root);
+  }
+  return [...deps];
 }
 
 /**
@@ -390,7 +424,9 @@ function stepInterpolationSource(step: FlowStep): unknown {
  * Resolve a single step's interpolations against the current context WITHOUT
  * executing it. Declarative steps report a per-selector reference table plus a
  * fully-substituted config; expression steps (transform/condition/while) report
- * the evaluated value (or the evaluation error). Powers `--dry-run` (issue #97).
+ * the evaluated value, or — if evaluation can't complete because it reads a
+ * step/loop value not yet produced — a `deferred` flag, or a real `error`.
+ * Powers `--dry-run` (issue #97).
  */
 export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolvedStep {
   const base = { stepId: step.id, name: step.name, type: step.type };
@@ -407,6 +443,21 @@ export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolve
     try {
       return { ...base, references: [], resolved: evaluateExpression(expr, context) };
     } catch (err) {
+      // A TypeError ("Cannot read properties of undefined") usually means the
+      // expression walked into a step output that hasn't been produced yet.
+      // If we can pin it on a not-yet-run $.steps/$.loop entry, report it as
+      // deferred (it'll resolve at runtime) instead of an alarming raw error.
+      // Re-run with --stop-after=<thatStep> to resolve it for real.
+      if (err instanceof TypeError) {
+        const deps = expressionDeferredOn(expr, context);
+        if (deps.length > 0) {
+          return {
+            ...base,
+            references: deps.map(selector => ({ selector, value: undefined, status: 'deferred' as const })),
+            deferred: true,
+          };
+        }
+      }
       return { ...base, references: [], error: err instanceof Error ? err.message : String(err) };
     }
   }

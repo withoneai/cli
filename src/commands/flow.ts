@@ -74,11 +74,17 @@ function renderDryResolution(steps: DryResolvedStep[]): void {
     console.log(`  ${pc.cyan('▸')} ${label} ${pc.dim(`(${s.type})`)}`);
     if (s.error !== undefined) {
       console.log(`      ${pc.red('error')} ${s.error}`);
+    } else if (isExpr(s.type) && s.deferred) {
+      const deps = s.references.map(r => r.selector).join(', ');
+      console.log(`      ${pc.dim('○ pending — depends on')} ${deps} ${pc.dim('(produced by a later step)')}`);
     } else if (isExpr(s.type)) {
       console.log(`      ${pc.dim('=')} ${previewValue(s.resolved)}`);
     }
-    for (const ref of s.references) {
-      console.log(`      ${renderDryRef(ref)}`);
+    // Declarative refs (expression steps that are deferred already printed theirs above).
+    if (!(isExpr(s.type) && s.deferred)) {
+      for (const ref of s.references) {
+        console.log(`      ${renderDryRef(ref)}`);
+      }
     }
     if (!isExpr(s.type) && s.references.length === 0 && s.error === undefined) {
       console.log(`      ${pc.dim('(no interpolations)')}`);

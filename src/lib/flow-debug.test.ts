@@ -49,11 +49,36 @@ describe('dryResolveStep — expression steps (#97)', () => {
     assert.deepEqual(r.references, []);
   });
 
-  it('reports an evaluation error instead of throwing when an upstream step is missing', () => {
+  it('marks the step deferred (not errored) when it reads a step that has not run yet', () => {
     const step = { id: 's', name: 'S', type: 'transform', transform: { expression: '$.steps.gone.output.x' } } as unknown as FlowStep;
     const r = dryResolveStep(step, ctx());
-    assert.equal(r.resolved, undefined);
+    assert.equal(r.deferred, true);
+    assert.equal(r.error, undefined);
+    assert.deepEqual(r.references.map(x => x.selector), ['$.steps.gone']);
+    assert.equal(r.references[0].status, 'deferred');
+  });
+
+  it('marks deferred when reading a loop var that is not in scope yet', () => {
+    const step = { id: 's', type: 'transform', transform: { expression: '$.loop.item.id.toString()' } } as unknown as FlowStep;
+    const r = dryResolveStep(step, ctx());
+    assert.equal(r.deferred, true);
+    assert.equal(r.error, undefined);
+  });
+
+  it('still ERRORS on a missing field of a step that DID run (genuine wiring bug)', () => {
+    // `ran` ran and produced {}, so $.steps.ran resolves — the throw is a real
+    // missing-field bug, not "runs later". Must surface as an error.
+    const step = { id: 's', type: 'transform', transform: { expression: '$.steps.ran.output.foo.bar' } } as unknown as FlowStep;
+    const r = dryResolveStep(step, ctx({ steps: { ran: { status: 'success', output: {} } } }));
+    assert.equal(r.deferred, undefined);
     assert.match(r.error ?? '', /Cannot read properties of undefined/);
+  });
+
+  it('still ERRORS on a syntax error (never downgraded to deferred)', () => {
+    const step = { id: 's', type: 'transform', transform: { expression: '$.steps.gone.output.(' } } as unknown as FlowStep;
+    const r = dryResolveStep(step, ctx());
+    assert.equal(r.deferred, undefined);
+    assert.ok(r.error, 'a syntax error is reported, not deferred');
   });
 
   it('evaluates a condition expression to a boolean-ish value', () => {
