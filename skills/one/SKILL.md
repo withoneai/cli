@@ -229,6 +229,7 @@ one --agent sync test attio/attioPeople --show-searchable
 
 # Run — memory is always written; pass --no-memory to skip (rare)
 one --agent sync run stripe
+one --agent sync schema stripe/customers         # inspect field paths/types before querying
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync search "refund"                 # hybrid across all synced platforms
 one --agent sync list stripe                     # progress + freshness
@@ -260,7 +261,7 @@ Without declared paths, the default walker concatenates every string in the reco
 One also supports more advanced patterns. Read the relevant reference file before using these:
 
 - **Webhook Relay** — Receive webhooks from a platform and forward to another (e.g., Stripe event -> Slack message). Read `references/relay.md` in this skill's directory for the full workflow.
-- **Multi-step Workflows** — Chain actions across platforms as JSON workflow files (like n8n/Zapier but file-based). Read `references/flows.md` in this skill's directory for the schema and examples.
+- **Multi-step Workflows** — Chain actions across platforms as JSON workflow files (like n8n/Zapier but file-based). Read `references/flows.md` in this skill's directory for the schema and examples. To debug: `flow execute <key> --dry-run` (resolve interpolations without running), `--stop-after <stepId>` (run up to a step then stop), and `flow inspect <runId>` (a past run's per-step outputs).
 
 ## Adding New Connections
 
