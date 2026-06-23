@@ -400,6 +400,28 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 { "id": "write", "type": "file-write", "fileWrite": { "path": "./output/results.json", "content": "$.steps.transform.output" } }
 ```
 
+**Validate a read config (`fileRead.schema`).** With `parseJson: true` you can add an optional `schema` that is **enforced at runtime** — a mismatch throws (`errorCode: "SCHEMA_VALIDATION"`) and is handled by the step's `onError`, so a bad config file fails fast with a clear message instead of producing garbage downstream. (This is distinct from `step.outputSchema`, which is documentation/wiring only and never checked at runtime.)
+
+```json
+{
+  "id": "read", "type": "file-read",
+  "fileRead": {
+    "path": "./data/config.json", "parseJson": true,
+    "schema": {
+      "name": { "type": "string", "required": true },
+      "mode": { "type": "string", "required": true, "enum": ["dev", "staging", "prod"] },
+      "retries": { "type": "number" },
+      "tags": { "type": "array", "items": "string", "minItems": 1, "maxItems": 10 },
+      "coords": { "type": "array", "length": 2, "items": "number" },
+      "owner": { "type": "object", "required": true,
+                 "properties": { "id": "string", "email": { "type": "string", "required": true } } }
+    }
+  }
+}
+```
+
+Field rules (a richer field-rule format inspired by `outputSchema`): a value is a bare type string (`"string"`, optional) or `{ type, required, enum, items, minItems, maxItems, length, properties }`. Types: `string`/`number`/`boolean`/`object`/`array`/`null`/`unknown` (`unknown` passes anything). **Array constraints (`items`/`minItems`/`maxItems`/`length`) require `type: "array"`, and `properties` requires `type: "object"`** — `flow validate` rejects them otherwise (so they can't silently no-op). All violations are reported in one error; paths are dotted/indexed (`owner.email`, `tags[3]`); a non-object root reports `expected an object at the root but got <type>`. `flow validate` checks the schema's shape (and that `parseJson:true` is set). With `onError: { strategy: "continue" }` the step lands as `{ status: "failed", errorCode: "SCHEMA_VALIDATION" }` so downstream steps can branch on it; `retry`/`fallback` and `retryOn:["SCHEMA_VALIDATION"]` work too.
+
 ### `while` — Condition-driven loop (do-while)
 
 ```json
@@ -565,6 +587,22 @@ the outputSchema declaration.
 ```
 
 Strategies: `fail` (default), `continue`, `retry`, `fallback`.
+
+**Flow-level default (cli#93).** Set `defaultOnError` at the top of the flow and every step without its own `onError` inherits it — handy when most steps should `continue` (e.g. rendering/formatting pipelines) and you don't want to repeat it N times. A step opts out by declaring its own `onError`:
+
+```json
+{
+  "key": "render-report",
+  "defaultOnError": { "strategy": "continue" },
+  "steps": [
+    { "id": "critical", "onError": { "strategy": "fail" }, ... },   // stays fatal
+    { "id": "chart", ... },                                          // inherits continue
+    { "id": "thumbnail", ... }                                       // inherits continue
+  ]
+}
+```
+
+Scoped per-flow: a sub-flow uses its own `defaultOnError`, not the parent's.
 
 **Retry backoff.** By default each retry waits exactly `retryDelayMs`. For rate-limited APIs add `"backoff": "exponential"` (or `"exponential-jitter"`) and an optional `"maxDelayMs"` cap (defaults to 30000):
 
