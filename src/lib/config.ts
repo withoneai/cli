@@ -330,12 +330,17 @@ const DEFAULT_API_BASE = 'https://api.withone.ai/v1';
 /**
  * The API origin the CLI talks to, with the `/v1` prefix. Precedence:
  * `ONE_API_BASE` env (local development against a backend on another
- * port, mirrors `ONE_APP_URL`) > `apiBase` in the active config > the
- * hosted API. A value that already ends in `/v1` is used as is.
+ * port, mirrors `ONE_APP_URL`) > `ONE_API_BASE` in `.onerc` > `apiBase`
+ * in the active config > the hosted API. A value that already ends in
+ * `/v1` is used as is. The env and `.onerc` tiers are never written back
+ * to config; see `getWhoAmI` for how the cached account record follows
+ * the active base.
  */
 export function getApiBase(): string {
   const override = process.env.ONE_API_BASE?.trim();
   if (override) return withV1(override);
+  const rc = readOneRc().ONE_API_BASE?.trim();
+  if (rc) return withV1(rc);
   const config = readConfig();
   if (config?.apiBase) return withV1(config.apiBase);
   return DEFAULT_API_BASE;
@@ -358,8 +363,43 @@ export function updateApiBase(url: string | null): void {
 
   // Clear cached whoami — base URL changed, so it needs to be re-fetched
   delete config.whoami;
+  delete config.whoamiApiBase;
 
   writeConfig(config);
+}
+
+// ── Credentials ─────────────────────────────────────────────────────
+
+export interface SaveCredentialsOptions {
+  /** Name the browser consent page gave the key; absent for a pasted key. */
+  keyName?: string;
+  /** Account record already fetched for this key. */
+  whoami: WhoAmIResponse;
+}
+
+/**
+ * Persist a freshly minted or pasted key at `scope`. Every other field of
+ * the existing config file survives (OpenAI key, memory settings, telemetry
+ * opt-out, access control, API base, installed agents), which is what a
+ * hand-built `{ apiKey, installedAgents, ... }` literal silently dropped.
+ * The key name and `whoami` describe the new key, so a stale name from the
+ * previous key never lingers. Writes exactly the requested scope and never
+ * re-reads through `resolveConfig()`, whose project-first resolution would
+ * clobber a new global key with the project one.
+ */
+export function saveCredentials(apiKey: string, scope: ConfigScope, opts: SaveCredentialsOptions): void {
+  const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
+  const next: Config = {
+    ...existing,
+    apiKey,
+    installedAgents: existing?.installedAgents ?? [],
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    whoami: opts.whoami,
+    whoamiApiBase: getApiBase(),
+  };
+  if (opts.keyName) next.apiKeyName = opts.keyName;
+  else delete next.apiKeyName;
+  writeConfig(next, scope);
 }
 
 export function getCacheTtl(): number {
@@ -402,14 +442,25 @@ export function updateAccessControl(settings: AccessControlSettings): void {
 
 // ── WhoAmI helpers ──────────────────────────────────────────────────
 
+/**
+ * The cached account record, or null when there is none or it was fetched
+ * from a different API base than the one active now. A record written
+ * before `whoamiApiBase` existed counts as fetched from the configured
+ * base, so existing configs keep their cache until an override is active.
+ */
 export function getWhoAmI(): WhoAmIResponse | null {
-  return readConfig()?.whoami ?? null;
+  const config = readConfig();
+  if (!config?.whoami) return null;
+  const fetchedFrom = config.whoamiApiBase ?? withV1(config.apiBase ?? DEFAULT_API_BASE);
+  if (fetchedFrom !== getApiBase()) return null;
+  return config.whoami;
 }
 
 export function updateWhoAmI(whoami: WhoAmIResponse): void {
   const config = readConfig();
   if (!config) return;
   config.whoami = whoami;
+  config.whoamiApiBase = getApiBase();
   writeConfig(config);
 }
 

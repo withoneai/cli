@@ -45,6 +45,37 @@ describe('startCallbackServer', () => {
     await withServer('st', async (port) => {
       const res = await fetch(`http://127.0.0.1:${port}/callback?state=st`);
       assert.equal(res.status, 400);
+      const empty = await fetch(`http://127.0.0.1:${port}/callback?state=st&error=`);
+      assert.equal(empty.status, 400);
+    });
+  });
+
+  it('reports any other error value as a failure with its reason', async () => {
+    await withServer('st', async (port, result) => {
+      const res = await fetch(`http://127.0.0.1:${port}/callback?state=st&error=create_failed`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await result, { kind: 'failed', reason: 'create_failed' });
+    });
+  });
+
+  it('keeps a minted key even when an error value rides along', async () => {
+    await withServer('st', async (port, result) => {
+      const s = Buffer.from('sk_live_x').toString('base64');
+      await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&error=cancelled`);
+      assert.deepEqual(await result, { kind: 'key', apiKey: 'sk_live_x', keyName: undefined });
+    });
+  });
+
+  it('strips control characters from the key name and caps its length', async () => {
+    await withServer('st', async (port, result) => {
+      const s = Buffer.from('sk_live_x').toString('base64');
+      const name = encodeURIComponent('bad\u001b[31mname\r\n' + 'x'.repeat(200));
+      await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&name=${name}`);
+      const outcome = await result;
+      assert.equal(outcome.kind, 'key');
+      if (outcome.kind !== 'key') return;
+      assert.equal(outcome.keyName?.length, 120);
+      assert.ok(outcome.keyName?.startsWith('bad[31mname'));
     });
   });
 });

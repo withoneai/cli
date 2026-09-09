@@ -10,7 +10,7 @@ const DEFAULT_APP_URL = 'https://app.withone.ai';
  */
 export function oneAppUrl(): string {
   const override = process.env.ONE_APP_URL?.trim();
-  return (override && override.length > 0 ? override : DEFAULT_APP_URL).replace(/\/+$/, '');
+  return (override || DEFAULT_APP_URL).replace(/\/+$/, '');
 }
 
 export interface ConnectionUrlParams {
@@ -48,15 +48,10 @@ export async function openApiKeyPage(): Promise<void> {
  * every time.
  */
 export function getCliAuthUrl(port: number, state: string, context?: InstallContext): string {
-  const params = new URLSearchParams();
-  params.set('port', String(port));
-  params.set('state', state);
-  if (context) {
-    for (const [key, value] of installContextToParams(context)) params.set(key, value);
-  }
+  const params = new URLSearchParams([
+    ['port', String(port)],
+    ['state', state],
+    ...(context ? installContextToParams(context) : []),
+  ]);
   return `${oneAppUrl()}/cli/auth?${params.toString()}`;
-}
-
-export async function openCliAuthPage(port: number, state: string, context?: InstallContext): Promise<void> {
-  await open(getCliAuthUrl(port, state, context));
 }

@@ -795,7 +795,9 @@ program
     const resolved = resolveConfig();
     const configScope = resolved.scope ?? 'global';
     const apiBase = getApiBase();
-    const keyName = resolved.config?.apiKeyName;
+    // The name describes the config's key; an ONE_SECRET env or .onerc key
+    // that won this call is a different credential and carries no name.
+    const keyName = resolved.config?.apiKey === apiKey ? resolved.config.apiKeyName : undefined;
 
     if (isAgentMode()) {
       outputJson({

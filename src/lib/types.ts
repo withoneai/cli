@@ -120,6 +120,12 @@ export interface Config {
   apiBase?: string;
   whoami?: WhoAmIResponse;
   /**
+   * API base `whoami` was fetched from. The cache is only served while the
+   * active base still matches, so an `ONE_API_BASE` override cannot hand a
+   * local backend's org and project ids to the hosted one, or vice versa.
+   */
+  whoamiApiBase?: string;
+  /**
    * Unified-memory subsystem config. Shape defined in lib/memory/config.ts
    * (kept loose here to avoid import cycles between the core config layer
    * and the memory module).
