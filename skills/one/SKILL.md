@@ -33,7 +33,7 @@ one logout                   # Clear local credentials
 
 `one login` opens the browser for OAuth authentication and automatically creates and stores an API key. If already logged in, the user can choose to log in globally or for the current directory. `one logout` shows current session info and confirms before clearing credentials.
 
-The consent page asks which harness will use the key (Claude Code, Codex, Cursor, …) and records the install location as tags on the key (`scope:global` / `scope:project`, `path:`, `host:`, `harness:`, …). `one whoami` shows the key's name once it is stored.
+The consent page asks which harness will use the key (Claude Code, Codex, Cursor, …) and records the install location as tags on the key (`scope:global` / `scope:project`, `path:`, `host:`, `user:`, `harness:`, and `device:` unless telemetry is off). The CLI prints what it will send before opening the browser. `one whoami` shows the key's name once it is stored.
 
 **Onboarding a user with no prompts:** run `one init --auth browser` — it opens a login window (the user authenticates there), saves the key, and auto-installs this skill, all without blocking on stdin. Add `-g`/`-p` for scope (default global). For CI/CD or headless environments, use `one init --auth manual --api-key sk_live_...`.
 

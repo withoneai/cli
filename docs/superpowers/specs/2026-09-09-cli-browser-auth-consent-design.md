@@ -94,10 +94,10 @@ All optional except `port` and `state`. Values are URL-encoded strings.
 | `osv` | `25.2.0` | `os.release()` |
 | `arch` | `arm64` | `process.arch` |
 | `user` | `paul` | `os.userInfo().username` |
-| `device` | UUID | `getDeviceId()` (existing stable per-install id in `~/.one/device-id`) |
+| `device` | UUID | `getDeviceId()` (existing stable per-install id in `~/.one/device-id`); omitted, and never minted, when telemetry is opted out |
 | `cli` | `1.56.0` | `cliVersion()` |
 | `harnesses` | `claude-code,cursor` | `detectInstalledHarnesses()`: agent registry detect dirs plus extra dirs (`~/.gemini`, `~/.openclaw`, `~/.hermes`, ...) |
-| `launcher` | `claude-code` | the harness that spawned this CLI process, from env (`CLAUDECODE` → claude-code, `CODEX_SANDBOX`/`CODEX_CI` → codex, `CURSOR_TRACE_ID` → cursor, `GEMINI_CLI` → gemini-cli, ...); absent when run by a human in a plain shell |
+| `launcher` | `claude-code` | the harness that spawned this CLI process, from env (`CLAUDECODE` → claude-code, `CODEX_SANDBOX`/`CODEX_CI` → codex, `CURSOR_AGENT` → cursor (not `CURSOR_TRACE_ID`, which Cursor exports into every integrated-terminal shell), `GEMINI_CLI` → gemini-cli, ...); absent when run by a human in a plain shell |
 
 Explicit params rather than one opaque blob: the CLI prints this URL in the
 terminal ("If the browser doesn't open, visit: ..."), and a person should be

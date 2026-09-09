@@ -11,7 +11,7 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 You can also use \`one login\` / \`one logout\` to manage authentication separately (global or per-directory).
 
-Browser login opens a consent page that names the key and tags it with where the CLI runs (scope, project path, machine, OS user, CLI version, and the agent harnesses you pick), so the dashboard can show every install. Set \`ONE_APP_URL\` (dashboard origin) and \`ONE_API_BASE\` (API origin) to run against a local stack.
+Browser login opens a consent page that names the key and tags it with where the CLI runs (scope, project path, machine, OS user, CLI version, the agent harnesses you pick, and the per-install device id unless telemetry is off), so the dashboard can show every install. The terminal prints what will be sent before the browser opens. Set \`ONE_APP_URL\` (dashboard origin) and \`ONE_API_BASE\` (API origin) to run against a local stack; neither is written to config, so pair them with \`ONE_HOME\` to keep a local stack's credentials separate.
 
 ### Agent-driven setup (no prompts)
 To onboard a user without any terminal interaction, pass \`--auth\` to \`one init\`. This disables every prompt, auto-installs the One skill, and skips the connect-a-platform step (run \`one add <platform>\` afterwards).

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { homeDir } from './home.js';
 import { detectInstalledAgents } from './agents.js';
 import { getDeviceId, getProjectRoot, type ConfigScope } from './config.js';
+import { isTelemetryDisabled } from './analytics.js';
 import { cliVersion } from './version.js';
 
 /**
@@ -24,7 +25,7 @@ export interface InstallContext {
   arch?: string;
   /** OS account name on this machine. */
   user?: string;
-  /** Stable per-install id from ~/.one/device-id. */
+  /** Stable per-install id from ~/.one/device-id; absent when telemetry is off. */
   device?: string;
   cli?: string;
   /** Harness ids found installed on this machine. */
@@ -53,7 +54,9 @@ const LAUNCHER_ENV: ReadonlyArray<{ id: string; vars: string[] }> = [
   { id: 'claude-code', vars: ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'] },
   { id: 'codex', vars: ['CODEX_SANDBOX', 'CODEX_CI', 'CODEX_THREAD_ID'] },
   { id: 'gemini-cli', vars: ['GEMINI_CLI'] },
-  { id: 'cursor', vars: ['CURSOR_AGENT', 'CURSOR_TRACE_ID'] },
+  // CURSOR_TRACE_ID is deliberately absent: Cursor exports it into every
+  // integrated-terminal shell, so it marks the editor, not an agent.
+  { id: 'cursor', vars: ['CURSOR_AGENT'] },
   { id: 'windsurf', vars: ['WINDSURF_AGENT'] },
   { id: 'kiro', vars: ['KIRO_AGENT'] },
   { id: 'openclaw', vars: ['OPENCLAW_AGENT', 'OPENCLAW_SESSION'] },
@@ -105,8 +108,11 @@ export function collectInstallContext(opts: {
   ctx.osVersion = tryRead(() => os.release());
   ctx.arch = process.arch;
   ctx.user = tryRead(() => os.userInfo().username);
-  ctx.device = tryRead(() => getDeviceId());
-  ctx.cli = tryRead(() => cliVersion());
+  // The device id doubles as the telemetry distinct_id, so it follows the
+  // telemetry opt-out: an opted-out install sends none and never mints one.
+  if (!isTelemetryDisabled()) ctx.device = tryRead(() => getDeviceId());
+  const cli = tryRead(() => cliVersion());
+  ctx.cli = cli === 'unknown' ? undefined : cli;
   ctx.launcher = detectLauncher(env);
   return ctx;
 }
@@ -141,6 +147,7 @@ export function describeInstallContext(ctx: InstallContext): string {
     lines.push(`machine: ${ctx.host ?? 'unknown'}${detail ? ` (${detail})` : ''}`);
   }
   if (ctx.user) lines.push(`user: ${ctx.user}`);
+  if (ctx.device) lines.push(`device: ${ctx.device}`);
   if (ctx.harnesses.length > 0) lines.push(`harnesses: ${ctx.harnesses.join(', ')}`);
   if (ctx.launcher) lines.push(`launched by: ${ctx.launcher}`);
   if (ctx.cli) lines.push(`cli: ${ctx.cli}`);

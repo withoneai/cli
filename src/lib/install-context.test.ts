@@ -29,6 +29,10 @@ describe('detectLauncher', () => {
     assert.equal(detectLauncher(NO_ENV), undefined);
     assert.equal(detectLauncher({ TERM_PROGRAM: 'iTerm.app' }), undefined);
   });
+
+  it("ignores Cursor's editor-terminal marker, which is not an agent", () => {
+    assert.equal(detectLauncher({ TERM_PROGRAM: 'vscode', CURSOR_TRACE_ID: 'c0ffee' }), undefined);
+  });
 });
 
 describe('detectInstalledHarnesses', () => {
@@ -49,10 +53,27 @@ describe('detectInstalledHarnesses', () => {
   });
 });
 
+// Telemetry opt-out signals decide whether a device id is sent, and CI sets
+// one of them; each test states the telemetry state it wants.
+const TELEMETRY_VARS = ['ONE_NO_TELEMETRY', 'ONE_DISABLE_TELEMETRY', 'DO_NOT_TRACK', 'CI'] as const;
+
 describe('collectInstallContext', () => {
   const home = withTempHome();
-  beforeEach(() => home.setup());
-  afterEach(() => home.teardown());
+  const savedTelemetry: Partial<Record<(typeof TELEMETRY_VARS)[number], string | undefined>> = {};
+  beforeEach(() => {
+    home.setup();
+    for (const v of TELEMETRY_VARS) {
+      savedTelemetry[v] = process.env[v];
+      delete process.env[v];
+    }
+  });
+  afterEach(() => {
+    for (const v of TELEMETRY_VARS) {
+      if (savedTelemetry[v] === undefined) delete process.env[v];
+      else process.env[v] = savedTelemetry[v];
+    }
+    home.teardown();
+  });
 
   it('omits the path for global scope and includes it for project scope', () => {
     assertHomeIsSandboxed();
@@ -73,12 +94,21 @@ describe('collectInstallContext', () => {
     assert.equal(a.os, process.platform);
     assert.equal(a.arch, process.arch);
     assert.ok(a.osVersion && a.osVersion.length > 0, 'osVersion');
-    assert.ok(a.user && a.user.length > 0, 'user');
+    // os.userInfo() throws for a uid with no passwd entry; the field is best-effort.
+    assert.ok(a.user === undefined || a.user.length > 0, 'user');
     assert.match(a.device ?? '', /^[0-9a-f-]{36}$/);
     assert.equal(a.device, b.device, 'device id is stable across calls');
     assert.match(a.cli ?? '', /^\d+\.\d+\.\d+/);
     assert.deepEqual(a.harnesses, []);
     assert.equal(a.launcher, undefined);
+  });
+
+  it('sends no device id, and mints none, when telemetry is opted out', () => {
+    assertHomeIsSandboxed();
+    process.env.DO_NOT_TRACK = '1';
+    const ctx = collectInstallContext({ scope: 'global', env: NO_ENV });
+    assert.equal(ctx.device, undefined);
+    assert.equal(fs.existsSync(path.join(home.oneDir, 'device-id')), false, 'device-id file must not be created');
   });
 
   it('records the launching agent from env', () => {
@@ -140,5 +170,15 @@ describe('describeInstallContext', () => {
       text,
       ['scope: project', 'path: /tmp/acme', 'machine: box (linux 6.1, x64)', 'user: jane', 'harnesses: codex', 'cli: 1.56.0'].join('\n'),
     );
+  });
+
+  it('discloses the device id when one will be sent', () => {
+    const text = describeInstallContext({
+      scope: 'global',
+      user: 'jane',
+      device: '6f1c0b1e-1111-4222-8333-944444444444',
+      harnesses: [],
+    });
+    assert.equal(text, ['scope: global', 'user: jane', 'device: 6f1c0b1e-1111-4222-8333-944444444444'].join('\n'));
   });
 });
