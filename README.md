@@ -48,6 +48,8 @@ one login              # Opens browser for authentication (global or per-directo
 one logout             # Clear credentials (with scope picker and confirmation)
 ```
 
+The browser consent page names the key and tags it with where this CLI is installed (scope, project path, machine, chosen harnesses) so you can find and revoke it from Settings → API keys.
+
 Requires Node.js 18+. `one sync` additionally needs Node 20+, because its
 local SQLite engine (`better-sqlite3`, an optional dependency) ships prebuilt
 binaries only for Node 20 and above. On Node 18 every other command works
@@ -162,6 +164,7 @@ one init --auth manual --api-key sk_live_...   # headless / CI, no browser
 | `--auth <browser\|manual>` | Run setup with **no prompts**. `browser` opens a login window; `manual` uses `--api-key`. Scope from `-g`/`-p` (default global). |
 | `--api-key <key>` | API key for `--auth manual` (`sk_live_…` / `sk_test_…`) |
 | `--openai-key <key>` | Optional OpenAI key for `one mem` semantic search |
+| `ONE_APP_URL` (env) | Dashboard origin the browser flows open (default `https://app.withone.ai`); use `http://localhost:4202` against a local frontend. |
 
 ### `one add <platform>`
 
