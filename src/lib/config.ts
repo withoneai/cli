@@ -327,10 +327,23 @@ export function getAccessControl(): AccessControlSettings {
 
 const DEFAULT_API_BASE = 'https://api.withone.ai/v1';
 
+/**
+ * The API origin the CLI talks to, with the `/v1` prefix. Precedence:
+ * `ONE_API_BASE` env (local development against a backend on another
+ * port, mirrors `ONE_APP_URL`) > `apiBase` in the active config > the
+ * hosted API. A value that already ends in `/v1` is used as is.
+ */
 export function getApiBase(): string {
+  const override = process.env.ONE_API_BASE?.trim();
+  if (override) return withV1(override);
   const config = readConfig();
-  if (config?.apiBase) return `${config.apiBase}/v1`;
+  if (config?.apiBase) return withV1(config.apiBase);
   return DEFAULT_API_BASE;
+}
+
+function withV1(origin: string): string {
+  const trimmed = origin.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
 }
 
 export function updateApiBase(url: string | null): void {

@@ -165,6 +165,7 @@ one init --auth manual --api-key sk_live_...   # headless / CI, no browser
 | `--api-key <key>` | API key for `--auth manual` (`sk_live_…` / `sk_test_…`) |
 | `--openai-key <key>` | Optional OpenAI key for `one mem` semantic search |
 | `ONE_APP_URL` (env) | Dashboard origin the browser flows open (default `https://app.withone.ai`); use `http://localhost:4202` against a local frontend. |
+| `ONE_API_BASE` (env) | API origin, overriding `apiBase` in config (default `https://api.withone.ai`); use `http://localhost:5005` against a local backend. |
 
 ### `one add <platform>`
 
