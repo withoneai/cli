@@ -24,6 +24,7 @@ function formatWhoami(config: Config, apiKey: string, pc: typeof import('picocol
     const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
     lines.push(`${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
     lines.push(`${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+    if (config.apiKeyName) lines.push(`${pc.dim('Key:')} ${config.apiKeyName}`);
   } else {
     lines.push(`${pc.dim('Key:')} ${apiKey.slice(0, 8)}... ${pc.dim('·')} ${envLabel}`);
   }

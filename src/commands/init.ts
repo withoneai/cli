@@ -114,14 +114,16 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   const scope: ConfigScope = options.global ? 'global' : options.project ? 'project' : 'global';
 
   let apiKey: string;
+  let keyName: string | undefined;
   let whoami: import('../lib/types.js').WhoAmIResponse;
 
   if (auth === 'browser') {
-    const result = await browserLogin();
+    const result = await browserLogin({ scope });
     if (!result) {
       output.error('Browser login did not complete. Try again: one init --auth browser');
     }
     apiKey = result.apiKey;
+    keyName = result.keyName;
     whoami = result.whoami;
   } else {
     const key = options.apiKey?.trim();
@@ -151,6 +153,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   writeConfig(
     {
       apiKey,
+      apiKeyName: keyName,
       installedAgents: existing?.installedAgents ?? [],
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       accessControl: existing?.accessControl,
@@ -460,15 +463,17 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   }
 
   let newKey: string;
+  let keyName: string | undefined;
   let whoamiResult: import('../lib/types.js').WhoAmIResponse;
 
   if (authMethod === 'browser') {
-    const result = await browserLogin();
+    const result = await browserLogin({ scope });
     if (!result) {
       p.cancel('Browser login did not complete.');
       process.exit(1);
     }
     newKey = result.apiKey;
+    keyName = result.keyName;
     whoamiResult = result.whoami;
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
@@ -554,6 +559,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   writeConfig(
     {
       apiKey: newKey,
+      apiKeyName: keyName,
       installedAgents: current?.installedAgents ?? [],
       createdAt: current?.createdAt ?? new Date().toISOString(),
       accessControl: current?.accessControl,
@@ -1101,7 +1107,7 @@ async function freshSetup(
   let apiKey: string;
 
   if (authMethod === 'browser') {
-    const result = await browserLogin();
+    const result = await browserLogin({ scope });
     if (!result) {
       p.cancel('Browser login did not complete. Try: one init');
       process.exit(1);
@@ -1124,6 +1130,7 @@ async function freshSetup(
     writeConfig(
       {
         apiKey,
+        apiKeyName: result.keyName,
         installedAgents: [],
         createdAt: new Date().toISOString(),
         whoami: result.whoami,
