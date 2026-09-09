@@ -191,6 +191,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
         project: whoami.project,
         env: getEnvFromApiKey(apiKey),
       },
+      keyName,
       skillInstalled: installed,
       skillFailed: failed,
     });
@@ -210,6 +211,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   console.log(`  ${pc.dim('─'.repeat(42))}`);
   console.log(`  ${pc.dim('Account:')} ${scopeDisplay} ${pc.dim('·')} ${envLabel}`);
   console.log(`  ${pc.dim('User:')}    ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+  if (keyName) console.log(`  ${pc.dim('Key:')}     ${keyName}`);
   console.log(`  ${pc.dim('Config:')}  ${tildify(configPath)}`);
   if (installed.length > 0) {
     console.log(`  ${pc.dim('Skill:')}   ${pc.green('installed')} ${pc.dim('· ' + installed.join(', '))}`);
