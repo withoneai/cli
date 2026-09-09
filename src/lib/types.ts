@@ -103,6 +103,11 @@ export interface WhoAmIResponse {
 export interface Config {
   apiKey: string;
   /**
+   * Display name of the key the browser consent page minted, echoed back on
+   * the callback. Lets `one whoami` / `one logout` say which key this is.
+   */
+  apiKeyName?: string;
+  /**
    * OpenAI API key. Top-level credential alongside `apiKey` so every
    * subsystem that needs OpenAI (memory embeddings today, more later)
    * reads from one canonical place. Env `OPENAI_API_KEY` overrides.

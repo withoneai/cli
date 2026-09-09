@@ -1,0 +1,50 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { startCallbackServer, type CallbackOutcome } from './login.js';
+
+async function withServer<T>(
+  state: string,
+  run: (port: number, result: Promise<CallbackOutcome>) => Promise<T>,
+): Promise<T> {
+  const { server, port, result } = await startCallbackServer(state);
+  try {
+    return await run(port, result);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+}
+
+describe('startCallbackServer', () => {
+  it('rejects a state mismatch with 403 and keeps waiting', async () => {
+    await withServer('expected', async (port) => {
+      const s = Buffer.from('sk_live_x').toString('base64');
+      const res = await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=wrong`);
+      assert.equal(res.status, 403);
+    });
+  });
+
+  it('resolves the key and its name', async () => {
+    await withServer('st', async (port, result) => {
+      const s = Buffer.from('sk_live_x').toString('base64');
+      const res = await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&name=${encodeURIComponent('CLI · acme')}`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await result, { kind: 'key', apiKey: 'sk_live_x', keyName: 'CLI · acme' });
+    });
+  });
+
+  it('resolves cancelled when the page reports error=cancelled', async () => {
+    await withServer('st', async (port, result) => {
+      const res = await fetch(`http://127.0.0.1:${port}/callback?error=cancelled&state=st`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await result, { kind: 'cancelled' });
+    });
+  });
+
+  it('answers 400 when neither a key nor an error is present', async () => {
+    await withServer('st', async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/callback?state=st`);
+      assert.equal(res.status, 400);
+    });
+  });
+});

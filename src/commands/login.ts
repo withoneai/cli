@@ -4,6 +4,7 @@ import * as p from '@clack/prompts';
 import { OneApi, ApiError } from '../lib/api.js';
 import { getApiKey, writeConfig, resolveConfig, readGlobalConfig, readProjectConfig, getApiBase, getEnvFromApiKey, type ConfigScope } from '../lib/config.js';
 import { getCliAuthUrl, openCliAuthPage } from '../lib/browser.js';
+import { collectInstallContext, describeInstallContext } from '../lib/install-context.js';
 import * as output from '../lib/output.js';
 import type { WhoAmIResponse } from '../lib/types.js';
 
@@ -21,19 +22,26 @@ const SUCCESS_HTML = `<!DOCTYPE html>
 <h1 style="font-size:20px;margin:0 0 8px">You're all set!</h1>
 <p style="color:#a1a1aa;font-size:14px">Return to your terminal. You can close this tab.</p>
 </div></body></html>`;
+const CANCELLED_HTML = `<!DOCTYPE html>
+<html><head><title>One CLI</title></head>
+<body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0a0a0a;color:#fafafa">
+<div style="text-align:center">
+<h1 style="font-size:20px;margin:0 0 8px">Login cancelled</h1>
+<p style="color:#a1a1aa;font-size:14px">No key was created. You can close this tab and run <code>one login</code> again.</p>
+</div></body></html>`;
 
-interface CallbackPayload {
-  apiKey: string;
-  state: string;
-}
+/** What the browser consent page reported back on the localhost callback. */
+export type CallbackOutcome =
+  | { kind: 'key'; apiKey: string; keyName?: string }
+  | { kind: 'cancelled' };
 
 function randomPort(): number {
   return PORT_RANGE_START + Math.floor(Math.random() * (PORT_RANGE_END - PORT_RANGE_START));
 }
 
-function startCallbackServer(
+export function startCallbackServer(
   expectedState: string
-): Promise<{ server: http.Server; port: number; result: Promise<CallbackPayload> }> {
+): Promise<{ server: http.Server; port: number; result: Promise<CallbackOutcome> }> {
   return new Promise((resolveSetup, rejectSetup) => {
     let attempts = 0;
 
@@ -41,8 +49,8 @@ function startCallbackServer(
       const port = randomPort();
       attempts++;
 
-      let resolveResult: (value: CallbackPayload) => void;
-      const result = new Promise<CallbackPayload>((res) => {
+      let resolveResult: (value: CallbackOutcome) => void;
+      const result = new Promise<CallbackOutcome>((res) => {
         resolveResult = res;
       });
 
@@ -55,27 +63,40 @@ function startCallbackServer(
           return;
         }
 
-        const encodedKey = url.searchParams.get('s');
         const state = url.searchParams.get('state');
-
-        const apiKey = encodedKey ? Buffer.from(encodedKey, 'base64').toString('utf-8') : null;
-
-        if (!apiKey || !state) {
+        if (!state) {
           res.writeHead(400, { 'Content-Type': 'text/plain' });
-          res.end('Missing required parameters');
+          res.end('Missing state');
           return;
         }
-
         if (state !== expectedState) {
           res.writeHead(403, { 'Content-Type': 'text/plain' });
           res.end('State mismatch');
           return;
         }
 
+        // The page reports a cancel with ?error=cancelled so the CLI can stop
+        // waiting instead of sitting out the 5-minute timeout.
+        if (url.searchParams.get('error')) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(CANCELLED_HTML);
+          resolveResult({ kind: 'cancelled' });
+          return;
+        }
+
+        const encodedKey = url.searchParams.get('s');
+        const apiKey = encodedKey ? Buffer.from(encodedKey, 'base64').toString('utf-8') : null;
+        if (!apiKey) {
+          res.writeHead(400, { 'Content-Type': 'text/plain' });
+          res.end('Missing required parameters');
+          return;
+        }
+        const keyName = url.searchParams.get('name')?.trim() || undefined;
+
         // Serve success page to the browser
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(SUCCESS_HTML);
-        resolveResult({ apiKey, state });
+        resolveResult({ kind: 'key', apiKey, keyName });
       });
 
       server.on('error', (err: NodeJS.ErrnoException) => {
@@ -96,22 +117,33 @@ function startCallbackServer(
 }
 
 // ── Reusable browser auth flow ──────────────────────────────────────
-// Returns { apiKey, whoami } on success, null on failure/cancel.
+// Returns { apiKey, whoami, keyName } on success, null on failure/cancel.
 // Handles the local callback server, browser open, and whoami validation.
-// Does NOT handle scope selection, credential saving, or post-login UX.
+// Does NOT handle credential saving or post-login UX. The caller names the
+// scope because the consent page records it (and the project path) on the
+// key it mints.
+
+export interface BrowserLoginOptions {
+  /** Where the credentials will be stored; the page records it as a tag. */
+  scope: ConfigScope;
+  /** Project root for project scope; defaults to the detected root. */
+  projectRoot?: string;
+}
 
 export interface BrowserLoginResult {
   apiKey: string;
   whoami: WhoAmIResponse;
+  /** Name the consent page gave the key, when the page sent one. */
+  keyName?: string;
 }
 
-export async function browserLogin(): Promise<BrowserLoginResult | null> {
+export async function browserLogin(opts: BrowserLoginOptions): Promise<BrowserLoginResult | null> {
   const state = crypto.randomUUID();
   const spin = p.spinner();
 
   let server: http.Server;
   let port: number;
-  let resultPromise: Promise<CallbackPayload>;
+  let resultPromise: Promise<CallbackOutcome>;
 
   try {
     ({ server, port, result: resultPromise } = await startCallbackServer(state));
@@ -120,15 +152,16 @@ export async function browserLogin(): Promise<BrowserLoginResult | null> {
     return null;
   }
 
-  const authUrl = getCliAuthUrl(port, state);
+  const context = collectInstallContext({ scope: opts.scope, projectRoot: opts.projectRoot });
+  const authUrl = getCliAuthUrl(port, state, context);
 
   p.note(
-    `If the browser doesn't open, visit:\n${authUrl}`,
+    `If the browser doesn't open, visit:\n${authUrl}\n\nThe consent page records this on the key so you can find the install later:\n${describeInstallContext(context)}`,
     'Opening browser for authentication...'
   );
 
   try {
-    await openCliAuthPage(port, state);
+    await openCliAuthPage(port, state, context);
   } catch {
     // Browser open failed — URL is already displayed above
   }
@@ -143,15 +176,19 @@ export async function browserLogin(): Promise<BrowserLoginResult | null> {
   });
 
   try {
-    const payload = await Promise.race([resultPromise, timeout]);
+    const outcome = await Promise.race([resultPromise, timeout]);
+    if (outcome.kind === 'cancelled') {
+      spin.stop('Login cancelled in the browser.');
+      return null;
+    }
     spin.stop('Authentication received!');
 
     // Fetch whoami
     const apiBase = getApiBase();
-    const api = new OneApi(payload.apiKey, apiBase);
+    const api = new OneApi(outcome.apiKey, apiBase);
     const whoami = await api.whoami();
 
-    return { apiKey: payload.apiKey, whoami };
+    return { apiKey: outcome.apiKey, whoami, keyName: outcome.keyName };
   } catch (err) {
     spin.stop('Authentication failed.');
     if (err instanceof Error && err.message === 'timeout') {
@@ -170,10 +207,11 @@ export async function browserLogin(): Promise<BrowserLoginResult | null> {
 
 // ── Standalone login command ────────────────────────────────────────
 
-function saveCredentials(apiKey: string, scope: ConfigScope): void {
+function saveCredentials(apiKey: string, scope: ConfigScope, keyName?: string): void {
   const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
   writeConfig({
     apiKey,
+    apiKeyName: keyName,
     installedAgents: existing?.installedAgents ?? [],
     createdAt: new Date().toISOString(),
     accessControl: existing?.accessControl,
@@ -234,13 +272,13 @@ export async function loginCommand(): Promise<void> {
   }
 
   // Run browser auth
-  const result = await browserLogin();
+  const result = await browserLogin({ scope: targetScope });
   if (!result) return;
 
-  const { apiKey, whoami } = result;
+  const { apiKey, whoami, keyName } = result;
 
   // Save credentials and whoami
-  saveCredentials(apiKey, targetScope);
+  saveCredentials(apiKey, targetScope, keyName);
   const resolved = resolveConfig();
   if (resolved.config) {
     writeConfig({ ...resolved.config, whoami }, targetScope);
@@ -262,6 +300,7 @@ export async function loginCommand(): Promise<void> {
     `${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`,
     `${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
   ];
+  if (keyName) infoLines.push(`${pc.dim('Key:')} ${keyName}`);
   if (whoami.organization) infoLines.push(`${pc.dim('Org:')} ${whoami.organization.name}`);
   if (whoami.project) infoLines.push(`${pc.dim('Project:')} ${whoami.project.name}`);
   infoLines.push('');
