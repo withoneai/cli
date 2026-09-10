@@ -103,6 +103,11 @@ export interface WhoAmIResponse {
 export interface Config {
   apiKey: string;
   /**
+   * Display name of the key the browser consent page minted, echoed back on
+   * the callback. Lets `one whoami` / `one logout` say which key this is.
+   */
+  apiKeyName?: string;
+  /**
    * OpenAI API key. Top-level credential alongside `apiKey` so every
    * subsystem that needs OpenAI (memory embeddings today, more later)
    * reads from one canonical place. Env `OPENAI_API_KEY` overrides.
@@ -114,6 +119,12 @@ export interface Config {
   cacheTtl?: number;
   apiBase?: string;
   whoami?: WhoAmIResponse;
+  /**
+   * API base `whoami` was fetched from. The cache is only served while the
+   * active base still matches, so an `ONE_API_BASE` override cannot hand a
+   * local backend's org and project ids to the hosted one, or vice versa.
+   */
+  whoamiApiBase?: string;
   /**
    * Unified-memory subsystem config. Shape defined in lib/memory/config.ts
    * (kept loose here to avoid import cycles between the core config layer

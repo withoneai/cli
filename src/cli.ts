@@ -73,7 +73,7 @@ program
   .description(`One CLI — Connect AI agents to 600+ platforms through one interface.
 
   Setup:
-    one login                             Authenticate via browser (opens app.withone.ai)
+    one login                             Authenticate via browser; the consent page records where this CLI is installed
     one logout                            Clear local credentials
     one init                              Set up API key + skill (add --auth browser for no-prompt agent setup)
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
@@ -795,6 +795,9 @@ program
     const resolved = resolveConfig();
     const configScope = resolved.scope ?? 'global';
     const apiBase = getApiBase();
+    // The name describes the config's key; an ONE_SECRET env or .onerc key
+    // that won this call is a different credential and carries no name.
+    const keyName = resolved.config?.apiKey === apiKey ? resolved.config.apiKeyName : undefined;
 
     if (isAgentMode()) {
       outputJson({
@@ -804,6 +807,7 @@ program
         env,
         configScope,
         apiBase,
+        keyName,
       });
       return;
     }
@@ -821,6 +825,7 @@ program
     console.log();
     console.log(`  ${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
     console.log(`  ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+    if (keyName) console.log(`  ${pc.dim('Key:')} ${keyName}`);
     if (whoami.organization) console.log(`  ${pc.dim('Org:')} ${whoami.organization.name} ${pc.dim(`(${whoami.organization.id})`)}`);
     if (whoami.project) console.log(`  ${pc.dim('Project:')} ${whoami.project.name} ${pc.dim(`(${whoami.project.id})`)}`);
     console.log();

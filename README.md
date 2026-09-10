@@ -48,6 +48,8 @@ one login              # Opens browser for authentication (global or per-directo
 one logout             # Clear credentials (with scope picker and confirmation)
 ```
 
+The browser consent page names the key and tags it with where this CLI is installed (scope, project path, machine, OS user, CLI version, chosen harnesses, and the per-install device id unless telemetry is off) so you can find and revoke it from Settings → API keys. The terminal prints exactly what will be sent before the browser opens.
+
 Requires Node.js 18+. `one sync` additionally needs Node 20+, because its
 local SQLite engine (`better-sqlite3`, an optional dependency) ships prebuilt
 binaries only for Node 20 and above. On Node 18 every other command works
@@ -162,6 +164,10 @@ one init --auth manual --api-key sk_live_...   # headless / CI, no browser
 | `--auth <browser\|manual>` | Run setup with **no prompts**. `browser` opens a login window; `manual` uses `--api-key`. Scope from `-g`/`-p` (default global). |
 | `--api-key <key>` | API key for `--auth manual` (`sk_live_…` / `sk_test_…`) |
 | `--openai-key <key>` | Optional OpenAI key for `one mem` semantic search |
+| `ONE_APP_URL` (env) | Dashboard origin the browser flows open (default `https://app.withone.ai`); use `http://localhost:4202` against a local frontend. |
+| `ONE_API_BASE` (env) | API origin, overriding `apiBase` in config (default `https://api.withone.ai`); use `http://localhost:5005` against a local backend. |
+
+Both overrides apply to the current process only and are never written to config, so a key minted against a local backend lands in your normal config and a cron job or MCP server without the variable would send it to the hosted API. Pair them with `ONE_HOME` (see below) to keep a local stack's credentials in a separate profile.
 
 ### `one add <platform>`
 

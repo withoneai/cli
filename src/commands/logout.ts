@@ -24,8 +24,12 @@ function formatWhoami(config: Config, apiKey: string, pc: typeof import('picocol
     const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
     lines.push(`${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
     lines.push(`${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+    if (config.apiKeyName) lines.push(`${pc.dim('Key:')} ${config.apiKeyName}`);
   } else {
-    lines.push(`${pc.dim('Key:')} ${apiKey.slice(0, 8)}... ${pc.dim('·')} ${envLabel}`);
+    // No cached account record (cleared by `one config` or a base change):
+    // the stored name still says which key this is, better than a prefix.
+    const keyLabel = config.apiKeyName ?? `${apiKey.slice(0, 8)}...`;
+    lines.push(`${pc.dim('Key:')} ${keyLabel} ${pc.dim('·')} ${envLabel}`);
   }
 
   return lines;

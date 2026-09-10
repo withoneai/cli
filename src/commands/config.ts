@@ -126,9 +126,11 @@ export async function configCommand(): Promise<void> {
     return;
   }
 
-  // 5. API base URL
-  const currentBase = getApiBase();
-  const isCustomBase = !!readConfig()?.apiBase;
+  // 5. API base URL. Prefill from the stored value, not getApiBase(): an
+  // ONE_API_BASE override in the shell must not be offered up as if it were
+  // the persisted setting.
+  const storedBase = readConfig()?.apiBase;
+  const isCustomBase = !!storedBase;
 
   const baseUrlMode = await p.select({
     message: 'API base URL',
@@ -150,7 +152,7 @@ export async function configCommand(): Promise<void> {
     const customUrl = await p.text({
       message: 'Enter API base URL:',
       placeholder: 'https://development-api.withone.ai',
-      initialValue: isCustomBase ? currentBase.replace(/\/v1$/, '') : '',
+      initialValue: storedBase ? storedBase.replace(/\/v1$/, '') : '',
       validate: (value) => {
         if (!value) return 'URL is required';
         try { new URL(value); } catch { return 'Invalid URL'; }
@@ -262,7 +264,10 @@ export async function configCommand(): Promise<void> {
   const updatedConfig = readConfig();
   if (updatedConfig && newApiKey !== config.apiKey) {
     updatedConfig.apiKey = newApiKey;
+    // The name belonged to the key the consent page minted, not this one.
+    delete updatedConfig.apiKeyName;
     delete updatedConfig.whoami;
+    delete updatedConfig.whoamiApiBase;
     writeConfig(updatedConfig);
   }
 

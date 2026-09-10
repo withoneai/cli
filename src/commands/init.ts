@@ -23,6 +23,7 @@ import {
   getEnvFromApiKey,
   getWhoAmI,
   getOpenAiApiKey,
+  saveCredentials,
   type ConfigScope,
 } from '../lib/config.js';
 // Use the memory-aware wrapper — persists the key AND enables semantic
@@ -41,7 +42,7 @@ import {
   type AgentStatus,
 } from '../lib/agents.js';
 import { OneApi, TimeoutError } from '../lib/api.js';
-import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
+import { getApiKeyUrl, oneAppUrl, openApiKeyPage, openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { configCommand } from './config.js';
 import open from 'open';
 import * as output from '../lib/output.js';
@@ -114,14 +115,16 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   const scope: ConfigScope = options.global ? 'global' : options.project ? 'project' : 'global';
 
   let apiKey: string;
+  let keyName: string | undefined;
   let whoami: import('../lib/types.js').WhoAmIResponse;
 
   if (auth === 'browser') {
-    const result = await browserLogin();
+    const result = await browserLogin({ scope });
     if (!result) {
       output.error('Browser login did not complete. Try again: one init --auth browser');
     }
     apiKey = result.apiKey;
+    keyName = result.keyName;
     whoami = result.whoami;
   } else {
     const key = options.apiKey?.trim();
@@ -147,19 +150,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   }
 
   // Persist credentials at the chosen scope, preserving any existing config.
-  const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
-  writeConfig(
-    {
-      apiKey,
-      installedAgents: existing?.installedAgents ?? [],
-      createdAt: existing?.createdAt ?? new Date().toISOString(),
-      accessControl: existing?.accessControl,
-      apiBase: existing?.apiBase,
-      cacheTtl: existing?.cacheTtl,
-      whoami,
-    },
-    scope,
-  );
+  saveCredentials(apiKey, scope, { keyName, whoami });
 
   // Optional OpenAI key for `one mem` semantic search.
   if (options.openaiKey?.trim()) {
@@ -188,6 +179,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
         project: whoami.project,
         env: getEnvFromApiKey(apiKey),
       },
+      keyName,
       skillInstalled: installed,
       skillFailed: failed,
     });
@@ -207,6 +199,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   console.log(`  ${pc.dim('─'.repeat(42))}`);
   console.log(`  ${pc.dim('Account:')} ${scopeDisplay} ${pc.dim('·')} ${envLabel}`);
   console.log(`  ${pc.dim('User:')}    ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+  if (keyName) console.log(`  ${pc.dim('Key:')}     ${keyName}`);
   console.log(`  ${pc.dim('Config:')}  ${tildify(configPath)}`);
   if (installed.length > 0) {
     console.log(`  ${pc.dim('Skill:')}   ${pc.green('installed')} ${pc.dim('· ' + installed.join(', '))}`);
@@ -460,15 +453,17 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   }
 
   let newKey: string;
+  let keyName: string | undefined;
   let whoamiResult: import('../lib/types.js').WhoAmIResponse;
 
   if (authMethod === 'browser') {
-    const result = await browserLogin();
+    const result = await browserLogin({ scope });
     if (!result) {
       p.cancel('Browser login did not complete.');
       process.exit(1);
     }
     newKey = result.apiKey;
+    keyName = result.keyName;
     whoamiResult = result.whoami;
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
@@ -531,7 +526,11 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
   const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
   p.note(
-    `${scopeDisplay} ${pc.dim('·')} ${envLabel}\n${whoamiResult.user.name} ${pc.dim(`(${whoamiResult.user.email})`)}`,
+    [
+      `${scopeDisplay} ${pc.dim('·')} ${envLabel}`,
+      `${whoamiResult.user.name} ${pc.dim(`(${whoamiResult.user.email})`)}`,
+      ...(keyName ? [`${pc.dim('Key:')} ${keyName}`] : []),
+    ].join('\n'),
     'Account',
   );
 
@@ -549,20 +548,8 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
     }
   }
 
-  // Update config (preserve accessControl, refresh whoami) at the active scope.
-  const current = scope === 'project' ? readProjectConfig() : readGlobalConfig();
-  writeConfig(
-    {
-      apiKey: newKey,
-      installedAgents: current?.installedAgents ?? [],
-      createdAt: current?.createdAt ?? new Date().toISOString(),
-      accessControl: current?.accessControl,
-      apiBase: current?.apiBase,
-      cacheTtl: current?.cacheTtl,
-      whoami: whoamiResult,
-    },
-    scope,
-  );
+  // Update the key at the active scope; everything else in the file stays.
+  saveCredentials(newKey, scope, { keyName, whoami: whoamiResult });
 
   if (reinstalled.length > 0) {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
@@ -1101,7 +1088,7 @@ async function freshSetup(
   let apiKey: string;
 
   if (authMethod === 'browser') {
-    const result = await browserLogin();
+    const result = await browserLogin({ scope });
     if (!result) {
       p.cancel('Browser login did not complete. Try: one init');
       process.exit(1);
@@ -1116,20 +1103,16 @@ async function freshSetup(
     const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
     const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
     p.note(
-      `${scopeDisplay} ${pc.dim('·')} ${envLabel}\n${result.whoami.user.name} ${pc.dim(`(${result.whoami.user.email})`)}`,
+      [
+        `${scopeDisplay} ${pc.dim('·')} ${envLabel}`,
+        `${result.whoami.user.name} ${pc.dim(`(${result.whoami.user.email})`)}`,
+        ...(result.keyName ? [`${pc.dim('Key:')} ${result.keyName}`] : []),
+      ].join('\n'),
       'Account',
     );
 
     // Save API key + whoami to config at the chosen scope
-    writeConfig(
-      {
-        apiKey,
-        installedAgents: [],
-        createdAt: new Date().toISOString(),
-        whoami: result.whoami,
-      },
-      scope,
-    );
+    saveCredentials(apiKey, scope, { keyName: result.keyName, whoami: result.whoami });
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
 
@@ -1196,15 +1179,7 @@ async function freshSetup(
     );
 
     // Save API key + whoami to config at the chosen scope
-    writeConfig(
-      {
-        apiKey,
-        installedAgents: [],
-        createdAt: new Date().toISOString(),
-        whoami,
-      },
-      scope,
-    );
+    saveCredentials(apiKey, scope, { whoami });
   }
   // Step 1b: Optional OpenAI key for `one mem` semantic search. Skip-able;
   // stored at the top level of the active config scope (mode 0600).
@@ -1310,11 +1285,12 @@ async function promptConnectIntegrations(apiKey: string, connParams?: Connection
     }
 
     if (choice === 'more') {
+      const connectionsUrl = `${oneAppUrl()}/connections`;
       try {
-        await open('https://app.withone.ai/connections');
+        await open(connectionsUrl);
         p.log.info('Opened One dashboard in browser.');
       } catch {
-        p.note('https://app.withone.ai/connections', 'Open in browser');
+        p.note(connectionsUrl, 'Open in browser');
       }
       p.log.info(`Connect from the dashboard, or use ${pc.cyan('one add <platform>')}`);
       break;
