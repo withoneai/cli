@@ -158,6 +158,39 @@ export function startCallbackServer(
 // scope because the consent page records it (and the project path) on the
 // key it mints.
 
+/**
+ * Hard-wraps text for a clack note.
+ *
+ * `p.note` measures the longest line, pads every line to it, and draws the
+ * border there - it never wraps and never clamps to the window. One long
+ * line therefore renders a box wider than the terminal, which the terminal
+ * then folds into ragged garbage. The auth URL is the worst offender and is
+ * printed outside the box instead, because it has to stay one unbroken
+ * line to stay copy-pasteable; everything that does go in a box comes
+ * through here first.
+ */
+export function wrapForNote(text: string, width = noteWidth()): string {
+  const lines: string[] = [];
+  for (const line of text.split('\n')) {
+    let rest = line;
+    while (rest.length > width) {
+      const space = rest.lastIndexOf(' ', width);
+      const cut = space > 0 ? space : width;
+      lines.push(rest.slice(0, cut));
+      rest = rest.slice(cut).trimStart();
+    }
+    lines.push(rest);
+  }
+  return lines.join('\n');
+}
+
+/** Usable width inside a note, allowing for its border and padding. */
+function noteWidth(): number {
+  const columns = process.stdout.columns;
+  const usable = (typeof columns === 'number' && columns > 0 ? columns : 80) - 8;
+  return Math.max(usable, 40);
+}
+
 export interface BrowserLoginOptions {
   /** Where the credentials will be stored; the page records it as a tag. */
   scope: ConfigScope;
@@ -194,9 +227,15 @@ export async function browserLogin(opts: BrowserLoginOptions): Promise<BrowserLo
     process.stderr.write(`Opening the browser for authentication. If it doesn't open, visit:\n${authUrl}\n`);
   } else {
     output.note(
-      `If the browser doesn't open, visit:\n${authUrl}\n\nThe consent page records this on the key so you can find the install later:\n${describeInstallContext(context)}`,
-      'Opening browser for authentication...'
+      wrapForNote(
+        `The consent page records this on the key, so you can find the install later.\n\n${describeInstallContext(context)}`
+      ),
+      'This install'
     );
+    console.log();
+    console.log("  Opening your browser. If it doesn't open, visit:");
+    console.log(authUrl);
+    console.log();
   }
 
   try {
