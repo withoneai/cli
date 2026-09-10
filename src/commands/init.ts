@@ -929,7 +929,7 @@ function printOnboardingPrompt(): void {
   console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
   console.log(pc.cyan('  │'));
   console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
-  console.log(pc.cyan('  │  lets you interact with 600+ third-party platforms (Gmail,'));
+  console.log(pc.cyan('  │  lets you interact with 750+ third-party platforms (Gmail,'));
   console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
   console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
   console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
@@ -1219,18 +1219,31 @@ async function freshSetup(
 
 // ── Welcome banner & post-setup integration prompt ───────────────────
 
+/**
+ * The brand lime (#CCFF00). picocolors has no truecolor helper, so this
+ * writes the 24-bit escape itself - but only when picocolors says the
+ * stream takes color at all (so NO_COLOR and a piped stdout still come out
+ * clean) and the terminal advertises truecolor. Anything older falls back
+ * to the nearest named colour rather than printing raw escapes.
+ */
+function lime(text: string): string {
+  if (!pc.isColorSupported) return text;
+  const truecolor = process.env.COLORTERM === 'truecolor' || process.env.COLORTERM === '24bit';
+  return truecolor ? `\x1b[38;2;204;255;0m${text}\x1b[39m` : pc.green(text);
+}
+
 function printBanner(): void {
   console.log();
-  console.log(pc.yellow('  ██████████████   ██████     ██████   ██████████████'));
-  console.log(pc.yellow('  ██████████████   ███████    ██████   ██████████████'));
-  console.log(pc.yellow('  ██████    ████   ████████   ██████   ██████       '));
-  console.log(pc.yellow('  ██████    ████   ██████████ ██████   ██████       '));
-  console.log(pc.yellow('  ██████    ████   ██████ ██████████   ██████████   '));
-  console.log(pc.yellow('  ██████    ████   ██████  █████████   ██████████   '));
-  console.log(pc.yellow('  ██████    ████   ██████   ████████   ██████       '));
-  console.log(pc.yellow('  ██████    ████   ██████    ███████   ██████       '));
-  console.log(pc.yellow('  ██████████████   ██████     ██████   ██████████████'));
-  console.log(pc.yellow('  ██████████████   ██████      █████   ██████████████'));
+  console.log(lime('  ██████████████   ██████     ██████   ██████████████'));
+  console.log(lime('  ██████████████   ███████    ██████   ██████████████'));
+  console.log(lime('  ██████    ████   ████████   ██████   ██████       '));
+  console.log(lime('  ██████    ████   ██████████ ██████   ██████       '));
+  console.log(lime('  ██████    ████   ██████ ██████████   ██████████   '));
+  console.log(lime('  ██████    ████   ██████  █████████   ██████████   '));
+  console.log(lime('  ██████    ████   ██████   ████████   ██████       '));
+  console.log(lime('  ██████    ████   ██████    ███████   ██████       '));
+  console.log(lime('  ██████████████   ██████     ██████   ██████████████'));
+  console.log(lime('  ██████████████   ██████      █████   ██████████████'));
   console.log();
   console.log(pc.dim('  I N F R A S T R U C T U R E   F O R   A G E N T S'));
   console.log();
@@ -1270,7 +1283,7 @@ async function promptConnectIntegrations(apiKey: string, connParams?: Connection
         label: i.label,
         hint: i.hint,
       })),
-      { value: 'more', label: 'Browse all 600+ platforms' },
+      { value: 'more', label: 'Browse all 750+ platforms' },
       { value: 'skip', label: 'Skip for now', hint: 'you can always run one add later' },
     ];
 

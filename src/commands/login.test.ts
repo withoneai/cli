@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { startCallbackServer, type CallbackOutcome } from './login.js';
+import { startCallbackServer, wrapForNote, type CallbackOutcome } from './login.js';
 
 async function withServer<T>(
   state: string,
@@ -77,5 +77,24 @@ describe('startCallbackServer', () => {
       assert.equal(outcome.keyName?.length, 120);
       assert.ok(outcome.keyName?.startsWith('bad[31mname'));
     });
+  });
+});
+
+describe('wrapForNote', () => {
+  it('breaks a line longer than the width at a space', () => {
+    const wrapped = wrapForNote('harnesses: claude-code, codex, cursor, windsurf', 20);
+    assert.deepEqual(wrapped.split('\n'), ['harnesses:', 'claude-code, codex,', 'cursor, windsurf']);
+    assert.ok(wrapped.split('\n').every((l) => l.length <= 20));
+  });
+
+  it('leaves short lines and blank lines alone', () => {
+    assert.equal(wrapForNote('scope: project\n\nuser: jane', 40), 'scope: project\n\nuser: jane');
+  });
+
+  it('hard-cuts a run with no space in it, so a long path still fits the box', () => {
+    const path = `path: /Users/jane/${'deep/'.repeat(20)}project`;
+    const wrapped = wrapForNote(path, 30);
+    assert.ok(wrapped.split('\n').every((l) => l.length <= 30), 'every line fits the width');
+    assert.equal(wrapped.split('\n').join('').replace('path:', 'path: '), path);
   });
 });
