@@ -186,7 +186,38 @@ one --agent actions search <platform> "<query>" -t execute
 one --agent actions knowledge <platform> <actionId>
 \`\`\`
 
-Returns full API docs: required fields, validation rules, request structure. **REQUIRED before execute.** The output includes a CLI PARAMETER MAPPING section showing which flags to use.
+Returns the API docs: required fields, validation rules, request structure. **REQUIRED before execute.** The output includes a CLI PARAMETER MAPPING section showing which flags to use.
+
+**In \`--agent\` mode this is a digest, not the whole document.** Large docs (most of their size is response shapes and optional-field tables) are trimmed to the sections needed to build a correct request: method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling. Everything else is listed in a table of contents so you can pull it on demand:
+
+\`\`\`json
+{
+  "knowledge": "...digest markdown, ends with a notice naming the omitted sections...",
+  "method": "POST",
+  "title": "Create an Issue",
+  "truncated": true,
+  "sections": [
+    { "id": "method", "heading": "Method", "level": 2, "chars": 18, "included": true },
+    { "id": "response", "heading": "Response", "level": 2, "chars": 16483, "included": false },
+    { "id": "response-fields", "heading": "Response Fields", "level": 2, "chars": 3353, "included": false }
+  ],
+  "omitted": 2,
+  "omittedChars": 19836,
+  "more": { "section": "one --agent actions knowledge <platform> <actionId> --section <id>[,<id>...]", "full": "..." }
+}
+\`\`\`
+
+- \`truncated: false\` means you have the whole document — small docs are never trimmed.
+- \`included\` is \`true\`, \`false\`, or \`"partial"\` (an oversized essential section was cut; its text ends with a truncation marker).
+- Load more by heading, id, or alias — several at once, comma-separated or repeated:
+
+\`\`\`bash
+one --agent actions knowledge <platform> <actionId> --section "Response Fields"
+one --agent actions knowledge <platform> <actionId> --section response,optional
+one --agent actions knowledge <platform> <actionId> --full
+\`\`\`
+
+Aliases: \`response\`, \`fields\`, \`optional\`, \`required\`, \`examples\`, \`errors\`, \`success\`, \`body\`, \`query\`, \`path\`, \`notes\`, \`behavior\`, \`gotchas\`. A parent section brings its subsections. Section requests are served from the local cache — no network call. An unknown name returns an error that lists every available section, so retry with one of those ids.
 
 ### 4. Execute
 
@@ -396,6 +427,8 @@ In \`--agent\` mode, knowledge and search responses include a \`_cache\` field:
 {
   "knowledge": "...",
   "method": "POST",
+  "truncated": true,
+  "sections": [ ... ],
   "_cache": {
     "hit": true,
     "age": 1423,
@@ -414,6 +447,9 @@ one --agent actions knowledge <platform> <actionId> --no-cache
 
 # Check cache status without fetching
 one --agent actions knowledge <platform> <actionId> --cache-status
+
+# Sections and --full are served from the cache once the doc is cached
+one --agent actions knowledge <platform> <actionId> --section "Response Fields"
 
 # Same for search
 one --agent actions search <platform> "<query>" --no-cache

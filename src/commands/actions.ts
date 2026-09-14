@@ -14,6 +14,14 @@ import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails, SearchCac
 import { validateActionInput } from '../lib/validate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import {
+  parseSections,
+  buildDigest,
+  renderDigestNotice,
+  selectSections,
+  parseSectionFlag,
+  flattenSections,
+} from '../lib/knowledge-sections.js';
+import {
   knowledgeCachePath,
   searchCachePath,
   readCache,
@@ -193,10 +201,19 @@ export async function actionsSearchCommand(
   }
 }
 
+export interface ActionsKnowledgeOptions {
+  cache?: boolean;
+  cacheStatus?: boolean;
+  /** `--section <name>` (repeatable / comma-separated): return only these sections. */
+  section?: string | string[];
+  /** `--full`: return the whole document, no digest. */
+  full?: boolean;
+}
+
 export async function actionsKnowledgeCommand(
   platform: string,
   actionId: string,
-  options: { cache?: boolean; cacheStatus?: boolean }
+  options: ActionsKnowledgeOptions
 ): Promise<void> {
   const cachePath = knowledgeCachePath(actionId);
 
@@ -268,8 +285,67 @@ export async function actionsKnowledgeCommand(
       method: details.method || 'No method was found',
     };
 
+    const doc = parseSections(knowledgeData.knowledge);
+    const sectionNames = parseSectionFlag(options.section);
+    const wantFull = options.full === true || sectionNames.some((n) => n.toLowerCase() === 'all');
+    const base = `one --agent actions knowledge ${platform} ${actionId}`;
+
+    // --section: only the requested sections, served from cache. No execution
+    // preamble — the agent saw it on the digest call that listed these names.
+    if (sectionNames.length > 0 && !wantFull) {
+      const picked = selectSections(doc, sectionNames);
+      if (!picked.ok) {
+        const list = picked.candidates.map((c) => `${'  '.repeat(Math.max(0, c.level - 2))}${c.heading} [${c.id}] (${c.chars} chars)`).join('\n');
+        if (output.isAgentMode()) {
+          output.json({
+            error:
+              picked.reason === 'ambiguous'
+                ? `Section "${picked.query}" matches several sections; pick one by id or full heading.`
+                : `No section named "${picked.query}". Use one of the ids or headings below, or --full.`,
+            query: picked.query,
+            reason: picked.reason,
+            sections: picked.candidates.map(({ id, heading, level, chars }) => ({ id, heading, level, chars })),
+            hint: `${base} --section <id>`,
+          });
+          process.exit(1);
+        }
+        spinner.stop('Section not found');
+        output.error(`${picked.reason === 'ambiguous' ? 'Ambiguous' : 'Unknown'} section "${picked.query}". Available:\n${list}`);
+      }
+      const pickedIds = new Set(flattenSections(picked.sections).map((s) => s.id));
+      const all = flattenSections(doc.sections);
+      if (output.isAgentMode()) {
+        output.json({
+          knowledge: picked.markdown,
+          method: knowledgeData.method,
+          title: doc.title,
+          truncated: pickedIds.size < all.length,
+          requested: sectionNames,
+          sections: all.map((s) => ({ id: s.id, heading: s.heading, level: s.level, chars: s.chars, included: pickedIds.has(s.id) })),
+          more: { section: `${base} --section <id>`, full: `${base} --full` },
+          _cache: buildCacheMeta(entry, cacheHit),
+        });
+        return;
+      }
+      spinner.stop('Sections loaded');
+      console.log();
+      console.log(picked.markdown);
+      console.log();
+      return;
+    }
+
+    // Agents get a digest by default: request-building sections in full plus a
+    // table of contents for the rest. Humans (and --full) get the whole doc.
+    const digest = buildDigest(
+      doc,
+      output.isAgentMode() && !wantFull ? {} : { wholeDocThreshold: Number.POSITIVE_INFINITY }
+    );
+    // A doc the parser could not section (no headings) is passed through verbatim.
+    const body = doc.sections.length === 0 ? knowledgeData.knowledge : digest.markdown;
+    const notice = renderDigestNotice(digest, platform, actionId);
+
     const knowledgeWithGuidance = buildActionKnowledgeWithGuidance(
-      knowledgeData.knowledge,
+      notice ? `${body}\n\n${notice}` : body,
       knowledgeData.method,
       platform,
       actionId
@@ -279,8 +355,20 @@ export async function actionsKnowledgeCommand(
       const response: Record<string, unknown> = {
         knowledge: knowledgeWithGuidance,
         method: knowledgeData.method,
+        title: doc.title || undefined,
+        truncated: digest.truncated,
+        sections: digest.sections,
         _cache: buildCacheMeta(entry, cacheHit),
       };
+      if (digest.truncated) {
+        response.omitted = digest.omitted;
+        response.omittedChars = digest.omittedChars;
+        response.more = {
+          note: 'This is a digest. Omitted sections are listed in `sections` with included:false; request them by id or heading.',
+          section: `${base} --section <id>[,<id>...]`,
+          full: `${base} --full`,
+        };
+      }
       output.json(response);
       return;
     }
