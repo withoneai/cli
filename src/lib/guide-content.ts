@@ -197,7 +197,6 @@ Returns the API docs: required fields, validation rules, request structure. **RE
   "title": "Create an Issue",
   "truncated": true,
   "sections": [
-    { "id": "method", "heading": "Method", "level": 2, "chars": 18, "included": true },
     { "id": "response", "heading": "Response", "level": 2, "chars": 16483, "included": false },
     { "id": "response-fields", "heading": "Response Fields", "level": 2, "chars": 3353, "included": false }
   ],
@@ -207,8 +206,8 @@ Returns the API docs: required fields, validation rules, request structure. **RE
 }
 \`\`\`
 
-- \`truncated: false\` means you have the whole document — small docs are never trimmed.
-- \`included\` is \`true\`, \`false\`, or \`"partial"\` (an oversized essential section was cut; its text ends with a truncation marker).
+- \`truncated: false\` means you have the whole document — small docs are never trimmed, and no \`sections\` list is sent.
+- \`sections\` lists only what was omitted. \`included\` is \`false\` or \`"partial"\` (an oversized essential section was cut; its text ends with a truncation marker). Included sections are simply the headings in the markdown.
 - Load more by heading, id, or alias — several at once, comma-separated or repeated:
 
 \`\`\`bash

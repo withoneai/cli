@@ -91,8 +91,8 @@ This tells you exactly what parameters are required, how to structure the reques
 
 **You get a digest, not always the whole document.** Large docs are trimmed to the request-building sections (method/URL, headers, description, rules, required + optional parameters, sample request, gotchas, error handling). The response tells you what was left out:
 
-- `truncated: true` — some sections are omitted. `truncated: false` — you have everything.
-- `sections[]` — every section with `id`, `heading`, `chars`, and `included` (`true` / `false` / `"partial"`).
+- `truncated: true` — some sections are omitted. `truncated: false` — you have everything (and no `sections` list is sent).
+- `sections[]` — the omitted sections only, each with `id`, `heading`, `chars`, and `included` (`false` / `"partial"`). Included sections are the headings you can see in the markdown.
 - The markdown itself ends with a notice naming the omitted sections and the exact commands to load them.
 
 Load more only when you need it (response shapes, response fields, worked examples). Served from the local cache, no network:
@@ -106,7 +106,7 @@ one --agent actions knowledge <platform> <actionId> --full                      
 Aliases: `response`, `fields`, `optional`, `required`, `examples`, `errors`, `success`, `body`, `query`, `path`, `notes`, `behavior`, `gotchas`. An unknown name returns an error listing every available section — retry with one of those ids.
 
 - A `--section` response has `truncated: false` (you got the whole section) and `resolved` (which ids your names matched). It does not repeat the table of contents.
-- If the digest says `sectionsCollapsed: true`, the doc has hundreds of headings and `sections` shows only the top levels (`children` = hidden count). `--toc` lists all of them without the document.
+- If the digest says `sectionsCollapsed: true`, the doc has hundreds of headings and `sections` shows only the top omitted levels (`children` = hidden count). `--toc` lists every heading without the document.
 - Sections named `(appendix)` in the notice are appended reference chunks or companion endpoints, not the action doc itself.
 
 ### 4. Execute

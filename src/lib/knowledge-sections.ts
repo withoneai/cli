@@ -467,6 +467,19 @@ export function collapseSections(
 }
 
 /**
+ * The table of contents for the JSON envelope: only what the digest left
+ * out. Included sections are already visible as headings in the markdown, so
+ * listing them again cost ~1.9k chars per response — enough to make the
+ * median (small) doc *larger* than before. Collapsed for mega-docs.
+ */
+export function omittedSections(
+  digest: KnowledgeDigest,
+  max: number = DEFAULT_TOC_MAX_ENTRIES
+): { sections: CollapsedSummary[]; collapsed: boolean } {
+  return collapseSections(digest.sections.filter((s) => s.included !== true), max);
+}
+
+/**
  * The trailer appended to a digest so an agent that only reads the markdown
  * (and never looks at the JSON envelope) still knows the document continues.
  */

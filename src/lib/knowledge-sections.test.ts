@@ -10,6 +10,7 @@ import {
   renderDigestNotice,
   renderDigestBanner,
   collapseSections,
+  omittedSections,
   findSections,
   selectSections,
   parseSectionFlag,
@@ -310,6 +311,22 @@ describe('collapseSections', () => {
     assert.equal(r.sections.length, 42, 'title-level H2s and the 40 chunk H1s');
     const chunk = r.sections.find((s) => s.heading === 'Chunk 3')!;
     assert.equal(chunk.children, 10);
+  });
+});
+
+describe('omittedSections', () => {
+  it('lists only what the digest left out', () => {
+    const d = buildDigest(parseSections(GITHUB), { wholeDocThreshold: 0, budget: 0 });
+    const o = omittedSections(d);
+    assert.equal(o.collapsed, false);
+    assert.ok(o.sections.length > 0 && o.sections.length < d.sections.length);
+    assert.ok(o.sections.every((s) => s.included !== true));
+    assert.ok(o.sections.some((s) => s.id === 'response-fields'));
+    assert.ok(!o.sections.some((s) => s.id === 'method'));
+  });
+
+  it('is empty for an untruncated digest', () => {
+    assert.deepEqual(omittedSections(buildDigest(parseSections(STRIPE), { wholeDocThreshold: 1_000_000 })).sections, []);
   });
 });
 

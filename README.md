@@ -290,7 +290,7 @@ one --agent actions knowledge github <actionId> --full                       # w
 one --agent actions knowledge github <actionId> --toc                        # every section id, no document
 ```
 
-The JSON carries `truncated`, `sections[]` (id, heading, chars, `included`), and `more` (the commands to load the rest); the markdown ends with the same notice so it is never mistaken for the complete doc. Small documents are returned whole. Section requests are served from the local cache. Human (non-agent) output always prints the full document; `--section` works there too.
+The JSON carries `truncated`, `sections[]` (the omitted sections: id, heading, chars), and `more` (the commands to load the rest); the markdown ends with the same notice so it is never mistaken for the complete doc. Small documents are returned whole. Section requests are served from the local cache. Human (non-agent) output always prints the full document; `--section` works there too.
 
 ### `one actions execute <platform> <actionId> <connectionKey>`
 

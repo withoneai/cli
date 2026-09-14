@@ -19,6 +19,7 @@ import {
   renderDigestNotice,
   renderDigestBanner,
   collapseSections,
+  omittedSections,
   selectSections,
   parseSectionFlag,
   flattenSections,
@@ -393,26 +394,28 @@ export async function actionsKnowledgeCommand(
     );
 
     if (output.isAgentMode()) {
-      const toc = collapseSections(digest.sections);
       const response: Record<string, unknown> = {
         knowledge: knowledgeWithGuidance,
         method: knowledgeData.method,
         title: doc.title || undefined,
         truncated: digest.truncated,
-        sections: toc.sections,
         _cache: buildCacheMeta(entry, cacheHit),
       };
-      if (toc.collapsed) {
-        response.sectionsCollapsed = true;
-        response.sectionCount = digest.sections.length;
-      }
       if (digest.truncated) {
+        // Only the omitted sections travel in the envelope — the included ones
+        // are the headings of the markdown itself.
+        const toc = omittedSections(digest);
         response.omitted = digest.omitted;
         response.omittedChars = digest.omittedChars;
+        response.sections = toc.sections;
+        if (toc.collapsed) {
+          response.sectionsCollapsed = true;
+          response.sectionCount = digest.sections.length;
+        }
         response.more = {
           note: toc.collapsed
-            ? `This is a digest. \`sections\` is collapsed to ${toc.sections.length} of ${digest.sections.length} headings (\`children\` counts the hidden ones); request any by id or heading, or --toc for the full list.`
-            : 'This is a digest. Omitted sections are listed in `sections` with included:false; request them by id or heading.',
+            ? `This is a digest. \`sections\` lists what was omitted, collapsed to ${toc.sections.length} entries (\`children\` counts nested ones); request any by id or heading, or --toc for all ${digest.sections.length} headings.`
+            : 'This is a digest. `sections` lists what was omitted; request any by id or heading.',
           section: `${base} --section <id or heading>[,<id or heading>...]`,
           toc: `${base} --toc`,
           full: `${base} --full`,
