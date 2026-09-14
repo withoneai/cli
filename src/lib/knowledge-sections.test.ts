@@ -195,6 +195,46 @@ describe('buildDigest', () => {
     assert.ok(!d.markdown.includes('### Optional Request Body Fields'));
   });
 
+  it('keeps required fields nested under a deferred sub-heading (Notion option layout)', () => {
+    const md = [
+      '# Update Page', '', '## Method', 'PATCH', '', '## Request Body', 'Pick one option.', '',
+      '### Option A: Replace everything', '#### Required Request Body Fields (Replace)', '| a |', '#### Optional Fields (Replace)', '| opt |',
+      '### Option B: Search and replace', 'intro b', '#### Required Fields inside `update_content`', '| b |', '#### Examples for B', 'ex',
+      '## Response', 'x'.repeat(9_000), '',
+    ].join('\n');
+    const d = buildDigest(parseSections(md), { wholeDocThreshold: 0, budget: 0 });
+    const st = Object.fromEntries(d.sections.map((s) => [s.heading, s.included]));
+    assert.equal(st['Option A: Replace everything'], true, 'scaffolding kept');
+    assert.equal(st['Required Request Body Fields (Replace)'], true);
+    assert.equal(st['Optional Fields (Replace)'], false);
+    assert.equal(st['Option B: Search and replace'], true);
+    assert.equal(st['Required Fields inside `update_content`'], true);
+    assert.equal(st['Examples for B'], false);
+    assert.equal(st['Response'], false);
+    assert.ok(d.markdown.includes('intro b'));
+    assert.ok(!d.markdown.includes('| opt |'));
+  });
+
+  it('never back-fills appended H1 chunks even when they would fit the budget', () => {
+    const md = [
+      '# Action', '', '## Method', 'POST', '', '## Response', 'r'.repeat(9_000), '',
+      '# Data Models — Chunk 2/7', '', '# TinyType', '## Description', 'small', '## Fields', '| f |', '',
+    ].join('\n');
+    const d = buildDigest(parseSections(md), { wholeDocThreshold: 0, budget: 100_000 });
+    const st = Object.fromEntries(d.sections.map((s) => [s.heading, s.included]));
+    assert.equal(st['Response'], true, 'H2 deferred sections are back-filled');
+    assert.equal(st['TinyType'], false, 'appendix H1s are not');
+    assert.equal(st['Data Models — Chunk 2/7'], false);
+    assert.ok(d.truncated);
+  });
+
+  it('treats GraphQL request-building headings as essential', () => {
+    for (const h of ['GraphQL Operation', 'Request Variables', 'Path Parameters', 'Query Parameters']) {
+      assert.equal(classifyHeading(h), 'essential', h);
+    }
+    assert.equal(classifyHeading('Type'), 'deferred');
+  });
+
   it('falls back to the whole document when the digest would include everything anyway', () => {
     const doc = parseSections(STRIPE);
     const d = buildDigest(doc, { wholeDocThreshold: 0, budget: 1_000_000 });

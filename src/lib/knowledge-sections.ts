@@ -229,7 +229,13 @@ const ESSENTIAL_EXACT = new Set([
   'gotchas',
   'error handling',
   'graphql operation',
-  'type',
+  'graphql arguments',
+  'request variables',
+  'variables',
+  'path parameters',
+  'query parameters',
+  'parameters',
+  'arguments',
 ]);
 
 const ESSENTIAL_PREFIX = ['required '];
@@ -305,10 +311,16 @@ export function buildDigest(doc: ParsedKnowledge, opts: DigestOptions = {}): Kno
   used += doc.preface.length;
 
   // Pass 1: essentials. A deferred child of an essential parent (e.g. Optional
-  // fields under a custom action's `Request Body`) stays deferred.
+  // fields under a custom action's `Request Body`) stays deferred — unless it is
+  // a sub-section (H3+) that itself contains essentials, such as Notion's
+  // `Request Body > Option B > Required Request Body Fields`. Then its own text
+  // is kept as scaffolding and its children are decided individually. H1/H2
+  // deferred nodes (appended schema chunks, companion endpoints) go wholesale.
+  const hasEssentialDescendant = (n: KnowledgeSection): boolean =>
+    n.children.some((c) => c.tier === 'essential' || hasEssentialDescendant(c));
   const walk = (list: KnowledgeSection[]) => {
     for (const node of list) {
-      if (node.tier === 'essential') {
+      if (node.tier === 'essential' || (node.level >= 3 && hasEssentialDescendant(node))) {
         const own = node.text;
         if (own.length > cap) {
           const render = truncateText(own, cap, node.id);
@@ -329,9 +341,12 @@ export function buildDigest(doc: ParsedKnowledge, opts: DigestOptions = {}): Kno
   walk(doc.sections);
 
   // Pass 2: back-fill deferred subtrees whose *parent* is included or top-level,
-  // smallest priority first, while they fit whole.
+  // smallest priority first, while they fit whole. Extra H1s (appended schema
+  // chunks, companion endpoints) are never back-filled: pulling three random
+  // schema types into the digest would mislead more than it helps.
   const candidates = flat
     .filter((s) => decisions.get(s.id)?.included === false)
+    .filter((s) => s.level >= 2)
     .filter((s) => {
       const parent = parentOf(doc.sections, s);
       return !parent || decisions.get(parent.id)?.included !== false;
