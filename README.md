@@ -287,6 +287,7 @@ one --agent actions knowledge github <actionId>                              # d
 one --agent actions knowledge github <actionId> --section "Response Fields"  # one section, by heading or id
 one --agent actions knowledge github <actionId> --section response,examples  # several, by alias
 one --agent actions knowledge github <actionId> --full                       # whole document
+one --agent actions knowledge github <actionId> --toc                        # every section id, no document
 ```
 
 The JSON carries `truncated`, `sections[]` (id, heading, chars, `included`), and `more` (the commands to load the rest); the markdown ends with the same notice so it is never mistaken for the complete doc. Small documents are returned whole. Section requests are served from the local cache. Human (non-agent) output always prints the full document; `--section` works there too.

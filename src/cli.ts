@@ -479,9 +479,10 @@ actions
   .description('Get docs for an action — MUST call before execute to know required params. In --agent mode returns a digest (request-building sections + a table of contents); load the rest with --section or --full')
   .option('--section <name>', 'Return only the named section(s) — by heading, id, or alias (e.g. "Response Fields", response, optional). Repeatable or comma-separated', collect, [])
   .option('--full', 'Return the whole document instead of the digest')
+  .option('--toc', 'List every section (id, heading, size) without the document')
   .option('--no-cache', 'Bypass the cache and re-fetch from the API (the fresh response still refreshes the cache)')
   .option('--cache-status', 'Print cache metadata without fetching')
-  .action(async (platform: string, actionId: string, options: { cache?: boolean; cacheStatus?: boolean; section?: string[]; full?: boolean }) => {
+  .action(async (platform: string, actionId: string, options: { cache?: boolean; cacheStatus?: boolean; section?: string[]; full?: boolean; toc?: boolean }) => {
     await actionsKnowledgeCommand(platform, actionId, options);
   });
 

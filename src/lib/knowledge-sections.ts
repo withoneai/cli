@@ -421,6 +421,51 @@ export function renderWhole(doc: ParsedKnowledge): string {
   return out.join('\n\n');
 }
 
+export const DEFAULT_TOC_MAX_ENTRIES = 60;
+
+export interface CollapsedSummary extends SectionSummary {
+  /** Number of nested sections hidden under this entry (only when collapsed). */
+  children?: number;
+}
+
+/**
+ * Shrink a table of contents for the JSON envelope. Scraped mega-docs can
+ * carry 400+ headings (45 KB of metadata — more than the digest itself), so
+ * the list is cut to the shallowest heading depth that fits `max` entries.
+ * Hidden descendants are counted on their nearest surviving ancestor; the
+ * full list is one `--toc` call away.
+ */
+export function collapseSections(
+  sections: SectionSummary[],
+  max: number = DEFAULT_TOC_MAX_ENTRIES
+): { sections: CollapsedSummary[]; collapsed: boolean } {
+  if (sections.length <= max) return { sections, collapsed: false };
+
+  // The action doc proper is everything before the first extra H1; what
+  // follows is appended scrape chunks / companion endpoints. The canonical
+  // part keeps its H2s (and H3s when they fit); the appendix collapses to
+  // its H1s no matter what — those are the entries nobody needs to see.
+  const firstH1 = sections.findIndex((s) => s.level === 1);
+  const canonEnd = firstH1 === -1 ? sections.length : firstH1;
+  for (const depth of [3, 2]) {
+    const keep = (s: SectionSummary, i: number) => (i < canonEnd ? s.level <= depth : s.level <= 1);
+    const count = sections.filter(keep).length;
+    if (count > max && depth !== 2) continue;
+    const out: CollapsedSummary[] = [];
+    let owner: CollapsedSummary | null = null;
+    sections.forEach((s, i) => {
+      if (keep(s, i)) {
+        owner = { ...s };
+        out.push(owner);
+      } else if (owner) {
+        owner.children = (owner.children ?? 0) + 1;
+      }
+    });
+    return { sections: out, collapsed: true };
+  }
+  return { sections, collapsed: false };
+}
+
 /**
  * The trailer appended to a digest so an agent that only reads the markdown
  * (and never looks at the JSON envelope) still knows the document continues.
@@ -442,11 +487,24 @@ export function renderDigestNotice(
     }
     return true;
   });
-  const names = topMost.map((s) => (s.included === 'partial' ? `${s.heading} (partial)` : s.heading));
+  // Extra H1s are appended scrape chunks or companion endpoints, not part of
+  // the action doc proper — say so, or "Append Block Children" showing up as
+  // omitted reads as if the core doc itself were missing.
+  const names = topMost.map((s) => {
+    if (s.included === 'partial') return `${s.heading} (partial)`;
+    if (s.level === 1) return `${s.heading} (appendix)`;
+    return s.heading;
+  });
   const base = `one --agent actions knowledge ${platform} ${actionId}`;
+  // A scraped mega-doc can omit 30+ sections; naming a dozen is enough to
+  // orient the agent, the rest are in `sections` / --toc.
+  const MAX_NAMES = 12;
+  const shown = names.slice(0, MAX_NAMES);
+  const rest = names.length - shown.length;
+  const nameList = rest > 0 ? `${shown.join(', ')}, and ${rest} more (see --toc)` : shown.join(', ');
   return [
     '---',
-    `**This is a digest, not the full document.** ${topMost.length} section${topMost.length === 1 ? '' : 's'} omitted (${digest.omittedChars.toLocaleString('en-US')} chars): ${names.join(', ')}.`,
+    `**This is a digest, not the full document.** ${topMost.length} section${topMost.length === 1 ? '' : 's'} omitted (${digest.omittedChars.toLocaleString('en-US')} chars): ${nameList}.`,
     `Load one or more by name or id:  ${base} --section "${topMost[0]?.heading ?? 'Response'}"`,
     `Load everything:                  ${base} --full`,
   ].join('\n');
@@ -517,11 +575,13 @@ export function findSections(doc: ParsedKnowledge, query: string): SectionMatch 
   });
   if (!q) return miss('not-found', flat);
 
-  const byId = flat.filter((s) => s.id === qSlug);
-  if (byId.length) return { ok: true, sections: byId };
-
-  const byHeading = flat.filter((s) => canonicalHeading(s.heading) === q || s.heading.toLowerCase() === q);
-  if (byHeading.length) return { ok: true, sections: byHeading };
+  // Exact id and exact heading together: a doc with two `## Response`
+  // headings (id `response` and `response-2`) should return both, not
+  // silently the first.
+  const exact = flat.filter(
+    (s) => s.id === qSlug || canonicalHeading(s.heading) === q || s.heading.toLowerCase() === q
+  );
+  if (exact.length) return { ok: true, sections: exact };
 
   const alias = ALIASES[q];
   if (alias) {

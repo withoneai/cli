@@ -9,6 +9,7 @@ import {
   renderWhole,
   renderDigestNotice,
   renderDigestBanner,
+  collapseSections,
   findSections,
   selectSections,
   parseSectionFlag,
@@ -271,6 +272,47 @@ describe('renderDigestBanner', () => {
   });
 });
 
+describe('collapseSections', () => {
+  const mk = (level: number, i: number) => ({ id: `s${i}`, heading: `H${i}`, level, chars: 10, included: false as const });
+
+  it('leaves a short list alone', () => {
+    const list = [mk(2, 1), mk(3, 2), mk(2, 3)];
+    const r = collapseSections(list, 60);
+    assert.equal(r.collapsed, false);
+    assert.equal(r.sections, list);
+  });
+
+  it('drops the deepest levels first and counts hidden descendants on the surviving ancestor', () => {
+    // 5 H2s, each with 20 H3s = 105 entries
+    const list: ReturnType<typeof mk>[] = [];
+    let i = 0;
+    for (let a = 0; a < 5; a++) {
+      list.push(mk(2, i++));
+      for (let b = 0; b < 20; b++) list.push(mk(3, i++));
+    }
+    const r = collapseSections(list, 60);
+    assert.equal(r.collapsed, true);
+    assert.equal(r.sections.length, 5);
+    assert.ok(r.sections.every((s) => s.level === 2 && s.children === 20));
+  });
+
+  it('collapses the real 400-heading Notion-style tree to a manageable size', () => {
+    // Synthesise: canonical doc + 40 appended H1 chunks each with 10 H2s.
+    const parts = ['# Big', '## Method', 'POST', '## Response', 'r'];
+    for (let c = 0; c < 40; c++) {
+      parts.push(`# Chunk ${c}`);
+      for (let h = 0; h < 10; h++) parts.push(`## Type ${c}-${h}`, 'x');
+    }
+    const d = buildDigest(parseSections(parts.join('\n')), { wholeDocThreshold: 0 });
+    assert.equal(d.sections.length, 442);
+    const r = collapseSections(d.sections);
+    assert.ok(r.collapsed);
+    assert.equal(r.sections.length, 42, 'title-level H2s and the 40 chunk H1s');
+    const chunk = r.sections.find((s) => s.heading === 'Chunk 3')!;
+    assert.equal(chunk.children, 10);
+  });
+});
+
 describe('findSections / selectSections', () => {
   const doc = parseSections(GITHUB);
   const headings = (r: ReturnType<typeof findSections>) => (r.ok ? r.sections.map((s) => s.heading) : r);
@@ -288,6 +330,21 @@ describe('findSections / selectSections', () => {
     assert.deepEqual(headings(findSections(doc, 'examples')), ['Example Usage']);
     const errors = headings(findSections(doc, 'errors')) as string[];
     assert.ok(errors.length >= 6 && errors.includes('Error Handling'));
+  });
+
+  it('returns every copy when a heading is duplicated', () => {
+    const dup = parseSections('# T\n## Response\nnot included\n## Notes\nn\n# T again\n## Response\nthe real one\n');
+    const r = findSections(dup, 'Response');
+    assert.ok(r.ok);
+    assert.deepEqual(r.sections.map((s) => s.id), ['response', 'response-2']);
+    const byId = findSections(dup, 'response-2');
+    assert.ok(byId.ok && byId.sections.length === 1);
+  });
+
+  it('labels appended H1 chunks as appendix in the notice', () => {
+    const d = buildDigest(parseSections('# T\n## Method\nPOST\n## Response\n' + 'x'.repeat(9000) + '\n# T\n## Response\nagain\n'), { wholeDocThreshold: 0, budget: 0 });
+    const n = renderDigestNotice(d, 'p', 'id');
+    assert.ok(n.includes('T (appendix)'), n);
   });
 
   it('a parent match carries its children', () => {

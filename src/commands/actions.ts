@@ -18,6 +18,7 @@ import {
   buildDigest,
   renderDigestNotice,
   renderDigestBanner,
+  collapseSections,
   selectSections,
   parseSectionFlag,
   flattenSections,
@@ -209,6 +210,8 @@ export interface ActionsKnowledgeOptions {
   section?: string | string[];
   /** `--full`: return the whole document, no digest. */
   full?: boolean;
+  /** `--toc`: return only the complete section list, no markdown. */
+  toc?: boolean;
 }
 
 export async function actionsKnowledgeCommand(
@@ -291,12 +294,40 @@ export async function actionsKnowledgeCommand(
     const wantFull = options.full === true || sectionNames.some((n) => n.toLowerCase() === 'all');
     const base = `one --agent actions knowledge ${platform} ${actionId}`;
 
+    const fullToc = flattenSections(doc.sections).map((s) => ({ id: s.id, heading: s.heading, level: s.level, chars: s.chars }));
+
+    // --toc: the complete section list and nothing else. This is the escape
+    // hatch when the digest had to collapse its table of contents.
+    if (options.toc) {
+      if (output.isAgentMode()) {
+        output.json({
+          title: doc.title,
+          method: knowledgeData.method,
+          chars: doc.chars,
+          sections: fullToc,
+          more: { section: `${base} --section <id or heading>[,<id or heading>...]`, full: `${base} --full` },
+          _cache: buildCacheMeta(entry, cacheHit),
+        });
+        return;
+      }
+      spinner.stop('Sections');
+      console.log();
+      for (const t of fullToc) console.log(`${'  '.repeat(Math.max(0, t.level - 1))}${t.heading} ${pc.dim(`[${t.id}] ${t.chars} chars`)}`);
+      console.log();
+      return;
+    }
+
     // --section: only the requested sections, served from cache. No execution
-    // preamble — the agent saw it on the digest call that listed these names.
+    // preamble — the agent saw it on the digest call that listed these names —
+    // and no table of contents either: on a 400-heading doc that is 45 KB of
+    // metadata wrapped around a 1 KB answer.
     if (sectionNames.length > 0 && !wantFull) {
       const picked = selectSections(doc, sectionNames);
       if (!picked.ok) {
-        const list = picked.candidates.map((c) => `${'  '.repeat(Math.max(0, c.level - 2))}${c.heading} [${c.id}] (${c.chars} chars)`).join('\n');
+        // Same collapse as the digest: a not-found on a 400-heading doc must
+        // not answer with 39 KB of candidates.
+        const toc = collapseSections(picked.candidates);
+        const list = toc.sections.map((c) => `${'  '.repeat(Math.max(0, c.level - 2))}${c.heading} [${c.id}] (${c.chars} chars${c.children ? `, +${c.children} nested` : ''})`).join('\n');
         if (output.isAgentMode()) {
           output.json({
             error:
@@ -305,16 +336,16 @@ export async function actionsKnowledgeCommand(
                 : `No section named "${picked.query}". Use one of the ids or headings below, or --full.`,
             query: picked.query,
             reason: picked.reason,
-            sections: picked.candidates.map(({ id, heading, level, chars }) => ({ id, heading, level, chars })),
-            hint: `${base} --section <id>`,
+            sections: toc.sections.map(({ id, heading, level, chars, children }) => (children ? { id, heading, level, chars, children } : { id, heading, level, chars })),
+            ...(toc.collapsed ? { sectionsCollapsed: true, sectionCount: picked.candidates.length } : {}),
+            hint: `${base} --section <id or heading>`,
+            toc: `${base} --toc`,
           });
           process.exit(1);
         }
         spinner.stop('Section not found');
         output.error(`${picked.reason === 'ambiguous' ? 'Ambiguous' : 'Unknown'} section "${picked.query}". Available:\n${list}`);
       }
-      const pickedIds = new Set(flattenSections(picked.sections).map((s) => s.id));
-      const all = flattenSections(doc.sections);
       if (output.isAgentMode()) {
         output.json({
           knowledge: picked.markdown,
@@ -324,11 +355,12 @@ export async function actionsKnowledgeCommand(
           truncated: false,
           requested: sectionNames,
           // What each name matched — fuzzy and alias matches are visible here.
-          resolved: picked.sections.map((s) => s.id),
-          sections: all.map((s) => ({ id: s.id, heading: s.heading, level: s.level, chars: s.chars, included: pickedIds.has(s.id) })),
+          resolved: picked.sections.map((s) => ({ id: s.id, heading: s.heading, chars: s.chars })),
+          sectionCount: fullToc.length,
           more: {
-            note: 'Only the requested sections are included; `sections` lists the rest with included:false.',
+            note: 'Only the requested sections are included. The digest call listed the others; `--toc` lists all of them.',
             section: `${base} --section <id or heading>[,<id or heading>...]`,
+            toc: `${base} --toc`,
             full: `${base} --full`,
           },
           _cache: buildCacheMeta(entry, cacheHit),
@@ -361,20 +393,28 @@ export async function actionsKnowledgeCommand(
     );
 
     if (output.isAgentMode()) {
+      const toc = collapseSections(digest.sections);
       const response: Record<string, unknown> = {
         knowledge: knowledgeWithGuidance,
         method: knowledgeData.method,
         title: doc.title || undefined,
         truncated: digest.truncated,
-        sections: digest.sections,
+        sections: toc.sections,
         _cache: buildCacheMeta(entry, cacheHit),
       };
+      if (toc.collapsed) {
+        response.sectionsCollapsed = true;
+        response.sectionCount = digest.sections.length;
+      }
       if (digest.truncated) {
         response.omitted = digest.omitted;
         response.omittedChars = digest.omittedChars;
         response.more = {
-          note: 'This is a digest. Omitted sections are listed in `sections` with included:false; request them by id or heading.',
+          note: toc.collapsed
+            ? `This is a digest. \`sections\` is collapsed to ${toc.sections.length} of ${digest.sections.length} headings (\`children\` counts the hidden ones); request any by id or heading, or --toc for the full list.`
+            : 'This is a digest. Omitted sections are listed in `sections` with included:false; request them by id or heading.',
           section: `${base} --section <id or heading>[,<id or heading>...]`,
+          toc: `${base} --toc`,
           full: `${base} --full`,
         };
       }

@@ -219,6 +219,12 @@ one --agent actions knowledge <platform> <actionId> --full
 
 Aliases: \`response\`, \`fields\`, \`optional\`, \`required\`, \`examples\`, \`errors\`, \`success\`, \`body\`, \`query\`, \`path\`, \`notes\`, \`behavior\`, \`gotchas\`. A parent section brings its subsections. Section requests are served from the local cache — no network call. An unknown name returns an error that lists every available section, so retry with one of those ids.
 
+A \`--section\` response carries \`requested\`, \`resolved\` (the ids each name matched — alias and prefix matches are visible here), and \`truncated: false\` (the requested sections are whole). It does not repeat the table of contents. On scraped mega-docs with hundreds of headings the digest's \`sections\` list is collapsed to the top levels (\`sectionsCollapsed: true\`, each entry's \`children\` counts the hidden ones); \`--toc\` returns the complete list without the document:
+
+\`\`\`bash
+one --agent actions knowledge <platform> <actionId> --toc
+\`\`\`
+
 ### 4. Execute
 
 \`\`\`bash

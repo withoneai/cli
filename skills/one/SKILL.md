@@ -105,6 +105,10 @@ one --agent actions knowledge <platform> <actionId> --full                      
 
 Aliases: `response`, `fields`, `optional`, `required`, `examples`, `errors`, `success`, `body`, `query`, `path`, `notes`, `behavior`, `gotchas`. An unknown name returns an error listing every available section — retry with one of those ids.
 
+- A `--section` response has `truncated: false` (you got the whole section) and `resolved` (which ids your names matched). It does not repeat the table of contents.
+- If the digest says `sectionsCollapsed: true`, the doc has hundreds of headings and `sections` shows only the top levels (`children` = hidden count). `--toc` lists all of them without the document.
+- Sections named `(appendix)` in the notice are appended reference chunks or companion endpoints, not the action doc itself.
+
 ### 4. Execute
 
 ```bash
