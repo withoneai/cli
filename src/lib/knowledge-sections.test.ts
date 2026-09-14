@@ -8,6 +8,7 @@ import {
   buildDigest,
   renderWhole,
   renderDigestNotice,
+  renderDigestBanner,
   findSections,
   selectSections,
   parseSectionFlag,
@@ -258,6 +259,15 @@ describe('renderDigestNotice', () => {
     assert.ok(notice.includes('Response,') || notice.includes('Response.'), 'lists the omitted Response parent');
     assert.ok(!notice.includes('Success Response (201 Created)'), 'children of an omitted parent are implied');
     assert.ok(notice.includes('Response Fields'));
+  });
+});
+
+describe('renderDigestBanner', () => {
+  it('is empty when nothing was omitted and one line otherwise', () => {
+    assert.equal(renderDigestBanner(buildDigest(parseSections(STRIPE), { wholeDocThreshold: 1_000_000 })), '');
+    const b = renderDigestBanner(buildDigest(parseSections(GITHUB), { wholeDocThreshold: 0, budget: 0 }));
+    assert.match(b, /^> \*\*Digest\.\*\* \d+ sections \([\d,]+ chars\) omitted/);
+    assert.ok(!b.includes('\n'));
   });
 });
 

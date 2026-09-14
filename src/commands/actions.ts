@@ -17,6 +17,7 @@ import {
   parseSections,
   buildDigest,
   renderDigestNotice,
+  renderDigestBanner,
   selectSections,
   parseSectionFlag,
   flattenSections,
@@ -319,10 +320,17 @@ export async function actionsKnowledgeCommand(
           knowledge: picked.markdown,
           method: knowledgeData.method,
           title: doc.title,
-          truncated: pickedIds.size < all.length,
+          // The requested sections are returned whole; nothing here was cut.
+          truncated: false,
           requested: sectionNames,
+          // What each name matched — fuzzy and alias matches are visible here.
+          resolved: picked.sections.map((s) => s.id),
           sections: all.map((s) => ({ id: s.id, heading: s.heading, level: s.level, chars: s.chars, included: pickedIds.has(s.id) })),
-          more: { section: `${base} --section <id>`, full: `${base} --full` },
+          more: {
+            note: 'Only the requested sections are included; `sections` lists the rest with included:false.',
+            section: `${base} --section <id or heading>[,<id or heading>...]`,
+            full: `${base} --full`,
+          },
           _cache: buildCacheMeta(entry, cacheHit),
         });
         return;
@@ -343,9 +351,10 @@ export async function actionsKnowledgeCommand(
     // A doc the parser could not section (no headings) is passed through verbatim.
     const body = doc.sections.length === 0 ? knowledgeData.knowledge : digest.markdown;
     const notice = renderDigestNotice(digest, platform, actionId);
+    const banner = renderDigestBanner(digest);
 
     const knowledgeWithGuidance = buildActionKnowledgeWithGuidance(
-      notice ? `${body}\n\n${notice}` : body,
+      notice ? `${banner}\n\n${body}\n\n${notice}` : body,
       knowledgeData.method,
       platform,
       actionId
@@ -365,7 +374,7 @@ export async function actionsKnowledgeCommand(
         response.omittedChars = digest.omittedChars;
         response.more = {
           note: 'This is a digest. Omitted sections are listed in `sections` with included:false; request them by id or heading.',
-          section: `${base} --section <id>[,<id>...]`,
+          section: `${base} --section <id or heading>[,<id or heading>...]`,
           full: `${base} --full`,
         };
       }

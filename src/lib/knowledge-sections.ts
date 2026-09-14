@@ -452,6 +452,15 @@ export function renderDigestNotice(
   ].join('\n');
 }
 
+/**
+ * One line for the *top* of a digest, so an agent that reads the beginning of
+ * the markdown and stops early still learns the document continues.
+ */
+export function renderDigestBanner(digest: KnowledgeDigest): string {
+  if (!digest.truncated) return '';
+  return `> **Digest.** ${digest.omitted} section${digest.omitted === 1 ? '' : 's'} (${digest.omittedChars.toLocaleString('en-US')} chars) omitted — mostly response shapes. The notice at the end names them and shows how to load them; the JSON \`sections\` array marks them included:false.`;
+}
+
 // ---------------------------------------------------------------------------
 // Section lookup (for --section)
 // ---------------------------------------------------------------------------
