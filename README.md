@@ -280,6 +280,18 @@ one actions knowledge shopify 67890abcdef
 
 Always read the knowledge before executing. It tells you exactly what parameters are required, what format they need, and any platform-specific quirks.
 
+In `--agent` mode the response is a **digest**: request-building sections in full (method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling) plus a table of contents for the rest. Response shapes, response-field tables, and worked examples — the bulk of every large doc — are loaded on demand:
+
+```bash
+one --agent actions knowledge github <actionId>                              # digest + sections[] table of contents
+one --agent actions knowledge github <actionId> --section "Response Fields"  # one section, by heading or id
+one --agent actions knowledge github <actionId> --section response,examples  # several, by alias
+one --agent actions knowledge github <actionId> --full                       # whole document
+one --agent actions knowledge github <actionId> --toc                        # every section id, no document
+```
+
+The JSON carries `truncated`, `sections[]` (the omitted sections: id, heading, chars), and `more` (the commands to load the rest); the markdown ends with the same notice so it is never mistaken for the complete doc. Small documents are returned whole. Section requests are served from the local cache. Human (non-agent) output always prints the full document; `--section` works there too.
+
 ### `one actions execute <platform> <actionId> <connectionKey>`
 
 Execute an API action on a connected platform.
@@ -354,6 +366,7 @@ Knowledge and search commands also support cache flags:
 ```bash
 one actions knowledge gmail <actionId> --no-cache       # Skip cache, fetch fresh
 one actions knowledge gmail <actionId> --cache-status   # Check cache status
+one actions knowledge gmail <actionId> --section response   # Served from the cached doc, no fetch
 one actions search gmail "send email" --no-cache        # Skip cache for search
 one actions execute gmail <actionId> <key> --no-cache   # Fresh action-details lookup
 ```

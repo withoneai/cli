@@ -89,6 +89,26 @@ one --agent actions knowledge <platform> <actionId>
 
 This tells you exactly what parameters are required, how to structure the request, and which flags to use. Never skip this step — without it you'll guess wrong on parameters.
 
+**You get a digest, not always the whole document.** Large docs are trimmed to the request-building sections (method/URL, headers, description, rules, required + optional parameters, sample request, gotchas, error handling). The response tells you what was left out:
+
+- `truncated: true` — some sections are omitted. `truncated: false` — you have everything (and no `sections` list is sent).
+- `sections[]` — the omitted sections only, each with `id`, `heading`, `chars`, and `included` (`false` / `"partial"`). Included sections are the headings you can see in the markdown.
+- The markdown itself ends with a notice naming the omitted sections and the exact commands to load them.
+
+Load more only when you need it (response shapes, response fields, worked examples). Served from the local cache, no network:
+
+```bash
+one --agent actions knowledge <platform> <actionId> --section "Response Fields"   # by heading
+one --agent actions knowledge <platform> <actionId> --section response,optional    # by alias, several at once
+one --agent actions knowledge <platform> <actionId> --full                         # whole document
+```
+
+Aliases: `response`, `fields`, `optional`, `required`, `examples`, `errors`, `success`, `body`, `query`, `path`, `notes`, `behavior`, `gotchas`. An unknown name returns an error listing every available section — retry with one of those ids.
+
+- A `--section` response has `truncated: false` (you got the whole section) and `resolved` (which ids your names matched). It does not repeat the table of contents.
+- If the digest says `sectionsCollapsed: true`, the doc has hundreds of headings and `sections` shows only the top omitted levels (`children` = hidden count). `--toc` lists every heading without the document.
+- Sections named `(appendix)` in the notice are appended reference chunks or companion endpoints, not the action doc itself.
+
 ### 4. Execute
 
 ```bash
@@ -164,6 +184,7 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 - In `--agent` mode, responses include a `_cache` field: `{"hit": true, "age": 1423, "fresh": true}`; execute responses include `"_preflight": {"cache": "hit"|"miss"}`
 - Use `--no-cache` to force a fresh fetch: works on `knowledge`, `search`, and `execute` (refreshes execute's action-details lookup)
 - Use `--cache-status` to check cache state without fetching
+- `knowledge --section <name>` and `--full` read from the cached document — no extra API call once the doc is cached
 - Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
 - Execution responses are NEVER cached — the action always runs live; only action metadata (docs, method, path, schema) is cached
 

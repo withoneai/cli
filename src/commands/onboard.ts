@@ -117,7 +117,7 @@ common mistakes to avoid. Never guess — read the skill, then act.
 ### Quick reference:
 - \`one --agent list\` — See connected platforms and connection keys
 - \`one --agent actions search <platform> "<query>"\` — Find actions
-- \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute)
+- \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute; a digest — add \`--section <name>\` or \`--full\` for more)
 - \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute action
 - \`one --agent flow create\` — Build multi-step workflows
 - \`one --agent relay create\` — Set up webhook relay (receive events, forward to other platforms)
