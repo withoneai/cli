@@ -71,8 +71,9 @@ describe('parseSections', () => {
   it('round-trips: rendering the whole tree reproduces the source text', () => {
     for (const src of [GITHUB, STRIPE, GMAIL]) {
       const doc = parseSections(src);
-      // Rendering joins blocks with a blank line, so compare modulo blank-line runs.
-      const norm = (s: string) => s.replace(/\n{2,}/g, '\n').trim();
+      // Rendering joins blocks with a blank line and parseSections normalises
+      // CRLF to LF, so compare modulo blank-line runs and line-ending style.
+      const norm = (s: string) => s.replace(/\r\n?/g, '\n').replace(/\n{2,}/g, '\n').trim();
       assert.equal(norm(renderWhole(doc)), norm(src));
     }
   });
