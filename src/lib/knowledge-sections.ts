@@ -103,7 +103,13 @@ export function slugify(heading: string): string {
  * recognised — the backend never emits them.
  */
 export function parseSections(markdown: string): ParsedKnowledge {
-  const lines = markdown.split('\n');
+  // Normalise line endings up front: a CRLF document would otherwise leave a
+  // trailing `\r` on every line, which defeats the heading regex (`$` will not
+  // match before it) so nothing is recognised as a heading. Windows checkouts
+  // and some scraped docs carry CRLF, so this is a correctness fix, not just a
+  // test convenience.
+  const normalized = markdown.replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
   const prefaceLines: string[] = [];
   const blocks: RawBlock[] = [];
   let inFence = false;
@@ -179,7 +185,7 @@ export function parseSections(markdown: string): ParsedKnowledge {
   };
   root.forEach(measure);
 
-  return { title, preface, sections: root, chars: markdown.length };
+  return { title, preface, sections: root, chars: normalized.length };
 }
 
 /** Full markdown for a section including its nested children. */

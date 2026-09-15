@@ -41,6 +41,15 @@ describe('parseSections', () => {
     assert.ok(doc.sections.every((s) => s.level === 2));
   });
 
+  it('parses a CRLF document identically to LF (Windows checkouts, scraped docs)', () => {
+    const lf = GITHUB.replace(/\r\n?/g, '\n');
+    const crlf = lf.replace(/\n/g, '\r\n');
+    // Without normalisation the trailing \r defeats the heading regex, so the
+    // title is empty and nothing is sectioned.
+    assert.equal(parseSections(crlf).title, 'Create an Issue for a Repository');
+    assert.deepEqual(parseSections(crlf), parseSections(lf));
+  });
+
   it('nests H3s under their H2', () => {
     const doc = parseSections(GITHUB);
     const response = doc.sections.find((s) => s.heading === 'Response')!;
