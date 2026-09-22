@@ -501,6 +501,8 @@ The unified memory store is a local, pluggable database (\`embedded-postgres\` b
 The first \`one mem\` call on a fresh install auto-initializes:
 - Backend: \`embedded-postgres\` (Postgres 18 via pgserve; downloads ~52MB of binaries on first use, ~2s on later boots)
 - Cluster path: \`~/.one/pg/cluster/\`, daemon PID/port at \`~/.one/pg/.pgserve.json\`
+- Port: \`5434\` by default. If another program already holds it (a database tunnel, another Postgres), the daemon starts on the next free port and records it in \`.pgserve.json\`. A port pinned with \`mem config set embedded-postgres.port <n>\` is never moved — a conflict there is an error naming the port.
+- Self-healing: a running daemon is reused only when the Postgres on its port reports this cluster's data directory. A Postgres left holding the cluster by a dead or stuck pgserve is stopped and a fresh daemon started. \`pgserve.log\` is trimmed to its last 1 MB once it passes 10 MB.
 - Embedding provider: \`openai\` if a key is already resolvable AND pgvector is loadable; else \`none\`
 
 If pgvector isn't installed in the bundled Postgres (the default binary distribution doesn't ship it yet), the schema applies cleanly without an \`embedding\` column, all FTS paths work, and \`mem doctor\` emits an \`_upgrade\` block pointing at \`brew install pgvector\` when an OpenAI key is present.
@@ -1152,8 +1154,9 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
   logs/{platform}.log                 # cron run logs
   locks/{platform}_{model}/           # cross-process sync locks
 ~/.one/pg/cluster/                    # unified memory store — embedded Postgres data dir
-~/.one/pg/.pgserve.json               # daemon PID/port file (cleared on stop)
-~/.one/pg/pgserve.log                 # daemon stdout/stderr
+~/.one/pg/.pgserve.json               # daemon PID/port file
+~/.one/pg/.pgserve.lock               # held while a CLI process starts the daemon
+~/.one/pg/pgserve.log                 # daemon stdout/stderr (trimmed to 1 MB past 10 MB)
 ~/.one/config.json                    # apiKey + openaiApiKey + memory config block
 ~/.one/sync/
   schedules.json                      # global schedule registry
