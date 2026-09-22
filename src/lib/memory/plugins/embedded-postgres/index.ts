@@ -9,7 +9,8 @@ import { homeDir } from '../../../home.js';
  * spawn `node_modules/.bin/pgserve` as a detached child process and
  * recover the connection details from a small PID/port file we manage
  * ourselves. The child stays running across CLI invocations — every
- * later call finds the live process via the PID file and reuses it.
+ * later call finds it via the PID file and reuses it once the Postgres
+ * behind that port proves it serves this cluster. See daemon.ts.
  *
  * pgvector caveat: pgserve advertises pgvector but its bundled binaries
  * don't actually include the extension's `.so` / `.control` files, so on
@@ -21,14 +22,7 @@ import { homeDir } from '../../../home.js';
  * with the CLI is tracked as deferred work.
  */
 
-import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
-import os from 'node:os';
-import { createRequire } from 'node:module';
-import { spawn } from 'node:child_process';
-
-const requireFromHere = createRequire(import.meta.url);
 
 import type {
   MemBackend,
@@ -39,6 +33,8 @@ import type {
 import { SCHEMA_VERSION } from '../../schema.js';
 import { CoreBackend } from '../postgres-core/index.js';
 import type { PgClient, PgQueryResult } from '../postgres-core/index.js';
+import { ensureRunning, nodeDaemonDeps } from './daemon.js';
+import type { PgClientCtor } from './daemon.js';
 
 interface EmbeddedPostgresConfig extends ParsedBackendConfig {
   dataDir: string;
@@ -47,6 +43,8 @@ interface EmbeddedPostgresConfig extends ParsedBackendConfig {
   pgvector: boolean;
   host: string;
   port: number;
+  /** Set from the user's config; a taken explicit port errors instead of moving. */
+  portExplicit: boolean;
   user: string;
   password: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
@@ -74,6 +72,7 @@ const DEFAULTS: EmbeddedPostgresConfig = {
   pgvector: true,
   host: '127.0.0.1',
   port: 5434,
+  portExplicit: false,
   // pgserve auto-provisions databases; the bundled superuser is `postgres`
   // with no password by default. We don't expose the password to the user
   // since the daemon only listens on 127.0.0.1.
@@ -92,6 +91,7 @@ function parseConfig(raw: unknown): EmbeddedPostgresConfig {
     pgvector: r.pgvector ?? DEFAULTS.pgvector,
     host: r.host ?? DEFAULTS.host,
     port: r.port ?? DEFAULTS.port,
+    portExplicit: r.port !== undefined,
     user: r.user ?? DEFAULTS.user,
     password: r.password ?? DEFAULTS.password,
     logLevel: r.logLevel ?? DEFAULTS.logLevel,
@@ -154,135 +154,6 @@ function wrapClient(pool: PgPool): PgClient {
   };
 }
 
-// ─── pgserve child-process bootstrap ───────────────────────────────────────
-
-interface DaemonRecord {
-  pid: number;
-  port: number;
-  dataDir: string;
-  startedAt: string;
-}
-
-function pidFilePath(dataDir: string): string {
-  return path.join(dataDir, '.pgserve.json');
-}
-
-function readPidFile(dataDir: string): DaemonRecord | null {
-  try {
-    const raw = fs.readFileSync(pidFilePath(dataDir), 'utf8');
-    return JSON.parse(raw) as DaemonRecord;
-  } catch {
-    return null;
-  }
-}
-
-function writePidFile(dataDir: string, rec: DaemonRecord): void {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(pidFilePath(dataDir), JSON.stringify(rec, null, 2), { mode: 0o600 });
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function isPortListening(host: string, port: number, timeoutMs = 1000): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    let resolved = false;
-    const finish = (ok: boolean) => {
-      if (resolved) return;
-      resolved = true;
-      socket.destroy();
-      resolve(ok);
-    };
-    socket.setTimeout(timeoutMs);
-    socket.once('connect', () => finish(true));
-    socket.once('timeout', () => finish(false));
-    socket.once('error', () => finish(false));
-    socket.connect(port, host);
-  });
-}
-
-async function waitForPort(host: string, port: number, deadlineAt: number): Promise<void> {
-  while (Date.now() < deadlineAt) {
-    if (await isPortListening(host, port)) return;
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  throw new Error(
-    `pgserve did not start listening on ${host}:${port} within ${Math.round((deadlineAt - Date.now() + 30000) / 1000)}s. ` +
-    `Check the data dir for the postgres log, or remove ${path.basename(pidFilePath('<dataDir>'))} and retry.`,
-  );
-}
-
-function resolvePgserveBin(): string {
-  // Resolve via createRequire so the binary follows the package on
-  // global vs local installs. `bin/pgserve-wrapper.cjs` is the
-  // platform-portable entry that bootstraps the bundled Bun runtime +
-  // Postgres binaries.
-  const pkg = requireFromHere.resolve('pgserve/package.json');
-  return path.resolve(path.dirname(pkg), 'bin/pgserve-wrapper.cjs');
-}
-
-async function ensureRunning(cfg: EmbeddedPostgresConfig): Promise<void> {
-  // Reuse a running daemon if its PID is alive AND it's actually
-  // listening on the recorded port. Either check failing means we spawn
-  // a fresh process; the old one's pidfile gets overwritten.
-  const existing = readPidFile(cfg.dataDir);
-  if (existing && isPidAlive(existing.pid)) {
-    if (await isPortListening(cfg.host, existing.port)) {
-      cfg.port = existing.port; // honor whatever port the running daemon picked
-      return;
-    }
-  }
-
-  fs.mkdirSync(cfg.dataDir, { recursive: true });
-
-  // pgserve passes its --data dir straight to initdb, which refuses to
-  // operate on a non-empty directory. Keep the cluster in a `cluster`
-  // subdirectory so we can put the log/PID files alongside it without
-  // tripping the initdb check.
-  const clusterDir = path.join(cfg.dataDir, 'cluster');
-  fs.mkdirSync(clusterDir, { recursive: true });
-
-  const args = [
-    '--data', clusterDir,
-    '--port', String(cfg.port),
-    '--host', cfg.host,
-    '--log', cfg.logLevel,
-    '--no-stats',
-  ];
-  if (cfg.pgvector) args.push('--pgvector');
-
-  const bin = resolvePgserveBin();
-  const out = fs.openSync(path.join(cfg.dataDir, 'pgserve.log'), 'a');
-  const child = spawn(process.execPath, [bin, ...args], {
-    detached: true,
-    stdio: ['ignore', out, out],
-    // pgserve resolves the bundled bun binary relative to its own package
-    // location, not cwd, so cwd doesn't matter — but pin it for clarity.
-    cwd: cfg.dataDir,
-  });
-  child.unref();
-  if (typeof child.pid !== 'number') {
-    throw new Error('Failed to spawn pgserve — no PID returned.');
-  }
-
-  const deadlineAt = Date.now() + cfg.startupTimeoutMs;
-  await waitForPort(cfg.host, cfg.port, deadlineAt);
-
-  writePidFile(cfg.dataDir, {
-    pid: child.pid,
-    port: cfg.port,
-    dataDir: cfg.dataDir,
-    startedAt: new Date().toISOString(),
-  });
-}
-
 /**
  * Probe whether pgvector is loadable on this Postgres. The bundled
  * Postgres binaries shipped by `embedded-postgres` (and re-used by
@@ -312,14 +183,27 @@ class LazyEmbeddedPostgresBackend implements MemBackend {
   private async ensure(): Promise<CoreBackend> {
     if (this.backend) return this.backend;
 
-    await ensureRunning(this.config);
-
     const pgMod = await import('pg').catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`pg is not installed. Run \`npm i pg\` or pick a different backend. (${msg})`);
     });
-    const PoolCtor = (pgMod as unknown as { Pool: PgPoolCtor; default?: { Pool: PgPoolCtor } }).Pool
-                  ?? (pgMod as unknown as { default: { Pool: PgPoolCtor } }).default.Pool;
+    type PgExports = { Pool: PgPoolCtor; Client: PgClientCtor };
+    const pgExports = (pgMod as unknown as Partial<PgExports>).Pool
+      ? (pgMod as unknown as PgExports)
+      : (pgMod as unknown as { default: PgExports }).default;
+    const PoolCtor = pgExports.Pool;
+
+    // The daemon check connects to whatever answers on the port, so it
+    // needs pg loaded first. It returns the port the verified daemon uses,
+    // which can differ from the configured default when that was taken.
+    this.config.port = await ensureRunning(
+      this.config,
+      nodeDaemonDeps(this.config, pgExports.Client, {
+        user: this.config.user,
+        password: this.config.password,
+        database: this.config.database,
+      }),
+    );
 
     // pgserve auto-provisions: connecting to a non-existent database
     // creates it on the fly. pgvector availability is detected once
