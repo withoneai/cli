@@ -269,6 +269,7 @@ one actions find shopify "list products" -t knowledge
 - **`--task`** describes the whole job in one line, in general terms, which helps choose between similar actions.
 - **`-t knowledge`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default is the catalog for running actions now.
 - **`--ai-model`** names the model running the CLI (e.g. `claude-sonnet-5`), for tuning documentation per model later.
+- **`--no-knowledge`** lists the chosen actions (actionId, title, method, path) without fetching their documentation; load it later with `one actions load <actionId>`.
 
 Each intent's answer gives the action(s) to use with their docs, any actions also needed beside them, a **substitute** when the model was unsure (use one or the other, never both), and a few alternatives, then says once how to execute. Always read the docs before executing. The access settings from `one config` apply: an action they refuse is never offered.
 

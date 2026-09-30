@@ -470,7 +470,8 @@ actions
   .option('-t, --type <type>', 'execute (default: actions to run now) or knowledge (the catalog for writing code and building flows and relays, with the platform\'s own endpoints). Knowledge-only mode always uses knowledge')
   .option('--ai-model <model>', 'The AI model running the CLI (e.g. claude-sonnet-5), which helps optimize the documentation returned. Optional')
   .option('--no-cache', 'Bypass the cache for action documentation and re-fetch it (the fresh response still refreshes the cache)')
-  .action(async (pairs: string[], options: { task?: string; type?: string; aiModel?: string; cache?: boolean }) => {
+  .option('--no-knowledge', 'List the chosen actions (actionId, title, method, path) without their documentation; load it with `one actions load <actionId>`')
+  .action(async (pairs: string[], options: { task?: string; type?: string; aiModel?: string; cache?: boolean; knowledge?: boolean }) => {
     await actionsFindCommand(pairs, options);
   });
 

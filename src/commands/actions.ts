@@ -69,6 +69,8 @@ export interface ActionsFindOptions {
   /** The AI model running the CLI. Accepted and not read yet, as on the remote MCP's `find_one_actions`. */
   aiModel?: string;
   cache?: boolean;
+  /** False (`--no-knowledge`) lists the chosen actions without their documentation. */
+  knowledge?: boolean;
 }
 
 /**
@@ -102,7 +104,7 @@ export async function actionsFindCommand(pairs: string[], options: ActionsFindOp
       options.task,
       findDeps(api, connectionKeys, options.cache !== false),
       settings,
-      options.type === 'knowledge'
+      { knowledgeCatalog: options.type === 'knowledge', knowledge: options.knowledge !== false }
     );
 
     if (output.isAgentMode()) {

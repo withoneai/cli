@@ -101,7 +101,7 @@ describe('actions find', () => {
     });
 
     await find(intent, undefined, spy(deps([answer()])), settings());
-    await find(intent, undefined, spy(deps([answer()])), settings(), true);
+    await find(intent, undefined, spy(deps([answer()])), settings(), { knowledgeCatalog: true });
     await find(intent, undefined, spy(deps([answer()])), settings({ knowledgeAgent: true }));
     assert.deepEqual(seen, [false, true, true]);
   });
@@ -110,13 +110,40 @@ describe('actions find', () => {
     const result = await find(intent, 'email a report to a contact', deps([answer()], { a: LARGE }), settings());
     const [first] = result.answers;
 
+    const pick = first.selected[0] as DocumentedAction;
+
     assert.equal(first.status, 'Chosen with confidence 0.92.');
-    assert.equal(first.selected[0].actionId, 'a');
-    assert.equal(first.selected[0].truncated, true);
-    assert.ok(first.selected[0].knowledge.includes('one --agent actions load a --section "'));
-    assert.ok(!first.selected[0].knowledge.includes('actions knowledge'));
+    assert.equal(pick.actionId, 'a');
+    assert.equal(pick.truncated, true);
+    assert.ok(pick.knowledge.includes('one --agent actions load a --section "'));
+    assert.ok(!pick.knowledge.includes('actions knowledge'));
     assert.deepEqual(first.alternatives.map((a) => a.actionId), ['b', 'c']);
     assert.equal(result.guide, EXECUTE_GUIDE, 'the execute guide is stated once, not per action');
+  });
+
+  it('lists every chosen action without fetching documentation when knowledge is off', async () => {
+    const fetched: string[] = [];
+    const base = deps([answer({ selected: [action('a'), action('c', 'GET')], runnerUp: action('b') , alternatives: [action('d')] })]);
+    const counting: FindDeps = {
+      ...base,
+      getActionDetails: (id) => {
+        fetched.push(id);
+        return base.getActionDetails(id);
+      },
+    };
+    const result = await find(intent, undefined, counting, settings({ knowledgeAgent: true }), { knowledge: false });
+    const [first] = result.answers;
+
+    assert.deepEqual(fetched, [], 'no documentation is fetched');
+    assert.deepEqual(first.selected, [
+      { actionId: 'a', title: 'Action a', method: 'POST', path: '/v1/a' },
+      { actionId: 'c', title: 'Action c', method: 'GET', path: '/v1/c' },
+    ], 'every pick is listed, even in knowledge-only mode');
+    assert.deepEqual(first.runnerUp, { actionId: 'b', title: 'Action b', method: 'POST', path: '/v1/b' });
+    assert.equal(result.guide, undefined, 'nothing was documented, so no closing guide');
+    const text = renderFind(result);
+    assert.ok(text.includes('Chosen for this intent (load with `one actions load <actionId>`):\n- Action a'));
+    assert.ok(!text.includes('documentation left out'));
   });
 
   it('sets the runner-up apart as a substitute, documented', async () => {
@@ -192,7 +219,7 @@ describe('actions find, when things go wrong', () => {
       },
     };
     const result = await find(intent, undefined, failing, settings());
-    const pick = result.answers[0].selected[0];
+    const pick = result.answers[0].selected[0] as DocumentedAction;
 
     assert.match(pick.knowledge, /could not be loaded \(503 Service Unavailable\)/);
     assert.match(pick.knowledge, /one --agent actions load a/);

@@ -97,8 +97,8 @@ export interface FindAnswer extends FindIntent {
   status: string;
   selector?: FoundActions['selector'];
   confidence?: number;
-  /** The actions to use, documented. */
-  selected: DocumentedAction[];
+  /** The actions to use, documented unless the answer was asked for without documentation. */
+  selected: (DocumentedAction | ActionRef)[];
   /** Also to use, but listed rather than documented: load them. */
   alsoSelected: ActionRef[];
   /** A substitute for the pick: one or the other, never both. Documented unless listed. */
@@ -125,6 +125,14 @@ export interface LoadOptions {
   section?: string | string[];
   full?: boolean;
   toc?: boolean;
+}
+
+/** How `actions find` answers. */
+export interface FindOptions {
+  /** Search the catalog for writing code and building flows rather than the one for executing actions. */
+  knowledgeCatalog?: boolean;
+  /** False lists the chosen actions without fetching their documentation. */
+  knowledge?: boolean;
 }
 
 /** An action as the agent refers to it: title, method, path and `actionId`. */
@@ -253,14 +261,15 @@ function document(action: ActionRef, details: ActionDetails | Error, platform: s
  * documented. `knowledgeCatalog` searches the catalog for writing code and
  * building flows - the platform's own endpoints, which executing agents are
  * steered away from - rather than the one for executing actions; knowledge-only
- * mode always does.
+ * mode always does. With `knowledge: false` every action is listed and no
+ * documentation is fetched.
  */
 export async function find(
   requests: FindIntent[],
   task: string | undefined,
   deps: FindDeps,
   settings: FindSettings,
-  knowledgeCatalog = false
+  { knowledgeCatalog = false, knowledge = true }: FindOptions = {}
 ): Promise<FindResult> {
   if (requests.length === 0 || requests.length > FIND_MAX_INTENTS) {
     throw new FindArgsError(`Send between 1 and ${FIND_MAX_INTENTS} platform and intent pairs.`);
@@ -287,20 +296,20 @@ export async function find(
     const narrowed = narrow(answers[next++], settings);
     const { answer } = narrowed;
     // Whole documents are large, so knowledge mode documents the pick alone.
-    const picks = settings.knowledgeAgent ? answer.selected.slice(0, 1) : answer.selected;
+    const picks = knowledge && settings.knowledgeAgent ? answer.selected.slice(0, 1) : answer.selected;
     return {
       intent,
       unreachable: false as const,
       narrowed,
       picks,
       deferred: [...answer.selected.slice(picks.length), ...(answer.alsoSelected ?? [])],
-      runnerUpDocumented: !settings.knowledgeAgent && answer.runnerUp !== undefined,
+      runnerUpDocumented: knowledge && !settings.knowledgeAgent && answer.runnerUp !== undefined,
     };
   });
 
   const ids = new Set<string>();
   for (const plan of plans) {
-    if (plan.unreachable) continue;
+    if (plan.unreachable || !knowledge) continue;
     plan.picks.forEach((a) => ids.add(a.systemId));
     if (plan.runnerUpDocumented && plan.narrowed.answer.runnerUp) ids.add(plan.narrowed.answer.runnerUp.systemId);
   }
@@ -340,9 +349,9 @@ export async function find(
       };
     }
     const { answer } = plan.narrowed;
-    const selected: DocumentedAction[] = [];
+    const selected: (DocumentedAction | ActionRef)[] = knowledge ? [] : plan.picks.map(ref);
     const deferred: ActionRef[] = [];
-    for (const [index, pick] of plan.picks.entries()) {
+    for (const [index, pick] of (knowledge ? plan.picks : []).entries()) {
       const doc = document(ref(pick), details.get(pick.systemId) ?? new Error('not fetched'), plan.intent.platform, settings);
       if (!admit(doc)) {
         deferred.push(...plan.picks.slice(index).map(ref));
@@ -372,7 +381,7 @@ export async function find(
     }
   });
 
-  const documented = result.some((a) => a.selected.length > 0 || (a.runnerUp && 'knowledge' in a.runnerUp));
+  const documented = result.some((a) => a.selected.some((s) => 'knowledge' in s) || (a.runnerUp && 'knowledge' in a.runnerUp));
   return { answers: result, ...(documented ? { guide: closingGuide(settings) } : {}) };
 }
 
@@ -592,7 +601,9 @@ export function renderFind(result: FindResult): string {
 
   const sections = result.answers.map((answer) => {
     const parts = [`## ${answer.platform}: ${answer.intent}\n\n${answer.status}`];
-    parts.push(...answer.selected.map(shown));
+    const documented = answer.selected.filter((s): s is DocumentedAction => 'knowledge' in s);
+    parts.push(...documented.map(shown));
+    parts.push(...listing('Chosen for this intent', answer.selected.filter((s) => !('knowledge' in s))));
     parts.push(
       ...listing(
         answer.selected.length === 0
