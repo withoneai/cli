@@ -39,7 +39,7 @@ Before touching CLI commands:
 3. Identify where AI analysis is needed (summarization, scoring, classification)
 4. Write the step sequence as a plain list before constructing JSON
 
-Common mistake: jumping straight to `actions search` and building a raw data pipe. Design first.
+Common mistake: jumping straight to `actions find` and building a raw data pipe. Design first.
 
 ### Step 1: Discover connections
 
@@ -47,14 +47,14 @@ Common mistake: jumping straight to `actions search` and building a raw data pip
 one --agent connection list
 ```
 
-### Step 2: Get knowledge for EACH action
+### Step 2: Find EVERY action, with its docs, in one call
 
 ```bash
-one --agent actions search <platform> "<query>" -t execute
-one --agent actions knowledge <platform> <actionId>
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<what the flow does, in general terms>" -t knowledge
+one --agent actions load <actionId> --section "<name>"   # a section a digest left out, or --full
 ```
 
-You MUST call knowledge for every action in the workflow — it tells you the exact body structure, required fields, and path variables.
+You MUST read the docs of every action in the workflow — they tell you the exact body structure, required fields, and path variables. `-t knowledge` searches the catalog that includes the platform's own (passthrough) endpoints, which flows should prefer.
 
 ### Step 3: Build the workflow JSON
 
@@ -705,9 +705,9 @@ Three tools that turn "re-run the whole 40-step flow to debug step 30" into near
 
 ## Important Notes
 
-- **Prefer passthrough actions over custom actions.** Custom actions add server-side fan-out that causes timeouts at scale. The flow runner handles pagination, retries, and rate limiting locally. Search with `-t knowledge` to find passthrough endpoints (e.g. GET `/gmail/v1/users/{userId}/threads` instead of POST `/gmail/get-threads`)
+- **Prefer passthrough actions over custom actions.** Custom actions add server-side fan-out that causes timeouts at scale. The flow runner handles pagination, retries, and rate limiting locally. Find with `-t knowledge` to reach passthrough endpoints (e.g. GET `/gmail/v1/users/{userId}/threads` instead of POST `/gmail/get-threads`)
 - Connection keys are inputs, not hardcoded — makes workflows portable
-- Action IDs in examples are placeholders — always use `actions search` to find real IDs
+- Action IDs in examples are placeholders — always use `actions find` to find real IDs
 - Code steps support `require('crypto')`, `require('buffer')`, `require('url')`, `require('path')` — `fs`, `http`, `child_process` are blocked
 - Bash steps require `--allow-bash` flag
 - Action steps validate required params before executing — pass `--skip-validation` to bypass

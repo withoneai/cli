@@ -30,23 +30,17 @@ This returns `[{ "platform": "<name>", "eventTypeCount": <n> }, ...]` for every 
 one --agent relay event-types <source-platform>
 ```
 
-### Step 3: Get source knowledge (understand the incoming payload)
+### Step 3: Find the source and destination actions with their docs, in one call
 
 ```bash
-one --agent actions search <source-platform> "<event description>" -t knowledge
-one --agent actions knowledge <source-platform> <actionId>
+one --agent actions find <source-platform> "<event description>" <dest-platform> "<what you want to do>" -t knowledge
 ```
 
-The knowledge tells you the webhook payload structure — these fields become `{{payload.*}}` in your templates.
+The source action's docs tell you the webhook payload structure — these fields become `{{payload.*}}` in your templates.
 
-### Step 4: Get destination knowledge (understand the outgoing API)
+### Step 4: Read the destination action's docs (understand the outgoing API)
 
-```bash
-one --agent actions search <dest-platform> "<what you want to do>" -t execute
-one --agent actions knowledge <dest-platform> <actionId>
-```
-
-The knowledge tells you required body fields — these become the keys in your passthrough action's `body`.
+The destination action's docs, from the same find answer, tell you required body fields — these become the keys in your passthrough action's `body`.
 
 ### Step 5: Create the relay endpoint
 
@@ -157,9 +151,8 @@ one --agent connection list
 # 2. Get event types
 one --agent relay event-types stripe
 
-# 3. Get Slack send message action
-one --agent actions search slack "send message" -t execute
-one --agent actions knowledge slack <actionId>
+# 3. Find the Slack send-message action, with its docs
+one --agent actions find slack "send a message to a channel" -t knowledge
 
 # 4. Create relay
 one --agent relay create \

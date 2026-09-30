@@ -4,10 +4,10 @@
  * The backend returns one markdown document per action. Half of them are under
  * ~8k chars, but the tail is long (p90 ~17k, max ~370k) and the bulk of every
  * large doc sits in three sections — `Success Response`, `Response Fields`, and
- * `Optional Request Body Fields`. Agents pay per token, so `actions knowledge`
- * hands back a *digest*: the sections needed to build a correct request in
+ * `Optional Request Body Fields`. Agents pay per token, so `actions find` and
+ * `actions load` hand back a *digest*: the sections needed to build a correct request in
  * full, plus a table of contents for everything else. The agent asks for the
- * rest by name (`--section "Response Fields"`) and it is served from the disk
+ * rest by name (`actions load <id> --section "Response Fields"`) and it is served from the disk
  * cache with no network round trip.
  *
  * Everything in this module is pure: string in, structure out. No I/O.
@@ -64,6 +64,8 @@ export interface KnowledgeDigest {
 }
 
 export interface DigestOptions {
+  /** The action the digest documents, so a cut section's note is the exact `actions load` command. */
+  actionId?: string;
   /** Documents at or below this size are returned whole. */
   wholeDocThreshold?: number;
   /** Target size for the digest markdown (essential sections may exceed it). */
@@ -281,13 +283,13 @@ interface Decision {
   render: string;
 }
 
-function truncateText(text: string, cap: number, id: string): string {
+function truncateText(text: string, cap: number, id: string, actionId?: string): string {
   const cut = text.slice(0, cap);
   // Back up to a line boundary so we never split a table row or code fence mid-way.
   const nl = cut.lastIndexOf('\n');
   const head = nl > cap * 0.5 ? cut.slice(0, nl) : cut;
   const remaining = text.length - head.length;
-  return `${head}\n\n_[truncated — ${remaining.toLocaleString('en-US')} more chars. Load the full section with --section ${id}]_`;
+  return `${head}\n\n_[truncated — ${remaining.toLocaleString('en-US')} more chars. Load the full section with${actionId ? `: one --agent actions load ${actionId} --section ${id}` : ` --section ${id}`}]_`;
 }
 
 /**
@@ -329,7 +331,7 @@ export function buildDigest(doc: ParsedKnowledge, opts: DigestOptions = {}): Kno
       if (node.tier === 'essential' || (node.level >= 3 && hasEssentialDescendant(node))) {
         const own = node.text;
         if (own.length > cap) {
-          const render = truncateText(own, cap, node.id);
+          const render = truncateText(own, cap, node.id, opts.actionId);
           decisions.set(node.id, { node, included: 'partial', render });
           used += render.length;
         } else {
@@ -489,11 +491,7 @@ export function omittedSections(
  * The trailer appended to a digest so an agent that only reads the markdown
  * (and never looks at the JSON envelope) still knows the document continues.
  */
-export function renderDigestNotice(
-  digest: KnowledgeDigest,
-  platform: string,
-  actionId: string
-): string {
+export function renderDigestNotice(digest: KnowledgeDigest, actionId: string): string {
   if (!digest.truncated) return '';
   // List only the top-most omitted sections: in document order the nearest
   // preceding section with a lower level is the parent, and children of an
@@ -514,7 +512,7 @@ export function renderDigestNotice(
     if (s.level === 1) return `${s.heading} (appendix)`;
     return s.heading;
   });
-  const base = `one --agent actions knowledge ${platform} ${actionId}`;
+  const base = `one --agent actions load ${actionId}`;
   // A scraped mega-doc can omit 30+ sections; naming a dozen is enough to
   // orient the agent, the rest are in `sections` / --toc.
   const MAX_NAMES = 12;

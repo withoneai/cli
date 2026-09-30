@@ -338,7 +338,7 @@ async function syncInitCommand(platform: string, model: string, options: { confi
             : `Profile complete but test had issues — check the test report below.`)
         : (actionId
             ? `Fill remaining FILL_IN fields, then: one sync test ${platform}/${model}`
-            : `Action ID not resolved. Run: one --agent actions search ${platform} "list ${model}" -t execute`);
+            : `Action ID not resolved. Run: one --agent actions find ${platform} "list ${model}" -t knowledge`);
 
       if (output.isAgentMode()) {
         output.json({

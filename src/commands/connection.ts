@@ -403,7 +403,7 @@ function accessHint(
   if (!actionIds.includes('*')) {
     parts.push(
       "Action-scoped: each connection's `access.actions` are the only actions you may run — " +
-      'use them directly, no `actions search` needed.'
+      'use them directly: `actions load <actionId>` reads their docs, no find needed.'
     );
   } else if (permissions !== 'admin') {
     const methods = PERMISSION_METHODS[permissions]?.join(', ') ?? '';

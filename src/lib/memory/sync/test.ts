@@ -198,7 +198,7 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
       ok: false,
       detail:
         `Action ${profile.actionId} is tagged "custom". Sync only supports passthrough actions. ` +
-        `Run 'one actions search ${profile.platform} "${profile.model}"' to find one.`,
+        `Run 'one actions find ${profile.platform} "list ${profile.model}" -t knowledge' to find one.`,
     });
     return report;
   }

@@ -10,12 +10,13 @@ import type {
   PlatformsResponse,
   AvailableAction,
   ActionDetails,
-  ActionKnowledgeResponse,
   ExecuteActionArgs,
   ExecutePassthroughResponse,
   SanitizedRequestConfig,
   ApiResponseWithMeta,
   WhoAmIResponse,
+  FindIntent,
+  FoundActions,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -269,6 +270,20 @@ export class OneApi {
     return response || [];
   }
 
+  /**
+   * The action for each intent, across platforms, in one call: search plus
+   * One's decision model, which picks among the candidates. Core caps a call
+   * at 10 intents and refuses more with a 400 naming the cap.
+   */
+  async findActions(requests: FindIntent[], task: string | undefined, knowledgeAgent: boolean): Promise<FoundActions[]> {
+    const response = await this.requestFull<FoundActions[]>({
+      path: '/available-actions/find',
+      method: 'POST',
+      body: { requests, ...(task ? { task } : {}), knowledgeAgent },
+    });
+    return Array.isArray(response) ? response : [];
+  }
+
   async getActionDetails(actionId: string): Promise<ActionDetails> {
     const response = await this.requestFull<{ rows: ActionDetails[] }>({
       path: '/knowledge',
@@ -281,22 +296,6 @@ export class OneApi {
     }
 
     return actions[0];
-  }
-
-  async getActionKnowledge(actionId: string): Promise<ActionKnowledgeResponse> {
-    const action = await this.getActionDetails(actionId);
-
-    if (!action.knowledge || !action.method) {
-      return {
-        knowledge: 'No knowledge was found',
-        method: 'No method was found',
-      };
-    }
-
-    return {
-      knowledge: action.knowledge,
-      method: action.method,
-    };
   }
 
   private async requestWithMeta<T>(opts: {
@@ -375,36 +374,6 @@ export class OneApi {
     }
 
     return { data: actions[0], etag: result.etag, status: result.status };
-  }
-
-  async searchActionsWithMeta(
-    platform: string,
-    query: string,
-    agentType?: 'execute' | 'knowledge',
-    ifNoneMatch?: string
-  ): Promise<ApiResponseWithMeta<AvailableAction[]>> {
-    const isKnowledgeAgent = agentType === 'knowledge';
-    const queryParams: Record<string, string> = {
-      query,
-      limit: '5',
-    };
-    if (isKnowledgeAgent) {
-      queryParams.knowledgeAgent = 'true';
-    } else {
-      queryParams.executeAgent = 'true';
-    }
-
-    const result = await this.requestWithMeta<AvailableAction[]>({
-      path: `/available-actions/search/${platform}`,
-      queryParams,
-      ifNoneMatch,
-    });
-
-    if (result.status === 304) {
-      return { data: null as unknown as AvailableAction[], etag: result.etag, status: 304 };
-    }
-
-    return { data: result.data || [], etag: result.etag, status: result.status };
   }
 
   async executePassthroughRequest(
@@ -733,15 +702,6 @@ export const PERMISSION_METHODS: Record<PermissionLevel, string[] | null> = {
   admin: null,
 };
 
-export function filterByPermissions<T extends { method: string }>(
-  actions: T[],
-  permissions: PermissionLevel
-): T[] {
-  const allowed = PERMISSION_METHODS[permissions];
-  if (allowed === null) return actions;
-  return actions.filter((a) => allowed.includes(a.method.toUpperCase()));
-}
-
 export function isMethodAllowed(
   method: string,
   permissions: PermissionLevel
@@ -756,36 +716,4 @@ export function isActionAllowed(
   allowedActionIds: string[]
 ): boolean {
   return allowedActionIds.includes('*') || allowedActionIds.includes(actionId);
-}
-
-export function buildActionKnowledgeWithGuidance(
-  knowledge: string,
-  method: string,
-  platform: string,
-  actionId: string
-): string {
-  return `CLI EXECUTION GUIDE (read this FIRST)
-========================================
-To execute this action, use the One CLI with SEPARATE flags for each parameter type.
-Do NOT pass path variables or query parameters in the -d body flag — this causes 403 errors.
-
-PARAMETER → FLAG MAPPING:
-- Path variables (URL placeholders like {userId}, {id}) → --path-vars '{"userId": "me"}'
-- Query parameters (filtering, pagination, format) → --query-params '{"key": "value"}'
-  - For repeated params, use arrays: --query-params '{"metadataHeaders": ["From", "Subject"]}'
-- Request body (POST/PUT/PATCH payload) → -d '{"field": "value"}'
-
-EXAMPLE:
-one --agent actions execute ${platform} ${actionId} <connectionKey> \\
-  --path-vars '{ ... }' \\
-  --query-params '{ ... }' \\
-  -d '{ ... }'
-
-Omit any flag not needed (e.g., omit --path-vars if URL has no placeholders, omit -d for GET).
-
-Read the API documentation below to identify which parameters are path variables, query parameters, or body fields, then map them to the correct flags above.
-
-========================================
-
-${knowledge}`;
 }

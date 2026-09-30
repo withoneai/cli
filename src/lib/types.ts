@@ -183,11 +183,6 @@ export interface ActionDetails {
   connectionPlatform?: string;
 }
 
-export interface ActionKnowledgeResponse {
-  knowledge: string;
-  method: string;
-}
-
 export interface ExecuteActionArgs {
   platform: string;
   actionId: string;
@@ -289,28 +284,6 @@ export interface CacheMeta {
   fresh: boolean;
 }
 
-export interface SearchCacheAction {
-  actionId: string;
-  title: string;
-  method: string;
-  path: string;
-}
-
-/**
- * Payload of a search cache entry. The `platform`/`query`/`searchType` fields
- * record the exact request that produced these results so `cache update` can
- * re-run the search and refresh the data — the entry `key`
- * (`platform_query_type`) isn't reversibly splittable because a query may
- * itself contain `_`. Older entries lack these fields; treat them as
- * non-refreshable (timestamp bump only).
- */
-export interface SearchCacheData {
-  actions: SearchCacheAction[];
-  platform?: string;
-  query?: string;
-  searchType?: 'execute' | 'knowledge';
-}
-
 export interface ApiResponseWithMeta<T> {
   data: T;
   etag: string | null;
@@ -332,3 +305,37 @@ export interface RelayEventsResponse {
 }
 
 
+
+/** One operation an agent wants done on one platform. */
+export interface FindIntent {
+  platform: string;
+  intent: string;
+}
+
+/** An action in a find answer, as core returns it. */
+export interface FoundAction {
+  systemId: string;
+  title: string;
+  key: string;
+  method: string;
+  path: string;
+  tags?: string[];
+  knowledge?: string;
+}
+
+/** How core reached an intent's answer. */
+export type FindSelector = 'model' | 'search_order' | 'none_fit';
+
+/** Core's answer for one intent of `POST /available-actions/find`. */
+export interface FoundActions extends FindIntent {
+  /** The actions to use: the pick, and any needed beside it. */
+  selected: FoundAction[];
+  /** Needed beside the pick, but left undocumented. */
+  alsoSelected?: FoundAction[];
+  /** A substitute for the pick when the model was unsure: one or the other, never both. */
+  runnerUp?: FoundAction;
+  /** Other candidates, undocumented. */
+  alternatives: FoundAction[];
+  selector: FindSelector;
+  confidence?: number;
+}

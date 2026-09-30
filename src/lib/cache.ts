@@ -11,7 +11,12 @@ function knowledgeDir(): string {
   return path.join(homeDir(), '.one', 'cache', 'knowledge');
 }
 
-function searchDir(): string {
+/**
+ * Where CLI 1.x cached `actions search` results. Nothing writes here since
+ * `actions find` replaced search; `clearAll` still empties it so an upgrade
+ * leaves no orphaned files behind.
+ */
+function legacySearchDir(): string {
   return path.join(homeDir(), '.one', 'cache', 'search');
 }
 
@@ -21,11 +26,6 @@ export function sanitizeFilename(input: string): string {
 
 export function knowledgeCachePath(actionId: string): string {
   return path.join(knowledgeDir(), `${sanitizeFilename(actionId)}.json`);
-}
-
-export function searchCachePath(platform: string, query: string, type: string): string {
-  const key = `${platform}_${sanitizeFilename(query)}_${type || 'knowledge'}`;
-  return path.join(searchDir(), `${key}.json`);
 }
 
 export function readCache<T>(filePath: string): CacheEntry<T> | null {
@@ -81,23 +81,20 @@ export function formatAge(seconds: number): string {
   return h > 0 ? `${d}d ${h}h` : `${d}d`;
 }
 
-export function listCacheEntries(): Array<{ type: 'knowledge' | 'search'; filePath: string; entry: CacheEntry }> {
-  const entries: Array<{ type: 'knowledge' | 'search'; filePath: string; entry: CacheEntry }> = [];
+export function listCacheEntries(): Array<{ type: 'knowledge'; filePath: string; entry: CacheEntry }> {
+  const entries: Array<{ type: 'knowledge'; filePath: string; entry: CacheEntry }> = [];
 
-  for (const [dir, type] of [[knowledgeDir(), 'knowledge'], [searchDir(), 'search']] as const) {
-    try {
-      const files = fs.readdirSync(dir);
-      for (const file of files) {
-        if (!file.endsWith('.json')) continue;
-        const filePath = path.join(dir, file);
-        const entry = readCache(filePath);
-        if (entry) {
-          entries.push({ type, filePath, entry });
-        }
+  try {
+    for (const file of fs.readdirSync(knowledgeDir())) {
+      if (!file.endsWith('.json')) continue;
+      const filePath = path.join(knowledgeDir(), file);
+      const entry = readCache(filePath);
+      if (entry) {
+        entries.push({ type: 'knowledge', filePath, entry });
       }
-    } catch {
-      // Directory doesn't exist yet — no entries
     }
+  } catch {
+    // Directory doesn't exist yet — no entries
   }
 
   return entries;
@@ -105,7 +102,7 @@ export function listCacheEntries(): Array<{ type: 'knowledge' | 'search'; filePa
 
 export function clearAll(): number {
   let count = 0;
-  for (const dir of [knowledgeDir(), searchDir()]) {
+  for (const dir of [knowledgeDir(), legacySearchDir()]) {
     try {
       const files = fs.readdirSync(dir);
       for (const file of files) {

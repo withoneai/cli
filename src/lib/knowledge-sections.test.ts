@@ -259,15 +259,15 @@ describe('buildDigest', () => {
 describe('renderDigestNotice', () => {
   it('is empty for an untruncated digest', () => {
     const d = buildDigest(parseSections(STRIPE), { wholeDocThreshold: 1_000_000 });
-    assert.equal(renderDigestNotice(d, 'stripe', 'id'), '');
+    assert.equal(renderDigestNotice(d, 'id'), '');
   });
 
   it('names only top-most omitted sections and shows both load commands', () => {
     const d = buildDigest(parseSections(GITHUB), { wholeDocThreshold: 0, budget: 0 });
-    const notice = renderDigestNotice(d, 'github', 'conn_mod_def::X::Y');
+    const notice = renderDigestNotice(d, 'conn_mod_def::X::Y');
     assert.match(notice, /This is a digest, not the full document/);
-    assert.match(notice, /one --agent actions knowledge github conn_mod_def::X::Y --section "/);
-    assert.match(notice, /one --agent actions knowledge github conn_mod_def::X::Y --full/);
+    assert.match(notice, /one --agent actions load conn_mod_def::X::Y --section "/);
+    assert.match(notice, /one --agent actions load conn_mod_def::X::Y --full/);
     assert.ok(notice.includes('Response,') || notice.includes('Response.'), 'lists the omitted Response parent');
     assert.ok(!notice.includes('Success Response (201 Created)'), 'children of an omitted parent are implied');
     assert.ok(notice.includes('Response Fields'));
@@ -370,7 +370,7 @@ describe('findSections / selectSections', () => {
 
   it('labels appended H1 chunks as appendix in the notice', () => {
     const d = buildDigest(parseSections('# T\n## Method\nPOST\n## Response\n' + 'x'.repeat(9000) + '\n# T\n## Response\nagain\n'), { wholeDocThreshold: 0, budget: 0 });
-    const n = renderDigestNotice(d, 'p', 'id');
+    const n = renderDigestNotice(d, 'id');
     assert.ok(n.includes('T (appendix)'), n);
   });
 

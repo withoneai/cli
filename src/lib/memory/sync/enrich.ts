@@ -415,7 +415,7 @@ export async function enrichPhase(
   if (detailAction.tags?.includes('custom')) {
     throw new Error(
       `Enrich does not support custom actions. Action ${config.actionId} is tagged "custom". ` +
-      `Use a passthrough detail endpoint — run 'one actions search ${platform} "<model> get"' to find one.`
+      `Use a passthrough detail endpoint — run 'one actions find ${platform} "get a <model>" -t knowledge' to find one.`
     );
   }
 

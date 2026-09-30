@@ -82,7 +82,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
       description: 'Execute a platform API action',
       fields: {
         platform:      { type: 'string', required: true, description: 'Platform name (kebab-case)' },
-        actionId:      { type: 'string', required: true, description: 'Action ID from `actions search`' },
+        actionId:      { type: 'string', required: true, description: 'Action ID from `actions find`' },
         connection:    { type: 'object', required: false, description: 'Late-bound connection ref { platform, tag? } — survives re-auth. Exactly one of `connection` or `connectionKey` must be set.' },
         connectionKey: { type: 'string', required: false, description: 'Literal connection key (or $.input selector). Legacy form — prefer `connection: { platform, tag? }`. Exactly one of `connection` or `connectionKey` must be set.' },
         data:          { type: 'object', required: false, description: 'Request body (POST/PUT/PATCH)' },
@@ -457,7 +457,7 @@ The only differences: (1) prepend the stdin-read line, (2) replace \`return X\` 
 
 1. **Design first** — clarify the end goal, map the full value chain, identify where AI analysis is needed
 2. **Discover connections** — \`one --agent connection list\`
-3. **Get knowledge** for every action — \`one --agent actions knowledge <platform> <actionId>\`
+3. **Find every action with its docs** — \`one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...]\`, and \`actions load <actionId>\` for more
 4. **Construct JSON** — declare inputs, wire steps with selectors
 5. **Validate** — \`one --agent flow validate <key>\`
 6. **Execute** — \`one --agent flow execute <key> -i param=value\``);
@@ -796,7 +796,7 @@ For flows that still use literal \`connectionKey\` strings via inputs, an input 
 }
 \`\`\`
 
-Note: Action IDs above are placeholders. Always use \`one --agent actions search <platform> "<query>"\` to find real IDs.
+Note: Action IDs above are placeholders. Always use \`one --agent actions find <platform> "<intent>"\` to find real IDs.
 
 ## AI-Augmented Pattern
 
@@ -811,7 +811,7 @@ Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, n
 ## Notes
 
 - Connection keys are **inputs**, not hardcoded
-- Action IDs in examples are placeholders — always use \`actions search\`
+- Action IDs in examples are placeholders — always use \`actions find\`
 - Inline \`code.source\` steps allow \`require('crypto' | 'buffer' | 'url' | 'path')\` — \`fs\`, \`http\`, \`child_process\` are blocked
 - For anything beyond one-liners, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout
 - Bash steps require \`--allow-bash\` flag

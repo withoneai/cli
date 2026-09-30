@@ -64,18 +64,15 @@ one add gmail
 # See what you're connected to
 one list
 
-# Search for actions you can take
-one actions search gmail "send email" -t execute
-
-# Read the docs for an action
-one actions knowledge gmail <actionId>
+# Find the action, with its docs
+one actions find gmail "send an email" --task "email a hello to a contact"
 
 # Execute it
 one actions execute gmail <actionId> <connectionKey> \
   -d '{"to": "jane@example.com", "subject": "Hello", "body": "Sent from my AI agent"}'
 ```
 
-That's it. Five commands to go from zero to sending an email through Gmail's API - fully authenticated, correctly formatted, without touching a single OAuth token.
+That's it. Four commands to go from zero to sending an email through Gmail's API - fully authenticated, correctly formatted, without touching a single OAuth token.
 
 ### Multi-step flows
 
@@ -210,7 +207,7 @@ You need the connection key (rightmost column) when executing actions.
 | `{"policy": "methods", "methods": ["GET"]}` | Only actions with those HTTP methods | Permission level is `read` or `write` |
 | `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | An action allowlist is configured |
 
-An action allowlist wins over the permission level (and is then method-filtered by it). When the policy is `actions`, those actions are exactly what may run — no `actions search` needed.
+An action allowlist wins over the permission level (and is then method-filtered by it). When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
 
 ```jsonc
 // one --agent list
@@ -258,39 +255,37 @@ one platforms -c "CRM"     # filter by category
 one platforms --json       # machine-readable output
 ```
 
-### `one actions search <platform> <query>`
+### `one actions find <platform> <intent> [<platform> <intent> ...]`
 
-Search for API actions on a connected platform using natural language.
-
-```bash
-one actions search shopify "list products"
-one actions search hubspot "create contact" -t execute
-one actions search gmail "send email"
-```
-
-Returns the top 5 matching actions with their action IDs, HTTP methods, and paths. Use `-t execute` when you intend to run the action, or `-t knowledge` (default) when you want to learn about it or write code against it.
-
-### `one actions knowledge <platform> <actionId>`
-
-Get the full documentation for an action - parameters, validation rules, request/response structure, examples, and the exact API request format.
+Find the action for every operation a task needs, across platforms, **with its documentation**, in one call: parameters, validation rules, request/response structure, and platform-specific quirks. One's decision model picks the action for each intent.
 
 ```bash
-one actions knowledge shopify 67890abcdef
+one actions find gmail "send an email"
+one actions find hubspot "find a contact by email" gmail "send an email" --task "email a follow-up to a CRM contact"
+one actions find shopify "list products" -t knowledge
 ```
 
-Always read the knowledge before executing. It tells you exactly what parameters are required, what format they need, and any platform-specific quirks.
+- Each **intent** names the operation alone, in a few words (`"send a message to a channel"`), without its data: IDs, names and message text make the search miss. Up to 10 pairs.
+- **`--task`** describes the whole job in one line, in general terms, which helps choose between similar actions.
+- **`-t knowledge`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default is the catalog for running actions now.
+- **`--ai-model`** names the model running the CLI (e.g. `claude-sonnet-5`), for tuning documentation per model later.
 
-In `--agent` mode the response is a **digest**: request-building sections in full (method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling) plus a table of contents for the rest. Response shapes, response-field tables, and worked examples — the bulk of every large doc — are loaded on demand:
+Each intent's answer gives the action(s) to use with their docs, any actions also needed beside them, a **substitute** when the model was unsure (use one or the other, never both), and a few alternatives, then says once how to execute. Always read the docs before executing. The access settings from `one config` apply: an action they refuse is never offered.
+
+Large documents come back as a **digest**: request-building sections in full (method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling), then a notice naming what was left out with the exact command to load it. In knowledge-only mode each pick comes back whole, with how to call it from code.
+
+### `one actions load <actionId...>`
+
+More of an action's documentation: the digest by default (how to read an alternative from a find answer), or a section a digest left out, the whole document, or its table of contents. Up to 10 action ids.
 
 ```bash
-one --agent actions knowledge github <actionId>                              # digest + sections[] table of contents
-one --agent actions knowledge github <actionId> --section "Response Fields"  # one section, by heading or id
-one --agent actions knowledge github <actionId> --section response,examples  # several, by alias
-one --agent actions knowledge github <actionId> --full                       # whole document
-one --agent actions knowledge github <actionId> --toc                        # every section id, no document
+one --agent actions load <actionId> --section "Response Fields"  # one section, by heading or id
+one --agent actions load <actionId> --section response,examples  # several, by alias
+one --agent actions load <actionId> --full                       # whole document
+one --agent actions load <actionId> --toc                        # every section id, no document
 ```
 
-The JSON carries `truncated`, `sections[]` (the omitted sections: id, heading, chars), and `more` (the commands to load the rest); the markdown ends with the same notice so it is never mistaken for the complete doc. Small documents are returned whole. Section requests are served from the local cache. Human (non-agent) output always prints the full document; `--section` works there too.
+Loads are served from the local cache once a doc is cached.
 
 ### `one actions execute <platform> <actionId> <connectionKey>`
 
@@ -351,7 +346,7 @@ Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`r
 
 ### `one cache`
 
-Manage the local cache for knowledge and search responses. The CLI automatically caches `actions knowledge` and `actions search` results so repeated calls serve instantly from disk. `actions execute` reuses the cached action details (method, path, validation schema) for its preflight lookup, so a knowledge call followed by execute costs a single API round trip.
+Manage the local cache of action documentation. `actions find` and `actions load` read each action's details (docs, method, path, validation schema) through the cache, so repeated reads serve instantly from disk, and `actions execute` reuses them for its preflight lookup, so a find followed by execute costs a single API round trip for the execute.
 
 ```bash
 one cache list                    # List all cached entries with age and status
@@ -361,13 +356,13 @@ one cache clear <actionId>        # Clear a specific entry
 one cache update-all              # Re-fetch fresh data for all cached entries
 ```
 
-Knowledge and search commands also support cache flags:
+Find, load and execute also support cache flags:
 
 ```bash
-one actions knowledge gmail <actionId> --no-cache       # Skip cache, fetch fresh
-one actions knowledge gmail <actionId> --cache-status   # Check cache status
-one actions knowledge gmail <actionId> --section response   # Served from the cached doc, no fetch
-one actions search gmail "send email" --no-cache        # Skip cache for search
+one actions find gmail "send an email" --no-cache       # Fetch the docs fresh
+one actions load <actionId> --no-cache                  # Skip cache, fetch fresh
+one actions load <actionId> --cache-status              # Check cache status
+one actions load <actionId> --section response          # Served from the cached doc, no fetch
 one actions execute gmail <actionId> <key> --no-cache   # Fresh action-details lookup
 ```
 
@@ -739,8 +734,7 @@ The power of One is in the workflow. Every interaction follows the same pattern:
 
 ```
 one list                    → What am I connected to?
-one actions search          → What can I do?
-one actions knowledge       → How do I do it?
+one actions find            → What do I run, and how?
 one actions execute         → Do it.
 ```
 
@@ -749,7 +743,7 @@ This is the same workflow whether you're sending emails, creating CRM contacts, 
 For multi-step workflows that chain actions across platforms:
 
 ```
-one actions knowledge       → Learn each action's schema
+one actions find            → Find each action, with its schema
 one flow create             → Define the workflow as JSON
 one flow validate           → Check it
 one flow execute            → Run it
@@ -766,11 +760,10 @@ If you're an AI agent using the One MCP server, the tools map directly:
 | MCP Tool | CLI Command |
 |----------|------------|
 | `list_one_integrations` | `one list` + `one platforms` |
-| `search_one_platform_actions` | `one actions search` |
-| `get_one_action_knowledge` | `one actions knowledge` |
+| `find_one_actions` | `one actions find` (and `one actions load` for its `load`) |
 | `execute_one_action` | `one actions execute` |
 
-The workflow is the same: list → search → knowledge → execute. Never skip the knowledge step - it contains required parameter info and platform-specific details that are critical for building correct requests.
+The workflow is the same: list → find → execute. Never execute without reading the docs find returns - they contain required parameter info and platform-specific details that are critical for building correct requests.
 
 ## MCP server installation
 

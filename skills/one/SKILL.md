@@ -6,7 +6,7 @@ description: |
   TRIGGER when:
   - Interact with ANY 3rd-party platform or external service (e.g., "send an email", "create a Shopify order", "find a HubSpot contact", "post to Slack")
   - List their connected platforms or check available ones
-  - Search for available actions (e.g., "what can I do with Gmail")
+  - Find the actions a task needs (e.g., "how do I send a Slack message", "what can I do with Gmail")
   - Execute API calls with a connected platform
   - Set up webhook-driven automations between platforms (e.g., "when a Stripe payment comes in, notify Slack")
   - Build multi-step workflows that chain actions across platforms (e.g., "fetch Stripe customers and email each one")
@@ -37,7 +37,7 @@ The consent page asks which harness will use the key (Claude Code, Codex, Cursor
 
 **Onboarding a user with no prompts:** run `one init --auth browser` — it opens a login window (the user authenticates there), saves the key, and auto-installs this skill, all without blocking on stdin. Add `-g`/`-p` for scope (default global). For CI/CD or headless environments, use `one init --auth manual --api-key sk_live_...`.
 
-## Core Workflow: search -> knowledge -> execute
+## Core Workflow: find -> execute
 
 Always follow this sequence when the user wants to do something on a connected platform:
 
@@ -47,7 +47,7 @@ Always follow this sequence when the user wants to do something on a connected p
 one --agent connection list
 ```
 
-Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for searching), and an `access` field per connection telling you what you may run there.
+Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for finding actions), and an `access` field per connection telling you what you may run there.
 
 **Read `access` before you plan a workflow** — it saves you from discovering a restriction as a 403 halfway through:
 
@@ -55,13 +55,13 @@ Returns connected platforms with their connection keys (needed for execution), p
 |----------|---------------|
 | `{"policy": "full"}` | Every action on this connection is available |
 | `{"policy": "methods", "methods": ["GET"]}` | Only actions with these HTTP methods will execute — don't propose writes |
-| `{"policy": "actions", "actions": [...]}` | Only these exact actions may run. Each has `actionId`, `title`, `method` — **use them directly and skip `actions search`** |
+| `{"policy": "actions", "actions": [...]}` | Only these exact actions may run. Each has `actionId`, `title`, `method` — **use them directly**: `actions load <actionId>` reads their docs, no find needed |
 
 Two more fields appear only when relevant:
-- `"knowledgeOnly": true` — `actions execute` is disabled. Read knowledge and write integration code instead of executing.
+- `"knowledgeOnly": true` — `actions execute` is disabled. `actions find` returns each action's whole document with how to call it from code; write integration code instead of executing.
 - `"unresolvedActionIds": [...]` — allowlisted ids that couldn't be looked up; treat them as unavailable and tell the user.
 
-An empty `actions` array means the allowlist grants nothing on that connection — say so rather than searching for alternatives.
+An empty `actions` array means the allowlist grants nothing on that connection — say so rather than looking for alternatives.
 
 ### 1b. Delete a connection
 
@@ -71,43 +71,43 @@ one --agent connection delete <connection-key>
 
 Removes a connection. Returns `{"deleted": true, "platform": "...", "key": "..."}` on success. Use the connection key from `one --agent connection list`.
 
-### 2. Search for the right action
+### 2. Find every action the task needs, with its docs (READ them before executing)
 
 ```bash
-one --agent actions search <platform> "<query>" -t execute
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>"
 ```
 
-- Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`
-- Use `-t execute` when performing actions, `-t knowledge` when researching or writing code
-- If no results, broaden the query (e.g., `"list"` instead of `"list active premium customers"`)
+**One call for the whole task**: one platform and intent pair per operation, on any platforms (up to 10). One's decision model picks the action for each and returns it **with its documentation**: exactly what parameters are required, how to structure the request, and where each value goes. Never execute without reading it — without it you'll guess wrong on parameters.
 
-### 3. Get the action's knowledge (REQUIRED before executing)
+- **`intent` names the operation alone**, in a few words: `"send a message to a channel"`, not `"post 'deploy done' in #eng"`. IDs, names, and message text in the intent make the search miss.
+- **`--task`** (optional) is the whole job in one line, **in general terms**: `"email a weather report to a contact"`, without names, addresses, IDs, or message text. It helps choose between similar actions.
+- **`-t knowledge`** searches the catalog for writing code and building flows and relays (it includes the platform's own passthrough endpoints); the default, `-t execute`, is the catalog for running actions now.
+- **`--ai-model`** (optional): the model you are running as (e.g. `claude-sonnet-5`), used to tune documentation per model.
+- Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`.
+
+Each entry of `answers[]` carries:
+
+- `selected[]` — **the action(s) to use**, each with `actionId`, `title`, `method`, `path`, and `knowledge` (its docs). More than one means the intent needs them together (look up, then update).
+- `alsoSelected[]` — also needed, listed rather than documented to keep the answer small: `actions load` them.
+- `runnerUp` — only when the model was unsure: a **substitute** for the pick. Use **one or the other, never both**.
+- `alternatives[]` — other candidates, undocumented.
+- `status` — why: a confidence; *no action fits* (rephrase the intent by outcome, or check the platform); *the decision model was unavailable* (the top search result — check it fits); *not allowed by this CLI* (the next allowed candidate stood in); or *allow none of them* (the access settings block the operation — tell the user, rephrasing won't help).
+
+`guide` (once, at the end) says how to execute any of them.
+
+**Large docs come back as a digest** (`truncated: true`): the request-building sections (method/URL, headers, description, rules, required + optional parameters, sample request, gotchas, error handling), then a notice naming what it left out with the exact command to load it. Sections named `(appendix)` are appended reference chunks or companion endpoints, not the action doc itself.
+
+### 3. Load more of a document (only when you need it)
 
 ```bash
-one --agent actions knowledge <platform> <actionId>
+one --agent actions load <actionId> --section "Response Fields"   # by heading
+one --agent actions load <actionId> --section response,optional    # by alias, several at once
+one --agent actions load <actionId> --full                         # whole document
+one --agent actions load <actionId> --toc                          # every heading, no text
+one --agent actions load <actionId>                                # an alternative's digest
 ```
 
-This tells you exactly what parameters are required, how to structure the request, and which flags to use. Never skip this step — without it you'll guess wrong on parameters.
-
-**You get a digest, not always the whole document.** Large docs are trimmed to the request-building sections (method/URL, headers, description, rules, required + optional parameters, sample request, gotchas, error handling). The response tells you what was left out:
-
-- `truncated: true` — some sections are omitted. `truncated: false` — you have everything (and no `sections` list is sent).
-- `sections[]` — the omitted sections only, each with `id`, `heading`, `chars`, and `included` (`false` / `"partial"`). Included sections are the headings you can see in the markdown.
-- The markdown itself ends with a notice naming the omitted sections and the exact commands to load them.
-
-Load more only when you need it (response shapes, response fields, worked examples). Served from the local cache, no network:
-
-```bash
-one --agent actions knowledge <platform> <actionId> --section "Response Fields"   # by heading
-one --agent actions knowledge <platform> <actionId> --section response,optional    # by alias, several at once
-one --agent actions knowledge <platform> <actionId> --full                         # whole document
-```
-
-Aliases: `response`, `fields`, `optional`, `required`, `examples`, `errors`, `success`, `body`, `query`, `path`, `notes`, `behavior`, `gotchas`. An unknown name returns an error listing every available section — retry with one of those ids.
-
-- A `--section` response has `truncated: false` (you got the whole section) and `resolved` (which ids your names matched). It does not repeat the table of contents.
-- If the digest says `sectionsCollapsed: true`, the doc has hundreds of headings and `sections` shows only the top omitted levels (`children` = hidden count). `--toc` lists every heading without the document.
-- Sections named `(appendix)` in the notice are appended reference chunks or companion endpoints, not the action doc itself.
+Served from the local cache once a doc is cached. Aliases: `response`, `fields`, `optional`, `required`, `examples`, `errors`, `success`, `body`, `query`, `path`, `notes`, `behavior`, `gotchas`. An unknown name returns the list of available sections — retry with one of those ids. Up to 10 action ids per call.
 
 ### 4. Execute
 
@@ -170,21 +170,21 @@ All errors return JSON: `{"error": "message"}`. Parse output as JSON and check f
 
 - Always use `--agent` flag for structured JSON output
 - Platform names are lowercase; multi-word names use dashes (`hubspot` not `HubSpot`, `google-calendar` not `googleCalendar`)
-- Always use the exact action ID from search results — never guess or construct them
-- Always read knowledge before executing — it has required params, validation rules, and caveats
+- Always use the exact action ID from a find answer — never guess or construct them
+- Always read the action's docs (from `actions find`) before executing — they have required params, validation rules, and caveats
 - JSON values passed to `-d`, `--path-vars`, `--query-params` must be valid JSON (use single quotes around JSON to avoid shell escaping)
 - Do NOT pass path or query parameters inside the `-d` body flag
 
 ## Caching
 
-Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent calls for the same action serve instantly from disk. `actions execute` reuses the cached action details for its preflight lookup, so after a knowledge call (or a prior execute of the same action) it makes a single API call — the action itself.
+Action documentation is cached locally (`~/.one/cache/`). `actions find` and `actions load` read it through the cache, and `actions execute` reuses the cached action details for its preflight lookup, so after a find (or a prior execute of the same action) it makes a single API call — the action itself. Find's picks are not cached: the decision model answers every call.
 
 - Cache is automatic — no setup required
 - Default TTL: 1 hour (configurable via `ONE_CACHE_TTL` env var)
-- In `--agent` mode, responses include a `_cache` field: `{"hit": true, "age": 1423, "fresh": true}`; execute responses include `"_preflight": {"cache": "hit"|"miss"}`
-- Use `--no-cache` to force a fresh fetch: works on `knowledge`, `search`, and `execute` (refreshes execute's action-details lookup)
-- Use `--cache-status` to check cache state without fetching
-- `knowledge --section <name>` and `--full` read from the cached document — no extra API call once the doc is cached
+- In `--agent` mode, execute responses include `"_preflight": {"cache": "hit"|"miss"}`
+- Use `--no-cache` to force a fresh fetch: works on `find`, `load`, and `execute` (refreshes execute's action-details lookup)
+- Use `actions load <actionId> --cache-status` to check cache state without fetching
+- `load --section <name>` and `--full` read from the cached document — no extra API call once the doc is cached
 - Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
 - Execution responses are NEVER cached — the action always runs live; only action metadata (docs, method, path, schema) is cached
 
@@ -296,7 +296,7 @@ one --agent sync init attio attioPeople --config '{
     ]
   }
 }'
-# Skip the "pick paths by reading knowledge" step — let the CLI rank them from a live sample
+# Skip the "pick paths by reading the docs" step — let the CLI rank them from a live sample
 one --agent sync suggest-searchable attio/attioPeople
 # → { suggestions: [{path, score, hitRate, avgLength, noiseFraction, sampleValue}], configPatch: {...paste-ready...} }
 

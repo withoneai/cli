@@ -18,7 +18,7 @@ import {
 import { connectionAddCommand, connectionListCommand, connectionDeleteCommand } from './commands/connection.js';
 import { OneApi } from './lib/api.js';
 import { platformsCommand } from './commands/platforms.js';
-import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand, actionsExecuteParallelCommand } from './commands/actions.js';
+import { actionsFindCommand, actionsLoadCommand, actionsExecuteCommand, actionsExecuteParallelCommand } from './commands/actions.js';
 import {
   flowCreateCommand,
   flowExecuteCommand,
@@ -83,9 +83,9 @@ program
 
   Workflow (use these in order):
     1. one list                           List connected platforms, keys, and your access on each
-    2. one actions search <platform> <q>  Search for actions using natural language
-    3. one actions knowledge <plat> <id>  Get docs for an action (ALWAYS do this before execute; --section/--full for more)
-    4. one actions execute <p> <id> <key> Execute the action
+    2. one actions find <p> <intent> ...  Find the action for every operation a task needs, with its docs (ALWAYS read them before execute)
+    3. one actions execute <p> <id> <key> Execute the action
+       one actions load <id> --section <s> More of an action's docs: a section a digest left out, --full, or --toc
 
   Guide:
     one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, memory, sync, all)
@@ -132,11 +132,9 @@ program
     $ one list
     # Find: gmail  operational  live::gmail::default::abc123
 
-    $ one actions search gmail "send email" -t execute
-    # Find: POST  Send Email  conn_mod_def::xxx::yyy
-
-    $ one actions knowledge gmail conn_mod_def::xxx::yyy
-    # Read the docs: required fields are to, subject, body, connectionKey
+    $ one actions find gmail "send an email" --task "email a report to a contact"
+    # Send Email · POST /v1/gmail/send-email · actionId: conn_mod_def::xxx::yyy
+    # ...its docs: required fields are to, subject, body, connectionKey
 
     $ one actions execute gmail conn_mod_def::xxx::yyy live::gmail::default::abc123 \\
         -d '{"to":"j@example.com","subject":"Hello","body":"Hi!","connectionKey":"live::gmail::default::abc123"}'
@@ -462,28 +460,31 @@ program
 const actions = program
   .command('actions')
   .alias('a')
-  .description('Search, explore, and execute platform actions (workflow: search → knowledge → execute)');
+  .description('Find, read, and execute platform actions (workflow: find → execute)');
 
 actions
-  .command('search <platform> <query>')
-  .description('Search for actions on a platform (e.g. one actions search gmail "send email")')
-  .option('-t, --type <type>', 'execute (to run it) or knowledge (to learn about it). Default: knowledge')
-  .option('--no-cache', 'Bypass the cache and re-fetch from the API (the fresh response still refreshes the cache)')
-  .action(async (platform: string, query: string, options: { type?: string; cache?: boolean }) => {
-    await actionsSearchCommand(platform, query, options);
+  .command('find <pairs...>')
+  .alias('f')
+  .description('Find the action for every operation a task needs, across platforms, with its documentation, in one call: one actions find <platform> "<intent>" [<platform> "<intent>" ...] (up to 10 pairs). Each intent names the operation alone ("send an email"), without its data. Large documents come back as a digest; each names the exact `actions load` command for what it left out')
+  .option('--task <task>', 'The whole task in one line, in general terms (e.g. "email a report to a contact"): what it does, without names, addresses, IDs or message text. Helps choose between similar actions')
+  .option('-t, --type <type>', 'execute (default: actions to run now) or knowledge (the catalog for writing code and building flows and relays, with the platform\'s own endpoints). Knowledge-only mode always uses knowledge')
+  .option('--ai-model <model>', 'The AI model running the CLI (e.g. claude-sonnet-5), which helps optimize the documentation returned. Optional')
+  .option('--no-cache', 'Bypass the cache for action documentation and re-fetch it (the fresh response still refreshes the cache)')
+  .action(async (pairs: string[], options: { task?: string; type?: string; aiModel?: string; cache?: boolean }) => {
+    await actionsFindCommand(pairs, options);
   });
 
 actions
-  .command('knowledge <platform> <actionId>')
-  .alias('k')
-  .description('Get docs for an action — MUST call before execute to know required params. In --agent mode returns a digest (request-building sections + a table of contents); load the rest with --section or --full')
+  .command('load <actionIds...>')
+  .alias('l')
+  .description('More of an action\'s documentation (up to 10 actions): the digest by default, --section for one a digest left out, --full for the whole document, --toc for its contents. Also how to read an alternative from a find answer')
   .option('--section <name>', 'Return only the named section(s) — by heading, id, or alias (e.g. "Response Fields", response, optional). Repeatable or comma-separated', collect, [])
   .option('--full', 'Return the whole document instead of the digest')
   .option('--toc', 'List every section (id, heading, size) without the document')
   .option('--no-cache', 'Bypass the cache and re-fetch from the API (the fresh response still refreshes the cache)')
   .option('--cache-status', 'Print cache metadata without fetching')
-  .action(async (platform: string, actionId: string, options: { cache?: boolean; cacheStatus?: boolean; section?: string[]; full?: boolean; toc?: boolean }) => {
-    await actionsKnowledgeCommand(platform, actionId, options);
+  .action(async (actionIds: string[], options: { cache?: boolean; cacheStatus?: boolean; section?: string[]; full?: boolean; toc?: boolean }) => {
+    await actionsLoadCommand(actionIds, options);
   });
 
 actions

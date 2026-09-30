@@ -41,14 +41,14 @@ Before using any feature, read its guide section first: \`one guide actions\`, \
 ## Features
 
 ### 1. Actions — Execute API calls on 750+ platforms
-Search for actions, read their docs, and execute them. This is the core workflow.
+Find the actions a task needs with their docs, in one call, then execute them. This is the core workflow.
 
 **Quick start:**
 \`\`\`bash
 one --agent connection list                                    # See connected platforms + your access on each
 one --agent connection delete <connection-key>                 # Remove a connection
-one --agent actions search <platform> "<query>" -t execute     # Find an action
-one --agent actions knowledge <platform> <actionId>            # Read docs (REQUIRED)
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>"  # Find every action, with its docs (READ them)
+one --agent actions load <actionId> --section "<name>"          # More of a doc: a section it left out, --full, --toc
 one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 \`\`\`
 
@@ -111,7 +111,7 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - \`passthrough\` actions map webhook fields to another platform's API using Handlebars: \`{{payload.data.object.email}}\`
 - Template context: \`{{relayEventId}}\`, \`{{platform}}\`, \`{{eventType}}\`, \`{{payload}}\`, \`{{timestamp}}\`, \`{{connectionId}}\`
 - \`--create-webhook\` auto-registers the webhook URL with the source platform
-- Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
+- Use \`actions find\` (and \`actions load\` for more) to learn both the incoming payload shape AND the destination API shape before building templates
 
 ### 4. Memory + Sync — Unified store with hybrid FTS + semantic search
 One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled \`embedded-postgres\` plugin, with a \`postgres\` plugin for remote/self-hosted) that backs both user-authored notes (\`one mem add\`) and synced platform data (\`one sync run\`). Auto-initializes on first use — no separate install step. Run \`one guide memory\` and \`one guide sync\` for the full references.
@@ -120,7 +120,7 @@ One ships a local memory store (a real Postgres process bootstrapped on demand v
 
 Request specific sections:
 - \`one guide overview\` — This section
-- \`one guide actions\` — Actions reference (search, knowledge, execute)
+- \`one guide actions\` — Actions reference (find, load, execute)
 - \`one guide flows\` — Workflow engine reference (step types, selectors, examples)
 - \`one guide relay\` — Webhook relay reference (templates, passthrough actions)
 - \`one guide cache\` — Cache management (TTL, flags, commands)
@@ -131,7 +131,7 @@ Request specific sections:
 
 - **Always use \`--agent\` flag** for structured JSON output
 - Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`google-calendar\`)
-- Always use the **exact action ID** from search results — don't guess
+- Always use the **exact action ID** from a find answer — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
 - \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
@@ -140,9 +140,9 @@ Request specific sections:
 
 export const GUIDE_ACTIONS = `# One Actions — Reference
 
-## Workflow: search → knowledge → execute
+## Workflow: find → execute
 
-Always follow this sequence. Never skip the knowledge step.
+Always follow this sequence. Never execute without reading the action's documentation, which \`actions find\` returns.
 
 ### 1. List Connections
 
@@ -156,9 +156,9 @@ Returns platforms, status, connection keys, tags, and an \`access\` field per co
 |----------|---------|
 | \`{"policy": "full"}\` | Every action on the connection |
 | \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
-| \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly, skip \`actions search\` |
+| \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly: \`actions load <actionId>\` reads their docs, no find needed |
 
-Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read knowledge and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
+Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read the docs and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
 
 Read \`access\` before planning — it prevents proposing an action the config will reject. Change it with \`one config\`.
 
@@ -170,59 +170,70 @@ one --agent connection delete <connection-key>
 
 Removes a connection by its key. In agent mode, returns \`{"deleted": true, "platform": "...", "key": "..."}\`. The connection key comes from \`one connection list\`.
 
-### 2. Search Actions
+### 2. Find Actions
 
 \`\`\`bash
-one --agent actions search <platform> "<query>" -t execute
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>"
 \`\`\`
 
-- Use \`-t execute\` when the user wants to perform an action
-- Use \`-t knowledge\` (default) for documentation/code generation
-- Returns up to 5 matching actions with IDs, methods, and paths
+One call for the whole task: one platform and intent pair per operation, on any platforms (up to 10). One's decision model picks the action for each and returns it **with its documentation** — required fields, validation rules, request structure. **Read it before execute.**
 
-### 3. Get Knowledge
+- **\`intent\` names the operation alone**, in a few words: \`"send a message to a channel"\`, not \`"post 'deploy done' in #eng"\`. IDs, names, and message text in the intent make the search miss.
+- **\`--task\`** (optional) is the whole job in one line, **in general terms**: what it does, without names, addresses, IDs, or message text. It helps choose between similar actions.
+- **\`-t knowledge\`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default, \`-t execute\`, is the catalog for running actions now. Knowledge-only mode always uses \`knowledge\`.
+- **\`--ai-model\`** (optional) names the model running the CLI (e.g. \`claude-sonnet-5\`); it will be used to tune documentation per model.
 
-\`\`\`bash
-one --agent actions knowledge <platform> <actionId>
-\`\`\`
-
-Returns the API docs: required fields, validation rules, request structure. **REQUIRED before execute.** The output includes a CLI PARAMETER MAPPING section showing which flags to use.
-
-**In \`--agent\` mode this is a digest, not the whole document.** Large docs (most of their size is response shapes and optional-field tables) are trimmed to the sections needed to build a correct request: method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling. Everything else is listed in a table of contents so you can pull it on demand:
+In \`--agent\` mode:
 
 \`\`\`json
 {
-  "knowledge": "...digest markdown, ends with a notice naming the omitted sections...",
-  "method": "POST",
-  "title": "Create an Issue",
-  "truncated": true,
-  "sections": [
-    { "id": "response", "heading": "Response", "level": 2, "chars": 16483, "included": false },
-    { "id": "response-fields", "heading": "Response Fields", "level": 2, "chars": 3353, "included": false }
+  "answers": [
+    {
+      "platform": "gmail",
+      "intent": "send an email",
+      "status": "Chosen with confidence 0.99.",
+      "selector": "model",
+      "confidence": 0.99,
+      "selected": [
+        { "actionId": "conn_mod_def::...", "title": "Send Email", "method": "POST", "path": "/v1/gmail/send-email",
+          "knowledge": "...digest markdown, ends with the exact actions load command for what it left out...", "truncated": true }
+      ],
+      "alsoSelected": [],
+      "runnerUp": { "actionId": "...", "title": "...", "method": "...", "path": "...", "knowledge": "...", "truncated": false },
+      "alternatives": [ { "actionId": "...", "title": "...", "method": "...", "path": "..." } ]
+    }
   ],
-  "omitted": 2,
-  "omittedChars": 19836,
-  "more": { "section": "one --agent actions knowledge <platform> <actionId> --section <id>[,<id>...]", "full": "..." }
+  "guide": "Run an action with: one --agent actions execute <platform> <actionId> <connectionKey> ..."
 }
 \`\`\`
 
-- \`truncated: false\` means you have the whole document — small docs are never trimmed, and no \`sections\` list is sent.
-- \`sections\` lists only what was omitted. \`included\` is \`false\` or \`"partial"\` (an oversized essential section was cut; its text ends with a truncation marker). Included sections are simply the headings in the markdown.
-- Load more by heading, id, or alias — several at once, comma-separated or repeated:
+- **\`selected\`** — the action(s) to use, documented. More than one means the intent needs them together (look up, then update).
+- **\`alsoSelected\`** — also needed, listed rather than documented to keep the answer small: \`actions load\` them.
+- **\`runnerUp\`** — only when the model was unsure: a **substitute** for the pick. Use one or the other, **never both**.
+- **\`alternatives\`** — other candidates, undocumented.
+- **\`status\`** — why: a confidence, *no action fits* (rephrase the intent by outcome, or check the platform), *the decision model was unavailable* (top search result: check it fits), *not allowed by this CLI* (the next allowed candidate stood in), or *allow none of them* (your access settings block the operation — rephrasing won't help).
+- **\`guide\`** — how to execute, stated once for every action.
+- \`truncated: false\` means \`knowledge\` is the whole document; small docs are never trimmed.
+
+A large doc is a **digest**: the sections needed to build a correct request (method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling), then a notice naming what it left out with the exact command to load it.
+
+In knowledge-only mode (\`one config\`), each pick comes back **whole**, with how to call it from code through the One Passthrough API, and \`guide\` is the Integration Code Guide.
+
+Find reads documentation through the local cache, so a later \`actions execute\` of the same action makes a single API call.
+
+### 3. Load More of a Document
 
 \`\`\`bash
-one --agent actions knowledge <platform> <actionId> --section "Response Fields"
-one --agent actions knowledge <platform> <actionId> --section response,optional
-one --agent actions knowledge <platform> <actionId> --full
+one --agent actions load <actionId> --section "Response Fields"
+one --agent actions load <actionId> --section response,optional
+one --agent actions load <actionId> --full
+one --agent actions load <actionId> --toc
+one --agent actions load <actionId>                 # the digest: how to read an alternative
 \`\`\`
 
-Aliases: \`response\`, \`fields\`, \`optional\`, \`required\`, \`examples\`, \`errors\`, \`success\`, \`body\`, \`query\`, \`path\`, \`notes\`, \`behavior\`, \`gotchas\`. A parent section brings its subsections. Section requests are served from the local cache — no network call. An unknown name returns an error that lists every available section, so retry with one of those ids.
+Up to 10 action ids at once; the flags apply to each. Aliases: \`response\`, \`fields\`, \`optional\`, \`required\`, \`examples\`, \`errors\`, \`success\`, \`body\`, \`query\`, \`path\`, \`notes\`, \`behavior\`, \`gotchas\`. A parent section brings its subsections. Loads are served from the local cache once a doc is cached. An unknown section name returns the list of available sections, so retry with one of those ids. \`--toc\` lists every section of the document (id, heading, size) without the text.
 
-A \`--section\` response carries \`requested\`, \`resolved\` (the ids each name matched — alias and prefix matches are visible here), and \`truncated: false\` (the requested sections are whole). It does not repeat the table of contents. On scraped mega-docs with hundreds of headings the digest's \`sections\` list is collapsed to the top levels (\`sectionsCollapsed: true\`, each entry's \`children\` counts the hidden ones); \`--toc\` returns the complete list without the document:
-
-\`\`\`bash
-one --agent actions knowledge <platform> <actionId> --toc
-\`\`\`
+In \`--agent\` mode: \`{ "loaded": [ { "actionId", "title", "method", "path", "knowledge", "truncated" } | { "actionId", "error" } ], "guide": "..." }\`. An action your access settings refuse reads the same as one that doesn't exist.
 
 ### 4. Execute
 
@@ -243,7 +254,7 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents). Text responses (text/plain, HTML, CSV, XML) render inline automatically — \`--output\` is only needed for genuinely binary payloads.
 - \`--no-cache\` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
-Execute reuses the action details cached by \`actions knowledge\` (method, path, schema), so in the standard search → knowledge → execute flow it makes a single API call — the action being executed. The live response is never cached. In \`--agent\` mode the response includes \`"_preflight": {"cache": "hit"|"miss"}\` showing whether the lookup was served from disk.
+Execute reuses the action details cached by \`actions find\` and \`actions load\` (method, path, schema), so in the standard find → execute flow it makes a single API call — the action being executed. The live response is never cached. In \`--agent\` mode the response includes \`"_preflight": {"cache": "hit"|"miss"}\` showing whether the lookup was served from disk.
 
 **Do NOT** pass path or query parameters in \`-d\`. Use the correct flags.
 
@@ -282,7 +293,7 @@ All errors return JSON: \`{"error": "message"}\`. Check the \`error\` key.
 
 - Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`ship-station\`)
 - JSON flags use single quotes around the JSON to avoid shell escaping
-- If search returns no results, try broader queries
+- If find says no action fits, rephrase the intent by outcome (\`"list invoices"\`, not an endpoint name) or check the platform name
 - Access control settings from \`one config\` may restrict execution
 `;
 
@@ -402,9 +413,9 @@ export const GUIDE_CACHE = `# One Cache — Reference
 
 ## Overview
 
-The One CLI caches \`actions knowledge\` and \`actions search\` responses locally so repeated calls serve instantly from disk instead of hitting the API. The knowledge cache stores the action's full details (docs, method, path, schema), so \`actions execute\` reuses it for its preflight lookup — in the standard search → knowledge → execute flow, execute makes exactly one API call: the action itself.
+The One CLI caches each action's details (docs, method, path, schema) locally, so repeated calls serve instantly from disk instead of hitting the API. \`actions find\` and \`actions load\` read documentation through this cache, and \`actions execute\` reuses it for its preflight lookup — in the standard find → execute flow, execute makes exactly one API call: the action itself. Find's picks themselves are not cached: they come from One's decision model on every call.
 
-Cache location: \`~/.one/cache/knowledge/\` and \`~/.one/cache/search/\`
+Cache location: \`~/.one/cache/knowledge/\`
 
 ## How It Works
 
@@ -412,7 +423,7 @@ Cache location: \`~/.one/cache/knowledge/\` and \`~/.one/cache/search/\`
 - **Subsequent calls (within TTL)**: serves from cache instantly, no API call
 - **After TTL expires**: makes a conditional request (ETag). If content unchanged, refreshes the cache timestamp. If changed, writes fresh data.
 - **Network failure with stale cache**: serves the stale cache with a warning — never fails hard when a cache exists
-- **Shared preflight**: \`actions execute\`, flow action steps, and \`sync\` all read action details (method, path, validation schema) from the same cache and warm it on a miss — so a knowledge call, a flow run, and a later execute of the same action all reuse one cached lookup
+- **Shared preflight**: \`actions find\`, \`actions load\`, \`actions execute\`, flow action steps, and \`sync\` all read action details (method, path, validation schema) from the same cache and warm it on a miss — so a find, a flow run, and a later execute of the same action all reuse one cached lookup
 
 Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \`cacheTtl\` in \`~/.one/config.json\`.
 
@@ -420,44 +431,27 @@ Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \
 
 | Cached | Not Cached |
 |--------|-----------|
-| \`actions knowledge\` (API docs, change infrequently) | \`actions execute\` responses (live data, always fresh) |
-| \`actions search\` results | \`connection list\` (changes with add/remove) |
+| Action docs read by \`actions find\` / \`actions load\` (change infrequently) | \`actions execute\` responses (live data, always fresh) |
+| | \`actions find\` picks (the decision model answers every call) |
+| | \`connection list\` (changes with add/remove) |
 | Action details used by execute / flow / sync preflight (method, path, schema) | |
 
-## Agent Mode \`_cache\` Metadata
+## Cache Status
 
-In \`--agent\` mode, knowledge and search responses include a \`_cache\` field:
-
-\`\`\`json
-{
-  "knowledge": "...",
-  "method": "POST",
-  "truncated": true,
-  "sections": [ ... ],
-  "_cache": {
-    "hit": true,
-    "age": 1423,
-    "fresh": true
-  }
-}
-\`\`\`
-
-Use this to programmatically decide whether to force-refresh.
+\`actions load --cache-status\` prints, for each action id, whether its details are cached, when, their age and TTL, whether they have expired, and their ETag, without fetching anything.
 
 ## Cache Flags
 
 \`\`\`bash
 # Skip cache, fetch fresh (result still gets cached for next time)
-one --agent actions knowledge <platform> <actionId> --no-cache
+one --agent actions load <actionId> --no-cache
+one --agent actions find <platform> "<intent>" --no-cache
 
 # Check cache status without fetching
-one --agent actions knowledge <platform> <actionId> --cache-status
+one --agent actions load <actionId> --cache-status
 
 # Sections and --full are served from the cache once the doc is cached
-one --agent actions knowledge <platform> <actionId> --section "Response Fields"
-
-# Same for search
-one --agent actions search <platform> "<query>" --no-cache
+one --agent actions load <actionId> --section "Response Fields"
 
 # Same for execute's action-details preflight (the action itself always runs live)
 one --agent actions execute <platform> <actionId> <key> --no-cache
@@ -470,7 +464,7 @@ In \`--agent\` mode, execute responses include \`"_preflight": {"cache": "hit"|"
 \`\`\`bash
 one cache list                    # List all cached entries with age and status
 one cache list --expired          # List only expired entries
-one cache clear                   # Delete all cached knowledge and search data
+one cache clear                   # Delete all cached action documentation
 one cache clear <actionId>        # Delete one specific entry
 one cache update-all              # Re-fetch fresh data for all cached entries
 \`\`\`
@@ -735,7 +729,7 @@ Why the block:
   enrichment locally — server-side fan-out on top of that creates 5xx, not value
 
 How to build a profile:
-1. \`one actions search <platform> "<model>"\` surfaces passthrough actions.
+1. \`one actions find <platform> "list <model>" -t knowledge\` surfaces passthrough actions (the pick and its alternatives).
    \`sync init\`'s auto-infer also drops customs before offering choices.
 2. Prefer GET passthrough endpoints (e.g. /gmail/v1/users/{userId}/threads)
    over POST custom endpoints (e.g. /gmail/get-threads).
@@ -1170,7 +1164,7 @@ const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'actions', description: 'Search, read docs, and execute platform actions' },
   { topic: 'flows', description: 'Build and execute multi-step workflows' },
   { topic: 'relay', description: 'Receive webhooks and forward to other platforms' },
-  { topic: 'cache', description: 'Local caching for knowledge and search responses' },
+  { topic: 'cache', description: 'Local caching for action documentation' },
   { topic: 'memory', description: 'Unified memory store: notes, decisions, synced rows, semantic search' },
   { topic: 'sync', description: 'Sync platform data into memory for instant offline queries' },
   { topic: 'all', description: 'Complete guide (all topics combined)' },
@@ -1213,7 +1207,7 @@ export const PLATFORM_DEMO_ACTIONS: Record<string, { description: string; query:
   'hubspot': { description: 'List contacts', query: 'list contacts' },
   'github': { description: 'List repositories', query: 'list repos' },
   'stripe': { description: 'List customers', query: 'list customers' },
-  'notion': { description: 'Search pages', query: 'search' },
+  'notion': { description: 'Search pages', query: 'search pages' },
   'airtable': { description: 'List bases', query: 'list bases' },
   'linear': { description: 'List issues', query: 'list issues' },
 };

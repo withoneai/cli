@@ -116,17 +116,17 @@ common mistakes to avoid. Never guess — read the skill, then act.
 
 ### Quick reference:
 - \`one --agent list\` — See connected platforms and connection keys
-- \`one --agent actions search <platform> "<query>"\` — Find actions
-- \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute; a digest — add \`--section <name>\` or \`--full\` for more)
+- \`one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...]\` — Find every action a task needs, with its docs (READ them before execute)
+- \`one --agent actions load <actionId> --section <name>\` — More of a doc (a digest names the exact command), or \`--full\`
 - \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute action
 - \`one --agent flow create\` — Build multi-step workflows
 - \`one --agent relay create\` — Set up webhook relay (receive events, forward to other platforms)
 - \`one --agent guide\` — Full documentation
 - \`one add <platform>\` — Connect a new platform (interactive, no --agent)
 
-### Workflow: search -> knowledge -> execute
-Always read the knowledge before executing. It tells you required parameters,
-validation rules, and platform-specific details.
+### Workflow: find -> execute
+Always read the documentation find returns before executing. It tells you
+required parameters, validation rules, and platform-specific details.
 
 ### Webhook Relay
 Use \`one relay\` to receive webhooks from platforms (Stripe, GitHub, etc.)
@@ -142,8 +142,7 @@ Handlebars templates. No middleware needed.
 Every command supports \`--agent\` which gives you clean, structured JSON
 output instead of human-formatted text. Always use it:
   one --agent list
-  one --agent actions search gmail "send email"
-  one --agent actions knowledge gmail <actionId>
+  one --agent actions find gmail "send an email" --task "email a report to a contact"
   one --agent actions execute gmail <actionId> <connectionKey> -d '{...}'
   one --agent platforms
   one --agent guide
@@ -151,8 +150,8 @@ output instead of human-formatted text. Always use it:
 The \`--agent\` flag goes right after \`one\`, before the subcommand.
 
 ### Discovery Workflow (follow this every time):
-1. \`one --agent actions search <platform> "<query>"\` — Find the right action
-2. \`one --agent actions knowledge <platform> <actionId>\` — Read the docs (ALWAYS before execute)
+1. \`one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job>"\` — Find every action the task needs, with its docs; each intent names the operation alone, without its data
+2. Read each action's docs (ALWAYS before execute); \`one --agent actions load <actionId> --section <name>\` for a section a digest left out
 3. \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute it
 
 ### Multi-Step Workflows:
@@ -279,7 +278,7 @@ function buildDemoActions(connections: Connection[]): string {
     const displayName = platform.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     lines.push('');
     lines.push(`### ${displayName}`);
-    lines.push(`- ${demo.description}: \`one actions search ${platform} "${demo.query}"\``);
+    lines.push(`- ${demo.description}: \`one actions find ${platform} "${demo.query}"\``);
     lines.push(`- Then get knowledge and execute to show the user the results`);
   }
 

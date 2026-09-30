@@ -1,40 +1,20 @@
-import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
-import {
-  OneApi,
-  filterByPermissions,
-  isActionAllowed,
-  isMethodAllowed,
-  buildActionKnowledgeWithGuidance,
-} from '../lib/api.js';
-import { printTable } from '../lib/table.js';
+import { OneApi, ApiError, isActionAllowed, isMethodAllowed } from '../lib/api.js';
 import * as output from '../lib/output.js';
-import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails, SearchCacheData, SearchCacheAction } from '../lib/types.js';
+import type { PermissionLevel, ActionDetails, FindIntent } from '../lib/types.js';
 import { validateActionInput } from '../lib/validate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import {
-  parseSections,
-  buildDigest,
-  renderDigestNotice,
-  renderDigestBanner,
-  collapseSections,
-  omittedSections,
-  selectSections,
-  parseSectionFlag,
-  flattenSections,
-} from '../lib/knowledge-sections.js';
-import {
-  knowledgeCachePath,
-  searchCachePath,
-  readCache,
-  writeCache,
-  isFresh,
-  getAge,
-  buildCacheMeta,
-  formatAge,
-  makeCacheEntry,
-} from '../lib/cache.js';
+  find,
+  load,
+  renderFind,
+  renderLoad,
+  type FindDeps,
+  type FindSettings,
+  type LoadOptions,
+} from '../lib/find.js';
+import { knowledgeCachePath, readCache, isFresh, getAge, formatAge } from '../lib/cache.js';
 
 function getConfig() {
   const apiKey = getApiKey();
@@ -59,386 +39,142 @@ function parseJsonArg(value: string, argName: string): any {
   }
 }
 
-export async function actionsSearchCommand(
-  platform: string,
-  query: string,
-  options: { type?: string; cache?: boolean }
-): Promise<void> {
+/** The find dependencies over the API, with action details served from the knowledge cache. */
+function findDeps(api: OneApi, connectionKeys: string[], useCache: boolean): FindDeps {
+  return {
+    findActions: (requests, task, knowledgeAgent) => api.findActions(requests, task, knowledgeAgent),
+    getActionDetails: async (actionId) => (await resolveActionDetails(api, actionId, { useCache })).details,
+    connectedPlatforms: async () =>
+      (await api.listConnections()).filter((c) => connectionKeys.includes(c.key)).map((c) => c.platform),
+  };
+}
+
+/** The reason core gave for refusing a request, rather than its raw JSON body. */
+function failure(error: unknown): string {
+  if (error instanceof ApiError) {
+    try {
+      const body = JSON.parse(error.message) as { message?: string };
+      if (body.message) return body.message;
+    } catch {
+      // Not a JSON body; the text is the message.
+    }
+  }
+  return error instanceof Error ? error.message : 'Unknown error';
+}
+
+export interface ActionsFindOptions {
+  task?: string;
+  /** `knowledge` searches the catalog for writing code and building flows; `execute` (default) the one for running actions. */
+  type?: string;
+  /** The AI model running the CLI. Accepted and not read yet, as on the remote MCP's `find_one_actions`. */
+  aiModel?: string;
+  cache?: boolean;
+}
+
+/**
+ * `one actions find <platform> <intent> [<platform> <intent> ...]`: the action
+ * for every operation a task needs, across platforms, with its documentation.
+ */
+export async function actionsFindCommand(pairs: string[], options: ActionsFindOptions): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
 
-  const { apiKey, permissions, actionIds, knowledgeAgent } = getConfig();
+  if (options.type !== undefined && options.type !== 'execute' && options.type !== 'knowledge') {
+    output.error('--type must be execute or knowledge.');
+  }
+  if (pairs.length === 0 || pairs.length % 2 !== 0) {
+    output.error('Pass platform and intent pairs: one actions find <platform> "<intent>" [<platform> "<intent>" ...]');
+  }
+  const requests: FindIntent[] = [];
+  for (let i = 0; i < pairs.length; i += 2) {
+    requests.push({ platform: pairs[i], intent: pairs[i + 1] });
+  }
+
+  const { apiKey, permissions, connectionKeys, actionIds, knowledgeAgent } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
+  const settings: FindSettings = { knowledgeAgent, permissions, actionIds, connectionKeys, apiBase: getApiBase() };
 
   const spinner = output.createSpinner();
-  spinner.start(`Searching actions on ${pc.cyan(platform)} for "${query}"...`);
+  spinner.start(`Finding actions for ${requests.length} intent${requests.length === 1 ? '' : 's'}...`);
 
   try {
-    // Default to execute mode; only use knowledge mode when explicitly enabled in config
-    const agentType = knowledgeAgent
-      ? 'knowledge'
-      : (options.type as 'execute' | 'knowledge' | undefined) || 'execute';
-
-    const useCache = options.cache !== false;
-    const searchType = agentType || 'knowledge';
-    const cachePath = searchCachePath(platform, query, searchType);
-    const cached = useCache ? readCache<SearchCacheData>(cachePath) : null;
-
-    let cleanedActions: SearchCacheAction[];
-    let cacheHit = false;
-
-    if (cached && isFresh(cached)) {
-      // Serve from cache
-      cleanedActions = cached.data.actions;
-      cacheHit = true;
-    } else {
-      // Fetch from API (conditional if stale cache exists)
-      try {
-        const result = await api.searchActionsWithMeta(
-          platform, query, agentType, cached?.etag ?? undefined
-        );
-
-        if (result.status === 304 && cached) {
-          // Content unchanged — update cachedAt and serve cached data
-          cached.cachedAt = new Date().toISOString();
-          writeCache(cachePath, cached);
-          cleanedActions = cached.data.actions;
-          cacheHit = true;
-        } else {
-          let actions = result.data;
-          actions = filterByPermissions(actions, permissions);
-          actions = actions.filter((a) => isActionAllowed(a.systemId, actionIds));
-
-          cleanedActions = actions.map((action) => ({
-            actionId: action.systemId,
-            title: action.title,
-            method: action.method,
-            path: action.path,
-          }));
-
-          // Write to cache, recording the request params so `cache update`
-          // can re-run this exact search later.
-          writeCache(cachePath, makeCacheEntry(
-            `${platform}_${query}_${searchType}`,
-            { actions: cleanedActions, platform, query, searchType },
-            result.etag
-          ));
-        }
-      } catch (fetchError) {
-        // Network failure — serve stale cache if available
-        if (cached) {
-          process.stderr.write(
-            `Warning: serving cached search results (network unavailable, cached ${formatAge(getAge(cached))} ago)\n`
-          );
-          cleanedActions = cached.data.actions;
-          cacheHit = true;
-        } else {
-          throw fetchError;
-        }
-      }
-    }
+    const result = await find(
+      requests,
+      options.task,
+      findDeps(api, connectionKeys, options.cache !== false),
+      settings,
+      options.type === 'knowledge'
+    );
 
     if (output.isAgentMode()) {
-      const response: Record<string, unknown> = { actions: cleanedActions };
-      if (cacheHit && cached) {
-        response._cache = buildCacheMeta(cached, true);
-      } else {
-        const freshEntry = readCache(cachePath);
-        response._cache = buildCacheMeta(freshEntry, false);
-      }
-      output.json(response);
+      output.json(result);
       return;
     }
-
-    if (cleanedActions.length === 0) {
-      spinner.stop('No actions found');
-      p.note(
-        `No actions found for platform '${platform}' matching query '${query}'.\n\n` +
-          `Suggestions:\n` +
-          `  - Try a more general query (e.g., 'list', 'get', 'search', 'create')\n` +
-          `  - Verify the platform name is correct\n` +
-          `  - Check available platforms with ${pc.cyan('one platforms')}\n\n` +
-          `Examples of good queries:\n` +
-          `  - "search contacts"\n` +
-          `  - "send email"\n` +
-          `  - "create customer"\n` +
-          `  - "list orders"`,
-        'No Results'
-      );
-      return;
-    }
-
-    spinner.stop(
-      `Found ${cleanedActions.length} action(s) for '${platform}' matching '${query}'`
-    );
-
+    spinner.stop('Found');
     console.log();
-
-    const rows = cleanedActions.map((a) => ({
-      method: colorMethod(a.method),
-      title: a.title,
-      actionId: a.actionId,
-      path: a.path,
-    }));
-
-    printTable(
-      [
-        { key: 'method', label: 'Method' },
-        { key: 'title', label: 'Title' },
-        { key: 'actionId', label: 'Action ID', color: pc.dim },
-        { key: 'path', label: 'Path', color: pc.dim },
-      ],
-      rows
-    );
-
+    console.log(renderFind(result));
     console.log();
-    p.note(
-      `Get details: ${pc.cyan(`one actions knowledge ${platform} <actionId>`)}\n` +
-        `Execute:     ${pc.cyan(`one actions execute ${platform} <actionId> <connectionKey>`)}`,
-      'Next Steps'
-    );
   } catch (error) {
-    spinner.stop('Search failed');
-    output.error(
-      `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-    );
+    spinner.stop('Find failed');
+    output.error(`Error: ${failure(error)}`);
   }
 }
 
-export interface ActionsKnowledgeOptions {
+export interface ActionsLoadOptions extends LoadOptions {
   cache?: boolean;
   cacheStatus?: boolean;
-  /** `--section <name>` (repeatable / comma-separated): return only these sections. */
-  section?: string | string[];
-  /** `--full`: return the whole document, no digest. */
-  full?: boolean;
-  /** `--toc`: return only the complete section list, no markdown. */
-  toc?: boolean;
 }
 
-export async function actionsKnowledgeCommand(
-  platform: string,
-  actionId: string,
-  options: ActionsKnowledgeOptions
-): Promise<void> {
-  const cachePath = knowledgeCachePath(actionId);
-
-  // --cache-status: print cache metadata and return
+/**
+ * `one actions load <actionId...>`: more of an action's documentation - a
+ * section a digest left out, the whole document, its contents, or an
+ * alternative's digest.
+ */
+export async function actionsLoadCommand(actionIds: string[], options: ActionsLoadOptions): Promise<void> {
+  // --cache-status: print each action's cache metadata and return
   if (options.cacheStatus) {
-    const entry = readCache<ActionKnowledgeResponse>(cachePath);
-    if (!entry) {
-      output.json({
-        cached: false,
-        path: cachePath,
-      });
-    } else {
-      const age = getAge(entry);
-      output.json({
-        cached: true,
-        cachedAt: entry.cachedAt,
-        age: formatAge(age),
-        ttl: entry.ttl,
-        expired: !isFresh(entry),
-        etag: entry.etag,
-        path: cachePath,
-      });
-    }
+    output.json(
+      actionIds.map((actionId) => {
+        const cachePath = knowledgeCachePath(actionId);
+        const entry = readCache<ActionDetails>(cachePath);
+        if (!entry) return { actionId, cached: false, path: cachePath };
+        return {
+          actionId,
+          cached: true,
+          cachedAt: entry.cachedAt,
+          age: formatAge(getAge(entry)),
+          ttl: entry.ttl,
+          expired: !isFresh(entry),
+          etag: entry.etag,
+          path: cachePath,
+        };
+      })
+    );
     return;
   }
 
   output.intro(pc.bgCyan(pc.black(' One ')));
 
-  const { apiKey, actionIds, connectionKeys } = getConfig();
+  const { apiKey, permissions, connectionKeys, actionIds: allowed, knowledgeAgent } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
-
-  // Check action allowlist
-  if (!isActionAllowed(actionId, actionIds)) {
-    output.error(`Action "${actionId}" is not in the allowed action list.`);
-  }
-
-  // Check connection scoping
-  if (!connectionKeys.includes('*')) {
-    const spinner = output.createSpinner();
-    spinner.start('Checking connections...');
-    try {
-      const connections = await api.listConnections();
-      const connectedPlatforms = connections.map((c) => c.platform);
-      if (!connectedPlatforms.includes(platform)) {
-        spinner.stop('Platform not connected');
-        output.error(`Platform "${platform}" has no allowed connections.`);
-      }
-      spinner.stop('Connection verified');
-    } catch (error) {
-      spinner.stop('Failed to check connections');
-      output.error(
-        `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
-    }
-  }
+  const settings: FindSettings = { knowledgeAgent, permissions, actionIds: allowed, connectionKeys, apiBase: getApiBase() };
 
   const spinner = output.createSpinner();
-  spinner.start(`Loading knowledge for action ${pc.dim(actionId)}...`);
+  spinner.start(`Loading ${actionIds.length === 1 ? 'the action' : `${actionIds.length} actions`}...`);
 
   try {
-    // The cache stores the full ActionDetails (method, path, ioSchema, ...) so
-    // a later `actions execute` can reuse it and skip its preflight round trip.
-    const { details, cacheHit, entry } = await resolveActionDetails(api, actionId, {
-      useCache: options.cache !== false,
-    });
-
-    const knowledgeData: ActionKnowledgeResponse = {
-      knowledge: details.knowledge || 'No knowledge was found',
-      method: details.method || 'No method was found',
-    };
-
-    const doc = parseSections(knowledgeData.knowledge);
-    const sectionNames = parseSectionFlag(options.section);
-    const wantFull = options.full === true || sectionNames.some((n) => n.toLowerCase() === 'all');
-    const base = `one --agent actions knowledge ${platform} ${actionId}`;
-
-    const fullToc = flattenSections(doc.sections).map((s) => ({ id: s.id, heading: s.heading, level: s.level, chars: s.chars }));
-
-    // --toc: the complete section list and nothing else. This is the escape
-    // hatch when the digest had to collapse its table of contents.
-    if (options.toc) {
-      if (output.isAgentMode()) {
-        output.json({
-          title: doc.title,
-          method: knowledgeData.method,
-          chars: doc.chars,
-          sections: fullToc,
-          more: { section: `${base} --section <id or heading>[,<id or heading>...]`, full: `${base} --full` },
-          _cache: buildCacheMeta(entry, cacheHit),
-        });
-        return;
-      }
-      spinner.stop('Sections');
-      console.log();
-      for (const t of fullToc) console.log(`${'  '.repeat(Math.max(0, t.level - 1))}${t.heading} ${pc.dim(`[${t.id}] ${t.chars} chars`)}`);
-      console.log();
-      return;
-    }
-
-    // --section: only the requested sections, served from cache. No execution
-    // preamble — the agent saw it on the digest call that listed these names —
-    // and no table of contents either: on a 400-heading doc that is 45 KB of
-    // metadata wrapped around a 1 KB answer.
-    if (sectionNames.length > 0 && !wantFull) {
-      const picked = selectSections(doc, sectionNames);
-      if (!picked.ok) {
-        // Same collapse as the digest: a not-found on a 400-heading doc must
-        // not answer with 39 KB of candidates.
-        const toc = collapseSections(picked.candidates);
-        const list = toc.sections.map((c) => `${'  '.repeat(Math.max(0, c.level - 2))}${c.heading} [${c.id}] (${c.chars} chars${c.children ? `, +${c.children} nested` : ''})`).join('\n');
-        if (output.isAgentMode()) {
-          output.json({
-            error:
-              picked.reason === 'ambiguous'
-                ? `Section "${picked.query}" matches several sections; pick one by id or full heading.`
-                : `No section named "${picked.query}". Use one of the ids or headings below, or --full.`,
-            query: picked.query,
-            reason: picked.reason,
-            sections: toc.sections.map(({ id, heading, level, chars, children }) => (children ? { id, heading, level, chars, children } : { id, heading, level, chars })),
-            ...(toc.collapsed ? { sectionsCollapsed: true, sectionCount: picked.candidates.length } : {}),
-            hint: `${base} --section <id or heading>`,
-            toc: `${base} --toc`,
-          });
-          process.exit(1);
-        }
-        spinner.stop('Section not found');
-        output.error(`${picked.reason === 'ambiguous' ? 'Ambiguous' : 'Unknown'} section "${picked.query}". Available:\n${list}`);
-      }
-      if (output.isAgentMode()) {
-        output.json({
-          knowledge: picked.markdown,
-          method: knowledgeData.method,
-          title: doc.title,
-          // The requested sections are returned whole; nothing here was cut.
-          truncated: false,
-          requested: sectionNames,
-          // What each name matched — fuzzy and alias matches are visible here.
-          resolved: picked.sections.map((s) => ({ id: s.id, heading: s.heading, chars: s.chars })),
-          sectionCount: fullToc.length,
-          more: {
-            note: 'Only the requested sections are included. The digest call listed the others; `--toc` lists all of them.',
-            section: `${base} --section <id or heading>[,<id or heading>...]`,
-            toc: `${base} --toc`,
-            full: `${base} --full`,
-          },
-          _cache: buildCacheMeta(entry, cacheHit),
-        });
-        return;
-      }
-      spinner.stop('Sections loaded');
-      console.log();
-      console.log(picked.markdown);
-      console.log();
-      return;
-    }
-
-    // Agents get a digest by default: request-building sections in full plus a
-    // table of contents for the rest. Humans (and --full) get the whole doc.
-    const digest = buildDigest(
-      doc,
-      output.isAgentMode() && !wantFull ? {} : { wholeDocThreshold: Number.POSITIVE_INFINITY }
-    );
-    // A doc the parser could not section (no headings) is passed through verbatim.
-    const body = doc.sections.length === 0 ? knowledgeData.knowledge : digest.markdown;
-    const notice = renderDigestNotice(digest, platform, actionId);
-    const banner = renderDigestBanner(digest);
-
-    const knowledgeWithGuidance = buildActionKnowledgeWithGuidance(
-      notice ? `${banner}\n\n${body}\n\n${notice}` : body,
-      knowledgeData.method,
-      platform,
-      actionId
-    );
+    const result = await load(actionIds, options, findDeps(api, connectionKeys, options.cache !== false), settings);
 
     if (output.isAgentMode()) {
-      const response: Record<string, unknown> = {
-        knowledge: knowledgeWithGuidance,
-        method: knowledgeData.method,
-        title: doc.title || undefined,
-        truncated: digest.truncated,
-        _cache: buildCacheMeta(entry, cacheHit),
-      };
-      if (digest.truncated) {
-        // Only the omitted sections travel in the envelope — the included ones
-        // are the headings of the markdown itself.
-        const toc = omittedSections(digest);
-        response.omitted = digest.omitted;
-        response.omittedChars = digest.omittedChars;
-        response.sections = toc.sections;
-        if (toc.collapsed) {
-          response.sectionsCollapsed = true;
-          response.sectionCount = digest.sections.length;
-        }
-        response.more = {
-          note: toc.collapsed
-            ? `This is a digest. \`sections\` lists what was omitted, collapsed to ${toc.sections.length} entries (\`children\` counts nested ones); request any by id or heading, or --toc for all ${digest.sections.length} headings.`
-            : 'This is a digest. `sections` lists what was omitted; request any by id or heading.',
-          section: `${base} --section <id or heading>[,<id or heading>...]`,
-          toc: `${base} --toc`,
-          full: `${base} --full`,
-        };
-      }
-      output.json(response);
+      output.json(result);
       return;
     }
-
-    spinner.stop('Knowledge loaded');
+    spinner.stop('Loaded');
     console.log();
-    console.log(knowledgeWithGuidance);
+    console.log(renderLoad(result));
     console.log();
-
-    p.note(
-      `Execute: ${pc.cyan(`one actions execute ${platform} ${actionId} <connectionKey>`)}`,
-      'Next Step'
-    );
   } catch (error) {
-    spinner.stop('Failed to load knowledge');
-    output.error(
-      `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-    );
+    spinner.stop('Load failed');
+    output.error(`Error: ${failure(error)}`);
   }
 }
 
@@ -1018,19 +754,3 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
   console.log();
 }
 
-function colorMethod(method: string): string {
-  switch (method.toUpperCase()) {
-    case 'GET':
-      return pc.green(method);
-    case 'POST':
-      return pc.yellow(method);
-    case 'PUT':
-      return pc.blue(method);
-    case 'PATCH':
-      return pc.magenta(method);
-    case 'DELETE':
-      return pc.red(method);
-    default:
-      return method;
-  }
-}

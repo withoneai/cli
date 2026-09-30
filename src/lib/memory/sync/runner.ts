@@ -328,7 +328,7 @@ export async function syncModel(
     if (actionDetails.tags?.includes('custom')) {
       throw new Error(
         `Sync does not support custom actions. Action ${profile.actionId} is tagged "custom". ` +
-        `Use a passthrough action — run 'one actions search ${platform} "${model}"' to find one, ` +
+        `Use a passthrough action — run 'one actions find ${platform} "list ${model}" -t knowledge' to find one, ` +
         `or compose a flow that chains passthrough calls if the logic is complex.`
       );
     }
