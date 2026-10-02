@@ -24,12 +24,19 @@ describe('startCallbackServer', () => {
     });
   });
 
-  it('resolves the key and its name', async () => {
+  it('resolves the key, its name and what it was granted', async () => {
     await withServer('st', async (port, result) => {
       const s = Buffer.from('sk_live_x').toString('base64');
-      const res = await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&name=${encodeURIComponent('CLI · acme')}`);
+      const name = encodeURIComponent('CLI · acme');
+      const grant = encodeURIComponent('Gmail (Read only), Slack (Full access)');
+      const res = await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&name=${name}&grant=${grant}`);
       assert.equal(res.status, 200);
-      assert.deepEqual(await result, { kind: 'key', apiKey: 'sk_live_x', keyName: 'CLI · acme' });
+      assert.deepEqual(await result, {
+        kind: 'key',
+        apiKey: 'sk_live_x',
+        keyName: 'CLI · acme',
+        grant: 'Gmail (Read only), Slack (Full access)',
+      });
     });
   });
 
@@ -62,7 +69,7 @@ describe('startCallbackServer', () => {
     await withServer('st', async (port, result) => {
       const s = Buffer.from('sk_live_x').toString('base64');
       await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&error=cancelled`);
-      assert.deepEqual(await result, { kind: 'key', apiKey: 'sk_live_x', keyName: undefined });
+      assert.deepEqual(await result, { kind: 'key', apiKey: 'sk_live_x', keyName: undefined, grant: undefined });
     });
   });
 

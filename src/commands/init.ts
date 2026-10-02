@@ -49,7 +49,7 @@ import * as output from '../lib/output.js';
 import type { Agent } from '../lib/types.js';
 import { writeInstalledSkillVersion } from '../lib/skill-sync.js';
 import { getCurrentVersion } from './update.js';
-import { browserLogin } from './login.js';
+import { browserLogin, grantNoteLines } from './login.js';
 
 export interface InitOptions {
   yes?: boolean;
@@ -116,6 +116,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
 
   let apiKey: string;
   let keyName: string | undefined;
+  let grant: string | undefined;
   let whoami: import('../lib/types.js').WhoAmIResponse;
 
   if (auth === 'browser') {
@@ -125,6 +126,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
     }
     apiKey = result.apiKey;
     keyName = result.keyName;
+    grant = result.grant;
     whoami = result.whoami;
   } else {
     const key = options.apiKey?.trim();
@@ -180,6 +182,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
         env: getEnvFromApiKey(apiKey),
       },
       keyName,
+      grant,
       skillInstalled: installed,
       skillFailed: failed,
     });
@@ -200,6 +203,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   console.log(`  ${pc.dim('Account:')} ${scopeDisplay} ${pc.dim('·')} ${envLabel}`);
   console.log(`  ${pc.dim('User:')}    ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
   if (keyName) console.log(`  ${pc.dim('Key:')}     ${keyName}`);
+  if (grant) console.log(`  ${pc.dim('Access:')}  ${grant}`);
   console.log(`  ${pc.dim('Config:')}  ${tildify(configPath)}`);
   if (installed.length > 0) {
     console.log(`  ${pc.dim('Skill:')}   ${pc.green('installed')} ${pc.dim('· ' + installed.join(', '))}`);
@@ -454,6 +458,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
 
   let newKey: string;
   let keyName: string | undefined;
+  let grant: string | undefined;
   let whoamiResult: import('../lib/types.js').WhoAmIResponse;
 
   if (authMethod === 'browser') {
@@ -464,6 +469,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
     }
     newKey = result.apiKey;
     keyName = result.keyName;
+    grant = result.grant;
     whoamiResult = result.whoami;
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
@@ -530,6 +536,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
       `${scopeDisplay} ${pc.dim('·')} ${envLabel}`,
       `${whoamiResult.user.name} ${pc.dim(`(${whoamiResult.user.email})`)}`,
       ...(keyName ? [`${pc.dim('Key:')} ${keyName}`] : []),
+      ...grantNoteLines(grant, pc.dim('Access:')),
     ].join('\n'),
     'Account',
   );
@@ -1107,6 +1114,7 @@ async function freshSetup(
         `${scopeDisplay} ${pc.dim('·')} ${envLabel}`,
         `${result.whoami.user.name} ${pc.dim(`(${result.whoami.user.email})`)}`,
         ...(result.keyName ? [`${pc.dim('Key:')} ${result.keyName}`] : []),
+        ...grantNoteLines(result.grant, pc.dim('Access:')),
       ].join('\n'),
       'Account',
     );

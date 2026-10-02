@@ -15,6 +15,8 @@ const PORT_RANGE_END = 65535;
 const MAX_PORT_ATTEMPTS = 5;
 /** Matches the cap the consent page puts on its key-name field. */
 const MAX_KEY_NAME_LENGTH = 120;
+/** Room for every app a key can be granted (the backend caps a key at 100 rules) with its level. */
+const MAX_GRANT_LENGTH = 4000;
 const MAX_ERROR_LENGTH = 200;
 const CHECK_MARK = `<div style="width:48px;height:48px;border-radius:50%;background:rgba(34,197,94,0.1);display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
 <svg width="24" height="24" fill="none" stroke="#22c55e" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
@@ -37,7 +39,7 @@ const FAILED_HTML = statusPage('Login did not complete', 'The consent page repor
 
 /** What the browser consent page reported back on the localhost callback. */
 export type CallbackOutcome =
-  | { kind: 'key'; apiKey: string; keyName?: string }
+  | { kind: 'key'; apiKey: string; keyName?: string; grant?: string }
   | { kind: 'cancelled' }
   | { kind: 'failed'; reason: string };
 
@@ -103,9 +105,10 @@ export function startCallbackServer(
             return;
           }
           const keyName = cleanParam(url.searchParams.get('name'), MAX_KEY_NAME_LENGTH);
+          const grant = cleanParam(url.searchParams.get('grant'), MAX_GRANT_LENGTH);
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end(SUCCESS_HTML);
-          resolveResult({ kind: 'key', apiKey, keyName });
+          resolveResult({ kind: 'key', apiKey, keyName, grant });
           return;
         }
 
@@ -201,6 +204,13 @@ export interface BrowserLoginResult {
   whoami: WhoAmIResponse;
   /** Name the consent page gave the key, when the page sent one. */
   keyName?: string;
+  /** The apps the page granted the key and at what level, when it sent them. */
+  grant?: string;
+}
+
+/** The note lines naming what the key was granted, wrapped to fit the box. */
+export function grantNoteLines(grant: string | undefined, label: string): string[] {
+  return grant ? wrapForNote(`${label} ${grant}`).split('\n') : [];
 }
 
 export async function browserLogin(opts: BrowserLoginOptions): Promise<BrowserLoginResult | null> {
@@ -270,7 +280,7 @@ export async function browserLogin(opts: BrowserLoginOptions): Promise<BrowserLo
     const api = new OneApi(outcome.apiKey, apiBase);
     const whoami = await api.whoami();
 
-    return { apiKey: outcome.apiKey, whoami, keyName: outcome.keyName };
+    return { apiKey: outcome.apiKey, whoami, keyName: outcome.keyName, grant: outcome.grant };
   } catch (err) {
     spin.stop('Authentication failed.');
     if (err instanceof Error && err.message === 'timeout') {
@@ -344,7 +354,7 @@ export async function loginCommand(): Promise<void> {
   const result = await browserLogin({ scope: targetScope });
   if (!result) return;
 
-  const { apiKey, whoami, keyName } = result;
+  const { apiKey, whoami, keyName, grant } = result;
   saveCredentials(apiKey, targetScope, { keyName, whoami });
 
   // Display result
@@ -364,6 +374,7 @@ export async function loginCommand(): Promise<void> {
     `${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
   ];
   if (keyName) infoLines.push(`${pc.dim('Key:')} ${keyName}`);
+  infoLines.push(...grantNoteLines(grant, pc.dim('Access:')));
   if (whoami.organization) infoLines.push(`${pc.dim('Org:')} ${whoami.organization.name}`);
   if (whoami.project) infoLines.push(`${pc.dim('Project:')} ${whoami.project.name}`);
   infoLines.push('');
