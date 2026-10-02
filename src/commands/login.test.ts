@@ -36,7 +36,19 @@ describe('startCallbackServer', () => {
         apiKey: 'sk_live_x',
         keyName: 'CLI · acme',
         grant: 'Gmail (Read only), Slack (Full access)',
+        knowledgeOnly: false,
       });
+    });
+  });
+
+  it('resolves knowledge only when the page grants it', async () => {
+    await withServer('st', async (port, result) => {
+      const s = Buffer.from('sk_live_x').toString('base64');
+      await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&grant=Knowledge%20only&knowledge=1`);
+      const outcome = await result;
+      assert.equal(outcome.kind, 'key');
+      if (outcome.kind !== 'key') return;
+      assert.equal(outcome.knowledgeOnly, true);
     });
   });
 
@@ -69,7 +81,13 @@ describe('startCallbackServer', () => {
     await withServer('st', async (port, result) => {
       const s = Buffer.from('sk_live_x').toString('base64');
       await fetch(`http://127.0.0.1:${port}/callback?s=${s}&state=st&error=cancelled`);
-      assert.deepEqual(await result, { kind: 'key', apiKey: 'sk_live_x', keyName: undefined, grant: undefined });
+      assert.deepEqual(await result, {
+        kind: 'key',
+        apiKey: 'sk_live_x',
+        keyName: undefined,
+        grant: undefined,
+        knowledgeOnly: false,
+      });
     });
   });
 

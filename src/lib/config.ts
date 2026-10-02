@@ -375,6 +375,8 @@ export interface SaveCredentialsOptions {
   keyName?: string;
   /** Account record already fetched for this key. */
   whoami: WhoAmIResponse;
+  /** The consent page granted the key knowledge only; the CLI matches it. */
+  knowledgeOnly?: boolean;
 }
 
 /**
@@ -399,6 +401,7 @@ export function saveCredentials(apiKey: string, scope: ConfigScope, opts: SaveCr
   };
   if (opts.keyName) next.apiKeyName = opts.keyName;
   else delete next.apiKeyName;
+  if (opts.knowledgeOnly) next.accessControl = { ...existing?.accessControl, knowledgeAgent: true };
   writeConfig(next, scope);
 }
 

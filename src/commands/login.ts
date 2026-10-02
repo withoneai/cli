@@ -39,7 +39,7 @@ const FAILED_HTML = statusPage('Login did not complete', 'The consent page repor
 
 /** What the browser consent page reported back on the localhost callback. */
 export type CallbackOutcome =
-  | { kind: 'key'; apiKey: string; keyName?: string; grant?: string }
+  | { kind: 'key'; apiKey: string; keyName?: string; grant?: string; knowledgeOnly: boolean }
   | { kind: 'cancelled' }
   | { kind: 'failed'; reason: string };
 
@@ -108,7 +108,8 @@ export function startCallbackServer(
           const grant = cleanParam(url.searchParams.get('grant'), MAX_GRANT_LENGTH);
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end(SUCCESS_HTML);
-          resolveResult({ kind: 'key', apiKey, keyName, grant });
+          const knowledgeOnly = url.searchParams.get('knowledge') === '1';
+          resolveResult({ kind: 'key', apiKey, keyName, grant, knowledgeOnly });
           return;
         }
 
@@ -206,6 +207,8 @@ export interface BrowserLoginResult {
   keyName?: string;
   /** The apps the page granted the key and at what level, when it sent them. */
   grant?: string;
+  /** The page granted the key knowledge only. */
+  knowledgeOnly: boolean;
 }
 
 /** The note lines naming what the key was granted, wrapped to fit the box. */
@@ -280,7 +283,13 @@ export async function browserLogin(opts: BrowserLoginOptions): Promise<BrowserLo
     const api = new OneApi(outcome.apiKey, apiBase);
     const whoami = await api.whoami();
 
-    return { apiKey: outcome.apiKey, whoami, keyName: outcome.keyName, grant: outcome.grant };
+    return {
+      apiKey: outcome.apiKey,
+      whoami,
+      keyName: outcome.keyName,
+      grant: outcome.grant,
+      knowledgeOnly: outcome.knowledgeOnly,
+    };
   } catch (err) {
     spin.stop('Authentication failed.');
     if (err instanceof Error && err.message === 'timeout') {
@@ -354,8 +363,8 @@ export async function loginCommand(): Promise<void> {
   const result = await browserLogin({ scope: targetScope });
   if (!result) return;
 
-  const { apiKey, whoami, keyName, grant } = result;
-  saveCredentials(apiKey, targetScope, { keyName, whoami });
+  const { apiKey, whoami, keyName, grant, knowledgeOnly } = result;
+  saveCredentials(apiKey, targetScope, { keyName, whoami, knowledgeOnly });
 
   // Display result
   const pc = (await import('picocolors')).default;

@@ -117,6 +117,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   let apiKey: string;
   let keyName: string | undefined;
   let grant: string | undefined;
+  let knowledgeOnly = false;
   let whoami: import('../lib/types.js').WhoAmIResponse;
 
   if (auth === 'browser') {
@@ -127,6 +128,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
     apiKey = result.apiKey;
     keyName = result.keyName;
     grant = result.grant;
+    knowledgeOnly = result.knowledgeOnly;
     whoami = result.whoami;
   } else {
     const key = options.apiKey?.trim();
@@ -152,7 +154,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   }
 
   // Persist credentials at the chosen scope, preserving any existing config.
-  saveCredentials(apiKey, scope, { keyName, whoami });
+  saveCredentials(apiKey, scope, { keyName, whoami, knowledgeOnly });
 
   // Optional OpenAI key for `one mem` semantic search.
   if (options.openaiKey?.trim()) {
@@ -459,6 +461,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   let newKey: string;
   let keyName: string | undefined;
   let grant: string | undefined;
+  let knowledgeOnly = false;
   let whoamiResult: import('../lib/types.js').WhoAmIResponse;
 
   if (authMethod === 'browser') {
@@ -470,6 +473,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
     newKey = result.apiKey;
     keyName = result.keyName;
     grant = result.grant;
+    knowledgeOnly = result.knowledgeOnly;
     whoamiResult = result.whoami;
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
@@ -556,7 +560,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   }
 
   // Update the key at the active scope; everything else in the file stays.
-  saveCredentials(newKey, scope, { keyName, whoami: whoamiResult });
+  saveCredentials(newKey, scope, { keyName, whoami: whoamiResult, knowledgeOnly });
 
   if (reinstalled.length > 0) {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
@@ -1120,7 +1124,11 @@ async function freshSetup(
     );
 
     // Save API key + whoami to config at the chosen scope
-    saveCredentials(apiKey, scope, { keyName: result.keyName, whoami: result.whoami });
+    saveCredentials(apiKey, scope, {
+      keyName: result.keyName,
+      whoami: result.whoami,
+      knowledgeOnly: result.knowledgeOnly,
+    });
   } else {
     p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
 

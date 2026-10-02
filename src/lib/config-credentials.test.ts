@@ -87,6 +87,16 @@ describe('saveCredentials', () => {
     assert.ok(fresh?.createdAt);
   });
 
+  it('turns on knowledge only for a key the page granted it, keeping the rest of the access control', () => {
+    assertHomeIsSandboxed();
+    fs.writeFileSync(
+      path.join(home.oneDir, 'config.json'),
+      JSON.stringify({ apiKey: 'sk_live_old', installedAgents: [], createdAt: 'then', accessControl: { permissions: 'read' } }),
+    );
+    saveCredentials('sk_live_new', 'global', { whoami: WHOAMI, knowledgeOnly: true });
+    assert.deepEqual(readGlobalConfig()?.accessControl, { permissions: 'read', knowledgeAgent: true });
+  });
+
   it('writes the requested scope even when a project config exists for cwd', () => {
     assertHomeIsSandboxed();
     const projectPath = getProjectConfigPath();
