@@ -97,6 +97,56 @@ describe('saveCredentials', () => {
     assert.deepEqual(readGlobalConfig()?.accessControl, { permissions: 'read', knowledgeAgent: true });
   });
 
+  it('turns a granted knowledge only off when a later key is granted more, dropping an emptied block', () => {
+    assertHomeIsSandboxed();
+    fs.writeFileSync(
+      path.join(home.oneDir, 'config.json'),
+      JSON.stringify({ apiKey: 'sk_live_old', installedAgents: [], createdAt: 'then', accessControl: { permissions: 'read' } }),
+    );
+    saveCredentials('sk_live_ko', 'global', { whoami: WHOAMI, knowledgeOnly: true });
+    assert.equal(readGlobalConfig()?.knowledgeAgentFromGrant, true);
+    saveCredentials('sk_live_full', 'global', { whoami: WHOAMI, knowledgeOnly: false });
+    assert.deepEqual(readGlobalConfig()?.accessControl, { permissions: 'read' });
+    assert.equal('knowledgeAgentFromGrant' in (readGlobalConfig() ?? {}), false);
+
+    fs.writeFileSync(
+      path.join(home.oneDir, 'config.json'),
+      JSON.stringify({
+        apiKey: 'sk_live_old',
+        installedAgents: [],
+        createdAt: 'then',
+        accessControl: { knowledgeAgent: true },
+        knowledgeAgentFromGrant: true,
+      }),
+    );
+    saveCredentials('sk_live_full', 'global', { whoami: WHOAMI, knowledgeOnly: false });
+    assert.equal('accessControl' in (readGlobalConfig() ?? {}), false);
+  });
+
+  it('keeps a knowledge only the user set when a later key is granted more', () => {
+    assertHomeIsSandboxed();
+    fs.writeFileSync(
+      path.join(home.oneDir, 'config.json'),
+      JSON.stringify({ apiKey: 'sk_live_old', installedAgents: [], createdAt: 'then', accessControl: { knowledgeAgent: true } }),
+    );
+    saveCredentials('sk_live_full', 'global', { whoami: WHOAMI, knowledgeOnly: false });
+    assert.deepEqual(readGlobalConfig()?.accessControl, { knowledgeAgent: true });
+
+    saveCredentials('sk_live_ko', 'global', { whoami: WHOAMI, knowledgeOnly: true });
+    saveCredentials('sk_live_full_again', 'global', { whoami: WHOAMI, knowledgeOnly: false });
+    assert.deepEqual(readGlobalConfig()?.accessControl, { knowledgeAgent: true }, 'still the user\'s setting');
+  });
+
+  it('leaves knowledge only as it was for a pasted key', () => {
+    assertHomeIsSandboxed();
+    fs.writeFileSync(
+      path.join(home.oneDir, 'config.json'),
+      JSON.stringify({ apiKey: 'sk_live_old', installedAgents: [], createdAt: 'then', accessControl: { knowledgeAgent: true } }),
+    );
+    saveCredentials('sk_live_pasted', 'global', { whoami: WHOAMI });
+    assert.deepEqual(readGlobalConfig()?.accessControl, { knowledgeAgent: true });
+  });
+
   it('writes the requested scope even when a project config exists for cwd', () => {
     assertHomeIsSandboxed();
     const projectPath = getProjectConfigPath();

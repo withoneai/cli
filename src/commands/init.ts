@@ -117,7 +117,7 @@ async function nonInteractiveInit(options: InitOptions): Promise<void> {
   let apiKey: string;
   let keyName: string | undefined;
   let grant: string | undefined;
-  let knowledgeOnly = false;
+  let knowledgeOnly: boolean | undefined;
   let whoami: import('../lib/types.js').WhoAmIResponse;
 
   if (auth === 'browser') {
@@ -461,7 +461,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   let newKey: string;
   let keyName: string | undefined;
   let grant: string | undefined;
-  let knowledgeOnly = false;
+  let knowledgeOnly: boolean | undefined;
   let whoamiResult: import('../lib/types.js').WhoAmIResponse;
 
   if (authMethod === 'browser') {
@@ -545,8 +545,13 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
     'Account',
   );
 
+  // Update the key at the active scope; everything else in the file stays.
+  // Saved first, and the agents read the access control back from that same
+  // scope, so they carry what the new key was granted.
+  saveCredentials(newKey, scope, { keyName, whoami: whoamiResult, knowledgeOnly });
+
   // Re-install MCP to every agent that currently has it (preserve scopes)
-  const ac = getAccessControl();
+  const ac = (scope === 'project' ? readProjectConfig() : readGlobalConfig())?.accessControl ?? {};
   const reinstalled: string[] = [];
   for (const s of statuses) {
     if (s.globalMcp) {
@@ -558,9 +563,6 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
       reinstalled.push(`${s.agent.name} (project)`);
     }
   }
-
-  // Update the key at the active scope; everything else in the file stays.
-  saveCredentials(newKey, scope, { keyName, whoami: whoamiResult, knowledgeOnly });
 
   if (reinstalled.length > 0) {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);

@@ -116,6 +116,12 @@ export interface Config {
   installedAgents: string[];
   createdAt: string;
   accessControl?: AccessControlSettings;
+  /**
+   * Set when `accessControl.knowledgeAgent` was turned on because the browser
+   * consent page granted the key knowledge only, rather than by the user. A
+   * later login granting more turns the mode off only when this is set.
+   */
+  knowledgeAgentFromGrant?: boolean;
   cacheTtl?: number;
   apiBase?: string;
   whoami?: WhoAmIResponse;

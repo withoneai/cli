@@ -375,8 +375,25 @@ export interface SaveCredentialsOptions {
   keyName?: string;
   /** Account record already fetched for this key. */
   whoami: WhoAmIResponse;
-  /** The consent page granted the key knowledge only; the CLI matches it. */
+  /**
+   * Whether the consent page granted the key knowledge only. A grant turns
+   * the CLI's own mode on; a later grant of more turns it off only when a
+   * grant turned it on, never when the user did. Absent for a pasted key,
+   * which leaves the mode as it was.
+   */
   knowledgeOnly?: boolean;
+}
+
+/** `accessControl` with knowledge-only mode set to `on`, dropping the field
+ *  (and the block, once empty) rather than storing `false`. */
+function withKnowledgeAgent(
+  accessControl: AccessControlSettings | undefined,
+  on: boolean,
+): AccessControlSettings | undefined {
+  const next: AccessControlSettings = { ...accessControl };
+  if (on) next.knowledgeAgent = true;
+  else delete next.knowledgeAgent;
+  return Object.keys(next).length ? next : undefined;
 }
 
 /**
@@ -401,7 +418,14 @@ export function saveCredentials(apiKey: string, scope: ConfigScope, opts: SaveCr
   };
   if (opts.keyName) next.apiKeyName = opts.keyName;
   else delete next.apiKeyName;
-  if (opts.knowledgeOnly) next.accessControl = { ...existing?.accessControl, knowledgeAgent: true };
+  const userSetKnowledge = !!existing?.accessControl?.knowledgeAgent && !existing.knowledgeAgentFromGrant;
+  if (opts.knowledgeOnly !== undefined && !userSetKnowledge) {
+    const accessControl = withKnowledgeAgent(existing?.accessControl, opts.knowledgeOnly);
+    if (accessControl) next.accessControl = accessControl;
+    else delete next.accessControl;
+    if (opts.knowledgeOnly) next.knowledgeAgentFromGrant = true;
+    else delete next.knowledgeAgentFromGrant;
+  }
   writeConfig(next, scope);
 }
 
@@ -439,6 +463,7 @@ export function updateAccessControl(settings: AccessControlSettings): void {
   } else {
     config.accessControl = cleaned;
   }
+  delete config.knowledgeAgentFromGrant;
 
   writeConfig(config);
 }
