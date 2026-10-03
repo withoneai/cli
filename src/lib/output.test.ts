@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { silenceWarningsInAgentMode } from './output.js';
+import { execFileSync } from 'node:child_process';
+import { fitSpinnerMessage, silenceWarningsInAgentMode } from './output.js';
 
 // #88: in --agent mode, process warnings (e.g. Node's experimental-feature
 // warnings) must not be emitted, so they can't interleave with the JSON a
@@ -52,5 +53,35 @@ describe('silenceWarningsInAgentMode (#88)', () => {
     silenceWarningsInAgentMode();
     assert.notEqual(process.emitWarning, origEmit, 'emitWarning must be replaced under ONE_AGENT=1');
     assert.equal(process.env.NODE_NO_WARNINGS, '1');
+  });
+});
+
+describe('fitSpinnerMessage', () => {
+  it('leaves a message that fits one row alone', () => {
+    assert.equal(fitSpinnerMessage('Waiting for browser sign-in (5 min timeout)', 80), 'Waiting for browser sign-in (5 min timeout)');
+    assert.equal(fitSpinnerMessage('Loading platforms', undefined), 'Loading platforms');
+  });
+
+  it('cuts a message that would wrap, so the whole frame stays on one row', () => {
+    const fitted = fitSpinnerMessage('Waiting for browser sign-in (5 min timeout)', 30);
+    assert.equal(fitted, 'Waiting for browser sig…');
+    assert.ok(Array.from(fitted).length + 6 <= 30);
+  });
+});
+
+describe('createSpinner without a terminal', () => {
+  it('prints the message once instead of a frame per tick', () => {
+    const script = `
+      import { createSpinner } from ${JSON.stringify(new URL('./output.ts', import.meta.url).href)};
+      const spin = createSpinner();
+      spin.start('Waiting for browser sign-in (5 min timeout)');
+      setTimeout(() => spin.stop('Authentication received!'), 400);
+    `;
+    const out = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      env: { ...process.env, ONE_AGENT: '' },
+    });
+    assert.equal(out.split('Waiting for browser sign-in').length - 1, 1);
+    assert.ok(out.includes('Authentication received!'));
   });
 });

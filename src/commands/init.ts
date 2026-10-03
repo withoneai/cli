@@ -512,7 +512,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
     newKey = inputKey;
 
     // Validate
-    const spinner = p.spinner();
+    const spinner = output.createSpinner();
     spinner.start('Validating API key...');
 
     const api = new OneApi(newKey, getApiBase());
@@ -918,7 +918,7 @@ async function promptSkillInstall(): Promise<boolean> {
     return false;
   }
 
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start('Installing skill...');
   const { installed, failed } = installSkillForAgents(selectedIds);
   spinner.stop(installed.length > 0 ? 'Skill installed' : 'Installation failed');
@@ -1168,7 +1168,7 @@ async function freshSetup(
     apiKey = inputKey;
 
     // Validate API key
-    const spinner = p.spinner();
+    const spinner = output.createSpinner();
     spinner.start('Validating API key...');
 
     const api = new OneApi(apiKey, getApiBase());
@@ -1341,7 +1341,7 @@ async function promptConnectIntegrations(apiKey: string, connParams?: Connection
       p.note(url, 'Open manually');
     }
 
-    const spinner = p.spinner();
+    const spinner = output.createSpinner();
     spinner.start('Waiting for connection... (complete auth in browser)');
 
     try {

@@ -25,7 +25,7 @@ export async function connectionAddCommand(platformArg?: string, options?: { tag
   const api = new OneApi(apiKey, getApiBase());
 
   // Get platform list for validation
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start('Loading platforms...');
 
   let platforms;
@@ -114,7 +114,7 @@ export async function connectionAddCommand(platformArg?: string, options?: { tag
   }
 
   // Poll for connection
-  const pollSpinner = p.spinner();
+  const pollSpinner = output.createSpinner();
   pollSpinner.start('Waiting for connection... (complete auth in browser)');
 
   try {
@@ -126,7 +126,7 @@ export async function connectionAddCommand(platformArg?: string, options?: { tag
     // platform (e.g. personal vs work Gmail). See cli#122.
     const tag = options?.tag?.trim();
     if (tag) {
-      const tagSpinner = p.spinner();
+      const tagSpinner = output.createSpinner();
       tagSpinner.start(`Tagging connection "${tag}"...`);
       try {
         await api.updateConnectionTags(connection.id, [tag]);

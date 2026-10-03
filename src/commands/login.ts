@@ -257,7 +257,7 @@ export async function browserLogin(opts: BrowserLoginOptions): Promise<BrowserLo
     // Browser open failed — URL is already displayed above
   }
 
-  spin.start('Waiting for authentication... (timeout: 5 min)');
+  spin.start('Waiting for browser sign-in (5 min timeout)');
 
   const timeout = new Promise<never>((_, reject) => {
     const timer = setTimeout(() => {

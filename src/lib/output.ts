@@ -32,11 +32,39 @@ export function silenceWarningsInAgentMode(): void {
   process.emitWarning = (() => {}) as typeof process.emitWarning;
 }
 
+/** Columns a spinner frame needs around its message: the glyph, two spaces and up to three dots. */
+const SPINNER_CHROME = 6;
+
+/**
+ * `msg` cut to fit one terminal row as a spinner frame. Clack redraws a frame
+ * by clearing only the row the cursor is on, so a frame that wraps leaves its
+ * first row behind on every tick and the message piles up down the screen.
+ */
+export function fitSpinnerMessage(msg: string, columns: number | undefined): string {
+  if (!columns || columns <= 0) return msg;
+  const room = columns - SPINNER_CHROME;
+  const chars = Array.from(msg);
+  if (chars.length <= room) return msg;
+  return room > 1 ? `${chars.slice(0, room - 1).join('')}…` : '';
+}
+
 export function createSpinner(): { start(msg: string): void; stop(msg: string): void } {
   if (isAgentMode()) {
     return { start() {}, stop() {} };
   }
-  return p.spinner();
+  // Without a terminal there is no redrawing in place, so every animation
+  // frame would be appended to the output: print each message once instead.
+  if (!process.stdout.isTTY) {
+    return {
+      start: (msg) => p.log.step(msg),
+      stop: (msg) => p.log.message(msg),
+    };
+  }
+  const spinner = p.spinner();
+  return {
+    start: (msg) => spinner.start(fitSpinnerMessage(msg, process.stdout.columns)),
+    stop: (msg) => spinner.stop(msg),
+  };
 }
 
 export function intro(msg: string): void {

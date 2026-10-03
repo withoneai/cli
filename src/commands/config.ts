@@ -184,7 +184,7 @@ export async function configCommand(): Promise<void> {
       return;
     }
 
-    const spinner = p.spinner();
+    const spinner = output.createSpinner();
     spinner.start('Validating API key...');
 
     let isValid = false;
@@ -226,7 +226,7 @@ export async function configCommand(): Promise<void> {
       return;
     }
 
-    const spinner = p.spinner();
+    const spinner = output.createSpinner();
     spinner.start('Validating API key...');
 
     let isValid = false;
@@ -295,7 +295,7 @@ export async function configCommand(): Promise<void> {
 }
 
 async function selectConnections(apiKey: string): Promise<string[] | undefined> {
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start('Fetching connections...');
 
   let connections: { platform: string; key: string }[];
