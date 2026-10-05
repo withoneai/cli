@@ -1,13 +1,20 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
-import { OneApi, TimeoutError, isMethodAllowed, PERMISSION_METHODS } from '../lib/api.js';
-import { resolveAllowedActions, computeConnectionAccess, formatAccess } from '../lib/access.js';
+import { ApiError, OneApi, TimeoutError, PERMISSION_METHODS } from '../lib/api.js';
+import {
+  resolveAllowedActions,
+  computeConnectionAccess,
+  formatAccess,
+  keyAccessActionIds,
+  parseKeyAccess,
+  serverEnvelope,
+} from '../lib/access.js';
 import { openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { Connection, ConnectionAccess, PermissionLevel } from '../lib/types.js';
+import type { Connection, ConnectionAccess, KeyAccess, PermissionLevel } from '../lib/types.js';
 
 export async function connectionAddCommand(platformArg?: string, options?: { tag?: string }): Promise<void> {
   if (output.isAgentMode()) {
@@ -174,29 +181,49 @@ export async function connectionListCommand(options?: { search?: string; limit?:
   spinner.start('Loading connections...');
 
   try {
-    const allConnections = await api.listConnections();
-
-    // Filter by access control settings
     const ac = getAccessControlFromAllSources();
     const permissions: PermissionLevel = ac.permissions || 'admin';
     const allowedKeys = ac.connectionKeys || ['*'];
     const actionIds = ac.actionIds || ['*'];
     const knowledgeOnly = ac.knowledgeAgent || false;
+
+    // The key's rules are read live on every listing: they can be edited on
+    // the dashboard at any time, so nothing about them is cached locally.
+    // Every action id they or the local allowlist name is resolved as soon as
+    // they arrive, alongside the connection listing, so the listing answers
+    // "what can I run here" without a follow-up search.
+    const [allConnections, { keyAccess, idsToResolve, resolvedActions }] = await Promise.all([
+      api.listConnections(),
+      readKeyAccess(api).then(async keyAccess => {
+        if (!keyAccess.ok) return { keyAccess, idsToResolve: [], resolvedActions: [] };
+        const ids = [
+          ...new Set([
+            ...keyAccessActionIds(keyAccess.access),
+            ...(actionIds.includes('*') ? [] : actionIds),
+          ]),
+        ];
+        return { keyAccess, idsToResolve: ids, resolvedActions: await resolveAllowedActions(api, ids) };
+      }),
+    ]);
+
     const accessFiltered = allowedKeys.includes('*')
       ? allConnections
       : allConnections.filter(conn => allowedKeys.includes(conn.key));
 
-    // Resolve what the access config actually permits, so the listing answers
-    // "what can I run here" without a follow-up search. No network cost unless
-    // an action allowlist is configured.
-    const resolvedActions = await resolveAllowedActions(api, actionIds);
-    const unresolvedActionIds = actionIds.includes('*')
-      ? []
-      : actionIds.filter(id => !resolvedActions.some(a => a.actionId === id));
-    const grantedActions = resolvedActions.filter(a => isMethodAllowed(a.method, permissions));
-    const accessFor = (platform: string): ConnectionAccess =>
-      computeConnectionAccess(platform, permissions, actionIds, grantedActions);
+    const serverAccess = keyAccess.ok ? keyAccess.access : null;
+    const unresolvedActionIds = idsToResolve.filter(id => !resolvedActions.some(a => a.actionId === id));
+    const accessFor = (conn: Connection): ConnectionAccess =>
+      keyAccess.ok
+        ? computeConnectionAccess({
+            platform: conn.platform,
+            envelope: serverEnvelope(serverAccess, conn),
+            permissions,
+            localActionIds: actionIds,
+            resolved: resolvedActions,
+          })
+        : { policy: 'unknown' };
     const hintText = accessHint(permissions, actionIds, knowledgeOnly);
+    const accessError = keyAccess.ok ? null : keyAccess.reason;
 
     // Filter by search query if provided
     const searchQuery = options?.search?.toLowerCase();
@@ -220,9 +247,10 @@ export async function connectionListCommand(options?: { search?: string; limit?:
           key: conn.key,
           ...(conn.name && { name: conn.name }),
           ...(conn.tags?.length && { tags: conn.tags }),
-          access: accessFor(conn.platform),
+          access: accessFor(conn),
         })),
         ...(knowledgeOnly && { knowledgeOnly: true }),
+        ...(accessError && { accessError }),
         ...(unresolvedActionIds.length > 0 && { unresolvedActionIds }),
         ...(hintText && { accessHint: hintText }),
         ...(limited.length < filtered.length && {
@@ -261,7 +289,7 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       state: conn.state,
       key: conn.key,
       tags: conn.tags?.length ? conn.tags.join(', ') : '',
-      access: formatAccess(accessFor(conn.platform)),
+      access: formatAccess(accessFor(conn)),
     }));
 
     const hasTags = rows.some(r => r.tags);
@@ -283,14 +311,22 @@ export async function connectionListCommand(options?: { search?: string; limit?:
 
     console.log();
 
+    if (accessError) {
+      p.note(wrapText(accessError), 'Access unknown');
+    }
+
     if (hintText) {
-      const lines = [hintText];
-      if (unresolvedActionIds.length > 0) {
-        lines.push(
-          `Could not resolve ${unresolvedActionIds.length} allowlisted action id(s): ${unresolvedActionIds.join(', ')}`
-        );
-      }
-      p.note(`${wrapText(lines.join('\n'))}\n\nChange it with: ${pc.cyan('one config')}`, 'Access');
+      p.note(`${wrapText(hintText)}\n\nChange it with: ${pc.cyan('one config')}`, 'Access');
+    }
+
+    if (unresolvedActionIds.length > 0) {
+      p.note(
+        wrapText(
+          `Could not look up ${unresolvedActionIds.length} allowed action id(s), so they are left out: ` +
+            unresolvedActionIds.join(', ')
+        ),
+        'Access'
+      );
     }
 
     if (displayed.length < filtered.length) {
@@ -385,6 +421,31 @@ export async function connectionDeleteCommand(
   } catch (error) {
     deleteSpinner.stop('Failed to delete connection');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * The calling key's access rules on One, read from `GET /v1/access/self`.
+ * A failure is reported, never read as "unrestricted".
+ */
+async function readKeyAccess(
+  api: OneApi
+): Promise<{ ok: true; access: KeyAccess | null } | { ok: false; reason: string }> {
+  try {
+    return { ok: true, access: parseKeyAccess(await api.getKeyAccess()) };
+  } catch (error) {
+    const detail =
+      error instanceof ApiError && error.status === 404
+        ? 'this One API does not serve `/v1/access/self` yet'
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    return {
+      ok: false,
+      reason:
+        `Could not read this key's access rules from One (${detail}). ` +
+        'Access is reported as unknown; actions the key may not run fail with 403.',
+    };
   }
 }
 

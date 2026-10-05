@@ -71,24 +71,49 @@ export interface GrantedAction {
 }
 
 /**
- * What the current access config lets you run on one connection, so
- * `one list` answers "what can I do here" without a search. Same shape as the
- * MCP server's `ConnectionAccess` (`policy` discriminant):
+ * What the key may run on one connection, so `one list` answers "what can I
+ * do here" without a search. Same shape as the MCP server's `ConnectionAccess`
+ * (`policy` discriminant), plus `unknown`:
  * - `full`: every action on the connection.
- * - `methods`: only actions whose HTTP method is in the set.
+ * - `methods`: only actions whose method is in the set.
  * - `actions`: only these specific actions.
+ * - `unknown`: the key's rules on One could not be read, so nothing is claimed.
  */
 export type ConnectionAccess =
   | { policy: 'full' }
   | { policy: 'methods'; methods: string[] }
-  | { policy: 'actions'; actions: GrantedAction[] };
+  | { policy: 'actions'; actions: GrantedAction[] }
+  | { policy: 'unknown' };
 
 /**
- * An allowlisted action id resolved to its metadata, including the platform it
- * belongs to so it can be bucketed onto the matching connection.
+ * An action id resolved to its metadata, including the platform it belongs to
+ * so it can be bucketed onto the matching connection.
  */
 export interface ResolvedAllowedAction extends GrantedAction {
   platform: string;
+  /**
+   * The method One's access rules judge the action by: its CRUD verb
+   * (`GetMany` is GET, `Update` is PUT, `Custom` is POST), which can differ
+   * from the HTTP `method` it is sent with.
+   */
+  envelopeMethod: string;
+}
+
+/** One rule on a key, as `GET /v1/access/self` returns it: one connection's envelope. */
+export interface KeyAccessRule {
+  type: 'connection';
+  connectionKey: string;
+  methods?: string[];
+  actionIds?: string[];
+}
+
+/**
+ * A key's access restrictions on One. `rules: null` leaves every connection
+ * bounded only by `methods`; `rules: []` reaches no connection at all.
+ */
+export interface KeyAccess {
+  methods: string[] | null;
+  rules: KeyAccessRule[] | null;
 }
 
 export interface WhoAmIUser { id: string; name: string; email: string }
@@ -184,6 +209,8 @@ export interface ActionDetails {
   knowledge?: string;
   path: string;
   method: string;
+  /** The CRUD-verb method One's access rules judge this action by. */
+  envelopeMethod?: string;
   ioSchema?: IoSchema;
   /** Platform the action belongs to — used to bucket allowlisted actions onto connections. */
   connectionPlatform?: string;

@@ -431,7 +431,7 @@ connection
 connection
   .command('list')
   .alias('ls')
-  .description('List your connections and what your access config lets you run on each')
+  .description("List your connections and what your API key's rules on One let you run on each")
   .option('-s, --search <query>', 'Filter connections by platform name')
   .option('-l, --limit <n>', 'Max connections to return (agent mode default: 20)')
   .action(async (options) => {

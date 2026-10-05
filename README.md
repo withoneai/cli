@@ -199,15 +199,16 @@ one list
 
 You need the connection key (rightmost column) when executing actions.
 
-**Access reporting.** Every connection carries an `access` field describing what the current [access control](#one-config) config permits — so an agent knows its reach up front instead of discovering it as a failure mid-workflow. Three policies:
+**Access reporting.** Every connection carries an `access` field describing what your API key may run there — so an agent knows its reach up front instead of discovering it as a failure mid-workflow. It is read live on every call from the key's rules on One (the per-app access set on the consent page or the dashboard), because those can change at any time, and then narrowed by any local [access control](#one-config) setting. `one list` reads them from `GET /v1/access/self`, which One resolves from the calling key itself, whether it is a personal, organization or project key. Four policies:
 
 | Policy | Means | Shown when |
 |--------|-------|-----------|
-| `{"policy": "full"}` | Every action on the connection | Default (admin, no action allowlist) |
-| `{"policy": "methods", "methods": ["GET"]}` | Only actions with those HTTP methods | Permission level is `read` or `write` |
-| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | An action allowlist is configured |
+| `{"policy": "full"}` | Every action on the connection | The key's rules and local config allow everything |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions of those methods | A rule (or the local permission level) limits the methods |
+| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | A rule (or the local allowlist) names actions; `[]` means nothing may run |
+| `{"policy": "unknown"}` | The key's rules could not be read | `accessError` says why; nothing is assumed |
 
-An action allowlist wins over the permission level (and is then method-filtered by it). When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
+The key's rules on One match methods the way One enforces them: by the action's CRUD verb, so a read sent as POST counts as GET and an update counts as PUT. A local permission level checks the HTTP method. A connection the key's rules don't name reaches nothing. Local settings only narrow what the key allows, never widen it. When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
 
 ```jsonc
 // one --agent list
@@ -226,7 +227,7 @@ An action allowlist wins over the permission level (and is then method-filtered 
 }
 ```
 
-`knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists any allowlisted action ids that could not be looked up. In human output, an `Access` column and a summary note appear only when access is actually scoped.
+`knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), `unresolvedActionIds` lists any allowed action ids that could not be looked up, and `accessError` explains an `unknown` access. In human output, an `Access` column and a summary note appear only when access is actually scoped.
 
 This mirrors the `access` field on the One MCP server's `list_one_integrations` tool, so both surfaces report access the same way.
 
@@ -646,7 +647,7 @@ one config
 
 Settings propagate automatically to all installed agent configs.
 
-Run [`one list`](#one-list) to see the effect: each connection reports an `access` field describing exactly what these settings let you run on it.
+These settings are a local restriction on top of the API key's own rules on One, which are set on the dashboard. Run [`one list`](#one-list) to see the effect: each connection reports an `access` field combining both.
 
 #### `one config skills status` / `one config skills sync`
 

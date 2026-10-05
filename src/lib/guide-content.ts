@@ -134,7 +134,7 @@ Request specific sections:
 - Always use the **exact action ID** from a find answer — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
-- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
+- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\` / \`unknown\`), read live from the key's rules on One — read it before planning so you don't propose an action the key may not run
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 `;
 
@@ -150,17 +150,18 @@ Always follow this sequence. Never execute without reading the action's document
 one --agent connection list
 \`\`\`
 
-Returns platforms, status, connection keys, tags, and an \`access\` field per connection describing what the current access config lets you run there:
+Returns platforms, status, connection keys, tags, and an \`access\` field per connection describing what you may run there. It is read live, on every call, from the API key's rules on One (edited on the dashboard), then narrowed by any local \`one config\` restriction:
 
 | \`access\` | Meaning |
 |----------|---------|
 | \`{"policy": "full"}\` | Every action on the connection |
-| \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
+| \`{"policy": "methods", "methods": ["GET"]}\` | Only actions of these methods will execute. The key's rules on One judge an action by its CRUD verb (a read sent as POST counts as GET, an update counts as PUT); a local \`one config\` level checks the HTTP method |
 | \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly: \`actions load <actionId>\` reads their docs, no find needed |
+| \`{"policy": "unknown"}\` | The key's rules could not be read (\`accessError\` says why) — assume nothing; a disallowed action fails with 403 |
 
-Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read the docs and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
+Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read the docs and write code instead), \`unresolvedActionIds\` (allowed action ids that could not be looked up), \`accessError\` (why access is \`unknown\`), and \`accessHint\` (a one-line summary of the local restriction).
 
-Read \`access\` before planning — it prevents proposing an action the config will reject. Change it with \`one config\`.
+Read \`access\` before planning — it prevents proposing an action the key may not run. The key's own rules are changed on the One dashboard; \`one config\` adds a local restriction on top.
 
 ### 1b. Delete a Connection
 

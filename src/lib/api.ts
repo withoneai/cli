@@ -137,6 +137,14 @@ export class OneApi {
     return this.request<WhoAmIResponse>('/users/whoami');
   }
 
+  /**
+   * The calling key's access rules as the API sent them, resolved by One from
+   * the key itself. Interpret the body with `parseKeyAccess`.
+   */
+  async getKeyAccess(): Promise<unknown> {
+    return this.request<unknown>('/access/self');
+  }
+
   async validateApiKey(): Promise<WhoAmIResponse | false> {
     try {
       return await this.whoami();

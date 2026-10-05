@@ -47,19 +47,21 @@ Always follow this sequence when the user wants to do something on a connected p
 one --agent connection list
 ```
 
-Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for finding actions), and an `access` field per connection telling you what you may run there.
+Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for finding actions), and an `access` field per connection telling you what you may run there. `access` is read live from this API key's rules on One (set on the dashboard, so they can change between calls), narrowed by any local `one config` restriction.
 
 **Read `access` before you plan a workflow** — it saves you from discovering a restriction as a 403 halfway through:
 
 | `access` | What it means |
 |----------|---------------|
 | `{"policy": "full"}` | Every action on this connection is available |
-| `{"policy": "methods", "methods": ["GET"]}` | Only actions with these HTTP methods will execute — don't propose writes |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions of these methods will execute — don't propose writes. The key's rules on One judge an action by its CRUD verb (a read sent as POST counts as GET; an update counts as PUT); a local `one config` level checks the HTTP method |
 | `{"policy": "actions", "actions": [...]}` | Only these exact actions may run. Each has `actionId`, `title`, `method` — **use them directly**: `actions load <actionId>` reads their docs, no find needed |
+| `{"policy": "unknown"}` | The key's rules couldn't be read; `accessError` says why. Don't assume full access — tell the user, and expect a 403 on anything the key may not run |
 
-Two more fields appear only when relevant:
+Three more fields appear only when relevant:
 - `"knowledgeOnly": true` — `actions execute` is disabled. `actions find` returns each action's whole document with how to call it from code; write integration code instead of executing.
-- `"unresolvedActionIds": [...]` — allowlisted ids that couldn't be looked up; treat them as unavailable and tell the user.
+- `"unresolvedActionIds": [...]` — allowed action ids that couldn't be looked up; treat them as unavailable and tell the user.
+- `"accessError": "..."` — why access is `unknown`.
 
 An empty `actions` array means the allowlist grants nothing on that connection — say so rather than looking for alternatives.
 
