@@ -17,6 +17,7 @@ import type {
   WhoAmIResponse,
   FindIntent,
   FoundActions,
+  KeyAccessDocument,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -131,6 +132,21 @@ export class OneApi {
     const text = await response.text();
     if (!text) return {} as T;
     return JSON.parse(text) as T;
+  }
+
+  /**
+   * The calling key's own access, as One enforces it: `GET /v1/access/me`.
+   * Resolves `null` for a key with no restrictions. Throws `ApiError` when the
+   * API does not answer it (for example an older backend without the route).
+   */
+  async getOwnAccess(): Promise<KeyAccessDocument | null> {
+    const body = await this.request<KeyAccessDocument | null | Record<string, never>>('/access/me');
+    if (body === null) return null;
+    if (typeof body !== 'object' || !('rules' in body || 'methods' in body)) {
+      throw new ApiError(502, 'Unexpected answer from /access/me');
+    }
+    const doc = body as KeyAccessDocument;
+    return { methods: doc.methods ?? null, rules: doc.rules ?? null };
   }
 
   async whoami(): Promise<WhoAmIResponse> {

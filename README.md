@@ -185,7 +185,7 @@ Opens your browser, you authorize, done. The CLI polls until the connection is l
 
 ### `one list`
 
-List your active connections with their status, connection keys, and what your access config lets you run on each.
+List your active connections with their status, connection keys, and the access this key has on each.
 
 ```bash
 one list
@@ -199,15 +199,15 @@ one list
 
 You need the connection key (rightmost column) when executing actions.
 
-**Access reporting.** Every connection carries an `access` field describing what the current [access control](#one-config) config permits — so an agent knows its reach up front instead of discovering it as a failure mid-workflow. Three policies:
+**Access reporting.** Every connection carries an `access` field: what this key may run there. The CLI reads it from One (`GET /v1/access/me`, the access chosen on the consent page or later in the dashboard) and narrows it by any limits you set with [`one config`](#one-config) — the server's answer is the ceiling, local settings can only lower it.
 
-| Policy | Means | Shown when |
-|--------|-------|-----------|
-| `{"policy": "full"}` | Every action on the connection | Default (admin, no action allowlist) |
-| `{"policy": "methods", "methods": ["GET"]}` | Only actions with those HTTP methods | Permission level is `read` or `write` |
-| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | An action allowlist is configured |
+| Policy | Means | `level` |
+|--------|-------|---------|
+| `{"policy": "full"}` | Every action on the connection | `full` (Full access) |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions with those methods | `read-only`, `read-write` (GET, POST, PUT, PATCH), or `custom` |
+| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | `custom`, or `none` when empty |
 
-An action allowlist wins over the permission level (and is then method-filtered by it). When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
+A connection the key does not reach is not listed. When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
 
 ```jsonc
 // one --agent list
@@ -219,14 +219,14 @@ An action allowlist wins over the permission level (and is then method-filtered 
       "platform": "gmail",
       "state": "operational",
       "key": "live::gmail::default::abc123",
-      "access": { "policy": "methods", "methods": ["GET"] }
+      "access": { "policy": "methods", "methods": ["GET"], "level": "read-only" }
     }
   ],
-  "accessHint": "Permission level \"read\": only GET actions will execute."
+  "accessSource": "server"
 }
 ```
 
-`knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists any allowlisted action ids that could not be looked up. In human output, an `Access` column and a summary note appear only when access is actually scoped.
+`accessSource` is `"server"` when One reported the key's access and `"local"` when it could not (an older API); then `access` shows only the CLI's own settings, the human table labels the column "Access (CLI settings only)", and `accessHint` says One may allow less. `knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists action ids that could not be looked up.
 
 This mirrors the `access` field on the One MCP server's `list_one_integrations` tool, so both surfaces report access the same way.
 

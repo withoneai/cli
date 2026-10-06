@@ -51,9 +51,12 @@ describe('computeConnectionAccess', () => {
 
 describe('formatAccess', () => {
   it('renders each policy for the table', () => {
-    assert.equal(formatAccess({ policy: 'full' }), 'full');
+    assert.equal(formatAccess({ policy: 'full' }), 'Full access');
+    assert.equal(formatAccess({ policy: 'methods', methods: ['GET'] }), 'Read only');
+    assert.equal(formatAccess({ policy: 'methods', methods: ['GET', 'POST', 'PUT', 'PATCH'] }), 'Read & write');
     assert.equal(formatAccess({ policy: 'methods', methods: ['GET', 'POST'] }), 'GET, POST');
-    assert.equal(formatAccess({ policy: 'actions', actions: [] }), 'none');
+    assert.equal(formatAccess({ policy: 'methods', methods: [] }), 'No access');
+    assert.equal(formatAccess({ policy: 'actions', actions: [] }), 'No access');
   });
 
   it('truncates long action lists', () => {

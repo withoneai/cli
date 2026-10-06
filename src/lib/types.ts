@@ -84,6 +84,31 @@ export type ConnectionAccess =
   | { policy: 'actions'; actions: GrantedAction[] };
 
 /**
+ * One rule of the key's server-side access, as `GET /v1/access/me` answers it.
+ * A missing `methods` falls back to the document's top-level `methods`; a
+ * missing `actionIds` means every action that the methods allow.
+ */
+export interface KeyAccessRule {
+  type: 'connection';
+  connectionKey: string;
+  methods?: string[];
+  actionIds?: string[];
+}
+
+/**
+ * The key's access as One enforces it (`GET /v1/access/me`). `null` from the
+ * endpoint means the key has no restrictions at all. `rules: null` reaches
+ * every connection (bounded by `methods`); `rules: []` reaches none.
+ */
+export interface KeyAccessDocument {
+  methods: string[] | null;
+  rules: KeyAccessRule[] | null;
+}
+
+/** The access level a person picks on the consent page, for display. */
+export type AccessLevel = 'full' | 'read-write' | 'read-only' | 'custom' | 'none';
+
+/**
  * An allowlisted action id resolved to its metadata, including the platform it
  * belongs to so it can be bucketed onto the matching connection.
  */
