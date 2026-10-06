@@ -498,6 +498,28 @@ one relay deliveries --endpoint-id <id>    # Check delivery status
 
 Start with `one relay platforms` to discover which platforms support relay at all, then drill into `event-types <platform>` for the specific events. Run `one guide relay` for the full reference including `--metadata` requirements per platform.
 
+### `one skills`
+
+Optional skills for your coding agent, installed on request. The One skill itself still comes from `one init` (and `one config skills sync|status`); these commands never touch it.
+
+```bash
+one skills list                          # the One skill and each optional skill, with where it is installed
+one skills add connect                   # the One Connect skill, into this project
+one skills add connect --global          # ...or for every project on this machine
+one skills add connect --agents claude-code,windsurf   # link exactly these agents
+one skills update [connect]              # re-copy after upgrading @withone/connect
+one skills remove connect                # remove it and the agent folders that point at it
+```
+
+What `one skills add connect` does:
+
+1. **Finds the skill** in the `@withone/connect` package your project installed (`node_modules/@withone/connect/skills/one-connect`), so your agent reads the docs for the exact SDK version your code calls. If the package isn't installed yet, it downloads the latest published package from npm and checks it against the registry's integrity hash first.
+2. **Installs it** into `.agents/skills/one-connect` (read by Codex, Cursor, Amp and OpenCode) and links `.claude/skills/one-connect` for Claude Code. Windsurf, Kiro, Goose and Roo get a link when the project already has their folder (`.windsurf`, `.kiro`, `.goose`, `.roo`). Where links aren't allowed (Windows without developer mode), it uses a junction, then a copy.
+3. **Stamps** the install with the package version in `.one-skill.json`.
+4. **Keeps it fresh**: any `one` command run in the project re-copies the skill when the installed `@withone/connect` version changes. Local files only; no network.
+
+Commit `.agents/skills/one-connect` and the agent links so your team's agents share the skill. Agent mode (`--agent`) returns JSON for every subcommand.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
