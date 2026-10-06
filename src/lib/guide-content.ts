@@ -134,7 +134,7 @@ Request specific sections:
 - Always use the **exact action ID** from a find answer — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
-- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
+- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`, plus a \`level\`: full, read-write, read-only, custom, none) — what One enforces for this key, narrowed by \`one config\`. Read it before planning so you don't propose an action that will be refused. \`accessSource: "local"\` means One did not report it, so it is unverified
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 - Building an app whose users connect their own tools? \`one skills add connect\` (run inside the app) installs the One Connect skill from the \`@withone/connect\` version the app uses, into \`.agents/skills/one-connect\` and \`.claude/skills/one-connect\`. \`one --agent skills list\` shows what is installed; any \`one\` command in the project refreshes it after an SDK upgrade
 `;
@@ -151,7 +151,7 @@ Always follow this sequence. Never execute without reading the action's document
 one --agent connection list
 \`\`\`
 
-Returns platforms, status, connection keys, tags, and an \`access\` field per connection describing what the current access config lets you run there:
+Returns platforms, status, connection keys, tags, and an \`access\` field per connection: what One enforces for this key (the consent page's choices, or the dashboard's), narrowed by \`one config\`. \`access.level\` names it as the consent page does (full, read-write, read-only, custom, none):
 
 | \`access\` | Meaning |
 |----------|---------|
@@ -159,9 +159,9 @@ Returns platforms, status, connection keys, tags, and an \`access\` field per co
 | \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
 | \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly: \`actions load <actionId>\` reads their docs, no find needed |
 
-Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read the docs and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
+\`accessSource\` is \`server\` when One reported it, \`local\` when it could not (then it is unverified). Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read the docs and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
 
-Read \`access\` before planning — it prevents proposing an action the config will reject. Change it with \`one config\`.
+Read \`access\` before planning — it prevents proposing an action that will be refused. The key's access changes in the dashboard (API keys); this CLI's own limits with \`one config\`.
 
 ### 1b. Delete a Connection
 

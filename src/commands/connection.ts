@@ -1,13 +1,21 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
-import { OneApi, TimeoutError, isMethodAllowed, PERMISSION_METHODS } from '../lib/api.js';
-import { resolveAllowedActions, computeConnectionAccess, formatAccess } from '../lib/access.js';
+import { OneApi, TimeoutError, PERMISSION_METHODS } from '../lib/api.js';
+import {
+  resolveAllowedActions,
+  formatAccess,
+  serverEnvelope,
+  localEnvelope,
+  intersectEnvelopes,
+  envelopeToAccess,
+  accessLevel,
+} from '../lib/access.js';
 import { openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { Connection, ConnectionAccess, PermissionLevel } from '../lib/types.js';
+import type { AccessLevel, Connection, ConnectionAccess, KeyAccessDocument, PermissionLevel } from '../lib/types.js';
 
 export async function connectionAddCommand(platformArg?: string, options?: { tag?: string }): Promise<void> {
   if (output.isAgentMode()) {
@@ -174,29 +182,41 @@ export async function connectionListCommand(options?: { search?: string; limit?:
   spinner.start('Loading connections...');
 
   try {
-    const allConnections = await api.listConnections();
+    // What One enforces for this key (the consent page's choices, or the
+    // dashboard's access editor), fetched beside the listing. An API that
+    // does not answer it yet leaves the CLI's own settings as the only source,
+    // and says so.
+    const [allConnections, serverAccess] = await Promise.all([
+      api.listConnections(),
+      api.getOwnAccess().then(
+        doc => ({ ok: true as const, doc }),
+        () => ({ ok: false as const, doc: null }),
+      ),
+    ]);
 
-    // Filter by access control settings
+    // The CLI's own access settings (`one config`) narrow it further.
     const ac = getAccessControlFromAllSources();
     const permissions: PermissionLevel = ac.permissions || 'admin';
     const allowedKeys = ac.connectionKeys || ['*'];
     const actionIds = ac.actionIds || ['*'];
     const knowledgeOnly = ac.knowledgeAgent || false;
-    const accessFiltered = allowedKeys.includes('*')
-      ? allConnections
-      : allConnections.filter(conn => allowedKeys.includes(conn.key));
 
-    // Resolve what the access config actually permits, so the listing answers
-    // "what can I run here" without a follow-up search. No network cost unless
-    // an action allowlist is configured.
-    const resolvedActions = await resolveAllowedActions(api, actionIds);
-    const unresolvedActionIds = actionIds.includes('*')
-      ? []
-      : actionIds.filter(id => !resolvedActions.some(a => a.actionId === id));
-    const grantedActions = resolvedActions.filter(a => isMethodAllowed(a.method, permissions));
-    const accessFor = (platform: string): ConnectionAccess =>
-      computeConnectionAccess(platform, permissions, actionIds, grantedActions);
-    const hintText = accessHint(permissions, actionIds, knowledgeOnly);
+    const envelopeFor = (key: string) =>
+      intersectEnvelopes(serverEnvelope(serverAccess.doc, key), localEnvelope(permissions, actionIds, allowedKeys, key));
+    const accessFiltered = allConnections.filter(conn => envelopeFor(conn.key).reachable);
+
+    // Resolve every action id either side names, once, through the knowledge
+    // cache. No network cost unless an action list is in play.
+    const namedActionIds = new Set<string>(actionIds.includes('*') ? [] : actionIds);
+    for (const rule of serverAccess.doc?.rules ?? []) for (const id of rule.actionIds ?? []) namedActionIds.add(id);
+    const resolvedActions = await resolveAllowedActions(api, [...namedActionIds]);
+    const unresolved = new Set<string>();
+    const accessFor = (conn: { key: string }): ConnectionAccess => {
+      const { access, unresolved: missing } = envelopeToAccess(envelopeFor(conn.key), resolvedActions, PERMISSION_METHODS[permissions]);
+      missing.forEach(id => unresolved.add(id));
+      return access;
+    };
+    const hintText = accessHint(permissions, actionIds, knowledgeOnly, serverAccess.ok ? serverAccess.doc : undefined);
 
     // Filter by search query if provided
     const searchQuery = options?.search?.toLowerCase();
@@ -220,10 +240,11 @@ export async function connectionListCommand(options?: { search?: string; limit?:
           key: conn.key,
           ...(conn.name && { name: conn.name }),
           ...(conn.tags?.length && { tags: conn.tags }),
-          access: accessFor(conn.platform),
+          access: withLevel(accessFor(conn)),
         })),
+        accessSource: serverAccess.ok ? 'server' : 'local',
         ...(knowledgeOnly && { knowledgeOnly: true }),
-        ...(unresolvedActionIds.length > 0 && { unresolvedActionIds }),
+        ...(unresolved.size > 0 && { unresolvedActionIds: [...unresolved] }),
         ...(hintText && { accessHint: hintText }),
         ...(limited.length < filtered.length && {
           hint: `Showing ${limited.length} of ${filtered.length} connections. Use --search <query> to filter by platform or --limit <n> to see more.`,
@@ -243,6 +264,12 @@ export async function connectionListCommand(options?: { search?: string; limit?:
           `Try: ${pc.cyan('one connection list')} to see all connections.`,
           'No Results'
         );
+      } else if (serverAccess.doc?.rules && allConnections.length === 0) {
+        p.note(
+          `This key reaches no connections: it can search actions and read their docs, but runs none.\n\n` +
+          `Change it in the dashboard under API keys.`,
+          'No Connections'
+        );
       } else {
         p.note(
           `No connections yet.\n\n` +
@@ -261,13 +288,10 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       state: conn.state,
       key: conn.key,
       tags: conn.tags?.length ? conn.tags.join(', ') : '',
-      access: formatAccess(accessFor(conn.platform)),
+      access: formatAccess(accessFor(conn)),
     }));
 
     const hasTags = rows.some(r => r.tags);
-    // Only worth a column when access is actually scoped — an all-"full"
-    // column is noise.
-    const hasScopedAccess = rows.some(r => r.access !== 'full');
 
     printTable(
       [
@@ -276,21 +300,23 @@ export async function connectionListCommand(options?: { search?: string; limit?:
         { key: 'state', label: 'Status' },
         { key: 'key', label: 'Connection Key', color: pc.dim },
         ...(hasTags ? [{ key: 'tags', label: 'Tags', color: pc.dim }] : []),
-        ...(hasScopedAccess ? [{ key: 'access', label: 'Access', color: pc.yellow }] : []),
+        { key: 'access', label: serverAccess.ok ? 'Access' : 'Access (CLI settings only)', color: pc.yellow },
       ],
       rows
     );
 
     console.log();
 
-    if (hintText) {
-      const lines = [hintText];
-      if (unresolvedActionIds.length > 0) {
-        lines.push(
-          `Could not resolve ${unresolvedActionIds.length} allowlisted action id(s): ${unresolvedActionIds.join(', ')}`
-        );
+    if (hintText || unresolved.size > 0) {
+      const lines = hintText ? [hintText] : [];
+      if (unresolved.size > 0) {
+        lines.push(`Could not resolve ${unresolved.size} allowed action id(s): ${[...unresolved].join(', ')}`);
       }
-      p.note(`${wrapText(lines.join('\n'))}\n\nChange it with: ${pc.cyan('one config')}`, 'Access');
+      p.note(
+        `${wrapText(lines.join('\n'))}\n\n` +
+        `This key's access: dashboard → API keys. This CLI's own limits: ${pc.cyan('one config')}`,
+        'Access'
+      );
     }
 
     if (displayed.length < filtered.length) {
@@ -396,18 +422,33 @@ export async function connectionDeleteCommand(
 function accessHint(
   permissions: PermissionLevel,
   actionIds: string[],
-  knowledgeOnly: boolean
+  knowledgeOnly: boolean,
+  server: KeyAccessDocument | null | undefined
 ): string | null {
   const parts: string[] = [];
 
+  if (server === undefined) {
+    parts.push(
+      "One did not report this key's access, so each `access` shows only this CLI's own settings; " +
+      'One may allow less. Check the key in the dashboard under API keys.'
+    );
+  } else if (server?.rules && server.rules.length === 0) {
+    parts.push('This key reaches no connections: it can read docs and search actions, but no action will execute.');
+  } else if (server?.rules?.some(r => r.actionIds)) {
+    parts.push(
+      "Some connections are action-scoped: their `access.actions` are the only actions you may run there — " +
+      'use them directly: `actions load <actionId>` reads their docs, no find needed.'
+    );
+  }
+
   if (!actionIds.includes('*')) {
     parts.push(
-      "Action-scoped: each connection's `access.actions` are the only actions you may run — " +
+      "Action-scoped (local settings): each connection's `access.actions` are the only actions you may run — " +
       'use them directly: `actions load <actionId>` reads their docs, no find needed.'
     );
   } else if (permissions !== 'admin') {
     const methods = PERMISSION_METHODS[permissions]?.join(', ') ?? '';
-    parts.push(`Permission level "${permissions}": only ${methods} actions will execute.`);
+    parts.push(`Permission level "${permissions}" (local settings): only ${methods} actions will execute.`);
   }
 
   if (knowledgeOnly) {
@@ -415,6 +456,11 @@ function accessHint(
   }
 
   return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/** The access shape plus the consent page's level, for agents to relay. */
+function withLevel(access: ConnectionAccess): ConnectionAccess & { level: AccessLevel } {
+  return { ...access, level: accessLevel(access) };
 }
 
 /** Hard-wrap prose so a long hint doesn't stretch the note box past the terminal. */
