@@ -136,6 +136,7 @@ Request specific sections:
 - Connection keys come from \`one connection list\` — don't hardcode them
 - \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
+- Building an app whose users connect their own tools? \`one skills add connect\` (run inside the app) installs the One Connect skill from the \`@withone/connect\` version the app uses, into \`.agents/skills/one-connect\` and \`.claude/skills/one-connect\`. \`one --agent skills list\` shows what is installed; any \`one\` command in the project refreshes it after an SDK upgrade
 `;
 
 export const GUIDE_ACTIONS = `# One Actions — Reference

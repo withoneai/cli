@@ -91,6 +91,11 @@ CI (`.github/workflows/ci.yml`) runs typecheck + tests on Node 18/20/22 across
 ubuntu and windows on every PR. Windows coverage is deliberate — the isolation
 bug above was invisible everywhere else.
 
+### Skills: the One skill and optional skills
+
+- The **One skill** (`skills/one`) ships in this package. `one init` installs it to `~/.agents/skills/one` and links each agent; `lib/skill-sync.ts` re-copies it when the CLI version changes; `one config skills sync|status` manage it.
+- **Optional skills** (`one skills list|add|update|remove`, `lib/project-skills.ts`) belong to an SDK and ship inside that SDK's npm package — the CLI never bundles a copy. Today: `connect` from `@withone/connect`. Installed per project (`.agents/skills/<name>` + agent links), stamped with `.one-skill.json`, refreshed from `node_modules` by the preAction hook when the package version moves (never over the network). To add one, append to `OPTIONAL_SKILLS`.
+
 ### Parked features
 
-- **Remote cloud skills (`one skills` CRUD)** — Removed in the unified skill onboarding PR. The command, API methods, types (`CloudSkill`), and skill-file parser were stripped out. Source files are preserved in git history if we want to bring this back later. The feature allowed managing AI skills stored in the One API via `one skills list/get/create/update/delete`.
+- **Remote cloud skills (the old `one skills` CRUD)** — Removed in the unified skill onboarding PR. The command, API methods, types (`CloudSkill`), and skill-file parser were stripped out. Source files are preserved in git history if we want to bring this back later. The feature allowed managing AI skills stored in the One API via `one skills list/get/create/update/delete`. The `one skills` name now belongs to optional local skills (above).

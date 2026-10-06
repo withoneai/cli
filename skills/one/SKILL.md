@@ -357,6 +357,16 @@ One also supports more advanced patterns. Read the relevant reference file befor
 - **Webhook Relay** — Receive webhooks from a platform and forward to another (e.g., Stripe event -> Slack message). Read `references/relay.md` in this skill's directory for the full workflow.
 - **Multi-step Workflows** — Chain actions across platforms as JSON workflow files (like n8n/Zapier but file-based). Read `references/flows.md` in this skill's directory for the schema and examples. To debug: `flow execute <key> --dry-run` (resolve interpolations without running), `--stop-after <stepId>` (run up to a step then stop), and `flow inspect <runId>` (a past run's per-step outputs).
 
+## Adding One Connect to an App
+
+When the user is building an app whose own users should connect their tools (Gmail, Stripe, Slack...) to it, that is One Connect, not this CLI's connections. Install its skill inside the app, then follow it:
+
+```bash
+one --agent skills add connect      # from the @withone/connect version the app installed; latest from npm otherwise
+```
+
+It lands in `.agents/skills/one-connect` (and `.claude/skills/one-connect`). The result's `next` array says what to do; the skill covers the button, the two routes, key mode vs token mode, and calling One with the grant. Never ask the user to paste the client secret or connect key into chat.
+
 ## Adding New Connections
 
 If the user needs a platform that isn't connected yet, tell them to run:

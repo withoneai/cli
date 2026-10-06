@@ -55,6 +55,8 @@ import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVers
 import { closeBackendIfCached } from './lib/memory/runtime.js';
 import { setAgentMode, isAgentMode, json as outputJson, error as outputError, silenceWarningsInAgentMode } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
+import { refreshProjectSkills } from './lib/project-skills.js';
+import { skillsAddCommand, skillsListCommand, skillsRemoveCommand, skillsUpdateCommand } from './commands/skills.js';
 import * as analytics from './lib/analytics.js';
 
 // Before anything runs: in --agent mode, keep process warnings off stdout/stderr
@@ -86,6 +88,12 @@ program
     2. one actions find <p> <intent> ...  Find the action for every operation a task needs, with its docs (ALWAYS read them before execute)
     3. one actions execute <p> <id> <key> Execute the action
        one actions load <id> --section <s> More of an action's docs: a section a digest left out, --full, or --toc
+
+  Skills for your coding agent:
+    one skills list                       The One skill and the optional ones (installed or not)
+    one skills add connect                Add the One Connect skill to this project (--global for every project)
+    one skills update [connect]           Re-copy from the installed @withone/connect after an upgrade
+    one skills remove connect             Remove it
 
   Guide:
     one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, memory, sync, all)
@@ -173,6 +181,12 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (commandName !== 'init' && commandName !== 'update') {
     try { syncSkillsIfStale(); } catch { /* best-effort, never block a command */ }
   }
+  // Optional skills a project added with `one skills add` (e.g. Connect)
+  // follow the SDK version the project has installed. Local files only;
+  // a no-op unless such a skill is installed here. See lib/project-skills.ts.
+  if (commandName !== 'skills') {
+    try { refreshProjectSkills(process.cwd(), getCurrentVersion()); } catch { /* best-effort, never block a command */ }
+  }
 });
 
 program.hook('postAction', async () => {
@@ -225,6 +239,44 @@ program
   .description('Clear local credentials')
   .action(async () => {
     await logoutCommand();
+  });
+
+const skills = program
+  .command('skills')
+  .description('Optional skills for your coding agent, such as One Connect (the One skill itself comes from one init)');
+
+skills
+  .command('list')
+  .description('Show the One skill and each optional skill, with where it is installed')
+  .action(async () => {
+    await skillsListCommand();
+  });
+
+skills
+  .command('add <name>')
+  .description('Install an optional skill (connect) into this project, from the SDK version it uses')
+  .option('-g, --global', 'Install for every project on this machine instead')
+  .option('--agents <ids>', 'Comma-separated agents to link: claude-code, codex, cursor, amp, opencode, windsurf, kiro, goose, roo')
+  .action(async (name: string, options: { global?: boolean; agents?: string }) => {
+    await skillsAddCommand(name, options);
+  });
+
+skills
+  .command('update [name]')
+  .description('Re-copy installed optional skills from their source (all when no name is given)')
+  .option('-g, --global', 'Update the global install')
+  .option('--agents <ids>', 'Change which agents are linked')
+  .action(async (name: string | undefined, options: { global?: boolean; agents?: string }) => {
+    await skillsUpdateCommand(name, options);
+  });
+
+skills
+  .command('remove <name>')
+  .alias('rm')
+  .description('Remove an optional skill and the agent folders that point at it')
+  .option('-g, --global', 'Remove the global install')
+  .action(async (name: string, options: { global?: boolean }) => {
+    await skillsRemoveCommand(name, options);
   });
 
 const config = program
