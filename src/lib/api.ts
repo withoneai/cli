@@ -1,3 +1,4 @@
+import { callerHeaders } from './caller.js';
 import { createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -411,6 +412,9 @@ export class OneApi {
       'x-one-action-id': action._id,
       'Content-Type': contentType,
       Accept: 'application/json, text/event-stream, */*',
+      // Who is calling, for the Logs page. Before the caller's own headers so
+      // an explicit --headers value still wins.
+      ...callerHeaders(),
       ...args.headers,
     };
 
