@@ -47,7 +47,7 @@ Find the actions a task needs with their docs, in one call, then execute them. T
 \`\`\`bash
 one --agent connection list                                    # See connected platforms + your access on each
 one --agent connection delete <connection-key>                 # Remove a connection
-one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>"  # Find every action, with its docs (READ them)
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>" --ai-model "<your model>"  # Find every action, with its docs (READ them)
 one --agent actions load <actionId> --section "<name>"          # More of a doc: a section it left out, --full, --toc
 one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 \`\`\`
@@ -174,15 +174,15 @@ Removes a connection by its key. In agent mode, returns \`{"deleted": true, "pla
 ### 2. Find Actions
 
 \`\`\`bash
-one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>"
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>" --ai-model "<your model>"
 \`\`\`
 
 One call for the whole task: one platform and intent pair per operation, on any platforms (up to 10). One's decision model picks the action for each and returns it **with its documentation** — required fields, validation rules, request structure. **Read it before execute.**
 
 - **\`intent\` names the operation alone**, in a few words: \`"send a message to a channel"\`, not \`"post 'deploy done' in #eng"\`. IDs, names, and message text in the intent make the search miss.
-- **\`--task\`** (optional) is the whole job in one line, **in general terms**: what it does, without names, addresses, IDs, or message text. It helps choose between similar actions.
+- **\`--task\`**: send it with every find. It is the whole job in one line, **in general terms**: what it does, without names, addresses, IDs, or message text. It helps tell similar actions apart.
 - **\`-t knowledge\`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default, \`-t execute\`, is the catalog for running actions now. Knowledge-only mode always uses \`knowledge\`.
-- **\`--ai-model\`** (optional) names the model running the CLI (e.g. \`claude-sonnet-5\`); it is recorded with the find so the account's usage can report which model asked.
+- **\`--ai-model\`**: send it with every find. Your model name as you know it (e.g. \`claude-sonnet-5\`), recorded with the find; leave it out only if you do not know which model you are.
 - **\`--no-knowledge\`** (optional) lists the chosen actions without their documentation, when only the actionIds are needed. Load the documentation with \`actions load\` before executing.
 
 In \`--agent\` mode:
