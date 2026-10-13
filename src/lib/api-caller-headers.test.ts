@@ -39,6 +39,34 @@ describe('callerHeaders', () => {
   it('sends no agent for a plain terminal', () => {
     assert.equal(callerHeaders({ CURSOR_TRACE_ID: 'editor-only' })['x-one-agent'], undefined);
   });
+
+  it('names the model only when the agent gave one', () => {
+    assert.equal(callerHeaders({}, 'claude-sonnet-5')['x-one-agent-model'], 'claude-sonnet-5');
+    assert.equal(callerHeaders({}, '  claude-sonnet-5  ')['x-one-agent-model'], 'claude-sonnet-5');
+    assert.equal(callerHeaders({}, '   ')['x-one-agent-model'], undefined);
+    assert.equal(callerHeaders({})['x-one-agent-model'], undefined);
+  });
+});
+
+describe('OneApi.findActions caller headers', () => {
+  it('names the CLI, the launching harness and the model on a find', async () => {
+    process.env.CLAUDECODE = '1';
+    const { calls } = capture();
+    await new OneApi('sk_live_k', 'https://api.test/v1').findActions([{ platform: 'gmail', intent: 'send an email' }], undefined, false, 'claude-sonnet-5');
+    assert.equal(calls[0].url, 'https://api.test/v1/available-actions/find');
+    assert.equal(calls[0].headers['x-one-source'], 'cli');
+    assert.equal(calls[0].headers['x-one-agent'], 'claude-code');
+    assert.equal(calls[0].headers['x-one-agent-model'], 'claude-sonnet-5');
+    assert.equal(calls[0].headers['x-one-secret'], 'sk_live_k');
+  });
+
+  it('sends only the source from a plain terminal without --ai-model', async () => {
+    const { calls } = capture();
+    await new OneApi('k', 'https://api.test/v1').findActions([{ platform: 'gmail', intent: 'send an email' }], undefined, false);
+    assert.equal(calls[0].headers['x-one-source'], 'cli');
+    assert.equal(calls[0].headers['x-one-agent'], undefined);
+    assert.equal(calls[0].headers['x-one-agent-model'], undefined);
+  });
 });
 
 describe('OneApi.executePassthroughRequest caller headers', () => {
@@ -66,7 +94,7 @@ describe('OneApi.executePassthroughRequest caller headers', () => {
     assert.equal(calls[0].headers['x-one-agent'], 'my-bot/1.0');
   });
 
-  it('does not touch non-passthrough requests', async () => {
+  it('does not touch requests other than passthrough and find', async () => {
     process.env.CLAUDECODE = '1';
     const { calls } = capture();
     await new OneApi('k', 'https://api.test/v1').getOwnAccess().catch(() => undefined);

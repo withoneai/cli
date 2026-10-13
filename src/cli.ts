@@ -520,7 +520,7 @@ actions
   .description('Find the action for every operation a task needs, across platforms, with its documentation, in one call: one actions find <platform> "<intent>" [<platform> "<intent>" ...] (up to 10 pairs). Each intent names the operation alone ("send an email"), without its data. Large documents come back as a digest; each names the exact `actions load` command for what it left out')
   .option('--task <task>', 'The whole task in one line, in general terms (e.g. "email a report to a contact"): what it does, without names, addresses, IDs or message text. Helps choose between similar actions')
   .option('-t, --type <type>', 'execute (default: actions to run now) or knowledge (the catalog for writing code and building flows and relays, with the platform\'s own endpoints). Knowledge-only mode always uses knowledge')
-  .option('--ai-model <model>', 'The AI model running the CLI (e.g. claude-sonnet-5), which helps optimize the documentation returned. Optional')
+  .option('--ai-model <model>', 'The AI model you are running as (e.g. claude-sonnet-5), recorded with this find so the account\'s usage can report which model asked. Optional')
   .option('--no-cache', 'Bypass the cache for action documentation and re-fetch it (the fresh response still refreshes the cache)')
   .option('--no-knowledge', 'List the chosen actions (actionId, title, method, path) without their documentation; load it with `one actions load <actionId>`')
   .action(async (pairs: string[], options: { task?: string; type?: string; aiModel?: string; cache?: boolean; knowledge?: boolean }) => {
