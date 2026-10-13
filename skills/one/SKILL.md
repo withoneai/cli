@@ -76,15 +76,15 @@ Removes a connection. Returns `{"deleted": true, "platform": "...", "key": "..."
 ### 2. Find every action the task needs, with its docs (READ them before executing)
 
 ```bash
-one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>"
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>" --ai-model "<your model>"
 ```
 
 **One call for the whole task**: one platform and intent pair per operation, on any platforms (up to 10). One's decision model picks the action for each and returns it **with its documentation**: exactly what parameters are required, how to structure the request, and where each value goes. Never execute without reading it — without it you'll guess wrong on parameters.
 
 - **`intent` names the operation alone**, in a few words: `"send a message to a channel"`, not `"post 'deploy done' in #eng"`. IDs, names, and message text in the intent make the search miss.
-- **`--task`** (optional) is the whole job in one line, **in general terms**: `"email a weather report to a contact"`, without names, addresses, IDs, or message text. It helps choose between similar actions.
+- **`--task`**: send it with every find. It is the whole job in one line, **in general terms**: `"email a weather report to a contact"`, without names, addresses, IDs, or message text. It helps tell similar actions apart.
 - **`-t knowledge`** searches the catalog for writing code and building flows and relays (it includes the platform's own passthrough endpoints); the default, `-t execute`, is the catalog for running actions now.
-- **`--ai-model`** (optional): the model you are running as (e.g. `claude-sonnet-5`), recorded with the find so the account's usage can report which model asked.
+- **`--ai-model`**: send it with every find. Your model name as you know it (e.g. `claude-sonnet-5`), recorded with the find; leave it out only if you do not know which model you are.
 - **`--no-knowledge`** (optional): list the chosen actions without their documentation, when you only need the actionIds. Load the documentation with `actions load` before executing.
 - Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`.
 
