@@ -290,13 +290,21 @@ export class OneApi {
   /**
    * The action for each intent, across platforms, in one call: search plus
    * One's decision model, which picks among the candidates. Core caps a call
-   * at 10 intents and refuses more with a 400 naming the cap.
+   * at 10 intents and refuses more with a 400 naming the cap. `aiModel` is the
+   * model the agent says it is running as, sent beside the CLI and harness.
    */
-  async findActions(requests: FindIntent[], task: string | undefined, knowledgeAgent: boolean): Promise<FoundActions[]> {
+  async findActions(
+    requests: FindIntent[],
+    task: string | undefined,
+    knowledgeAgent: boolean,
+    aiModel?: string
+  ): Promise<FoundActions[]> {
     const response = await this.requestFull<FoundActions[]>({
       path: '/available-actions/find',
       method: 'POST',
       body: { requests, ...(task ? { task } : {}), knowledgeAgent },
+      // Who asked, for the record of what agents ask a find.
+      headers: callerHeaders(process.env, aiModel),
     });
     return Array.isArray(response) ? response : [];
   }

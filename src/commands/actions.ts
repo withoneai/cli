@@ -40,9 +40,9 @@ function parseJsonArg(value: string, argName: string): any {
 }
 
 /** The find dependencies over the API, with action details served from the knowledge cache. */
-function findDeps(api: OneApi, connectionKeys: string[], useCache: boolean): FindDeps {
+function findDeps(api: OneApi, connectionKeys: string[], useCache: boolean, aiModel?: string): FindDeps {
   return {
-    findActions: (requests, task, knowledgeAgent) => api.findActions(requests, task, knowledgeAgent),
+    findActions: (requests, task, knowledgeAgent) => api.findActions(requests, task, knowledgeAgent, aiModel),
     getActionDetails: async (actionId) => (await resolveActionDetails(api, actionId, { useCache })).details,
     connectedPlatforms: async () =>
       (await api.listConnections()).filter((c) => connectionKeys.includes(c.key)).map((c) => c.platform),
@@ -66,7 +66,7 @@ export interface ActionsFindOptions {
   task?: string;
   /** `knowledge` searches the catalog for writing code and building flows; `execute` (default) the one for running actions. */
   type?: string;
-  /** The AI model running the CLI. Accepted and not read yet, as on the remote MCP's `find_one_actions`. */
+  /** The AI model running the CLI, sent with the find so One records which model asked, as the remote MCP's `find_one_actions` does. */
   aiModel?: string;
   cache?: boolean;
   /** False (`--no-knowledge`) lists the chosen actions without their documentation. */
@@ -102,7 +102,7 @@ export async function actionsFindCommand(pairs: string[], options: ActionsFindOp
     const result = await find(
       requests,
       options.task,
-      findDeps(api, connectionKeys, options.cache !== false),
+      findDeps(api, connectionKeys, options.cache !== false, options.aiModel),
       settings,
       { knowledgeCatalog: options.type === 'knowledge', knowledge: options.knowledge !== false }
     );

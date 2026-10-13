@@ -182,7 +182,7 @@ One call for the whole task: one platform and intent pair per operation, on any 
 - **\`intent\` names the operation alone**, in a few words: \`"send a message to a channel"\`, not \`"post 'deploy done' in #eng"\`. IDs, names, and message text in the intent make the search miss.
 - **\`--task\`** (optional) is the whole job in one line, **in general terms**: what it does, without names, addresses, IDs, or message text. It helps choose between similar actions.
 - **\`-t knowledge\`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default, \`-t execute\`, is the catalog for running actions now. Knowledge-only mode always uses \`knowledge\`.
-- **\`--ai-model\`** (optional) names the model running the CLI (e.g. \`claude-sonnet-5\`); it will be used to tune documentation per model.
+- **\`--ai-model\`** (optional) names the model running the CLI (e.g. \`claude-sonnet-5\`); it is recorded with the find so the account's usage can report which model asked.
 - **\`--no-knowledge\`** (optional) lists the chosen actions without their documentation, when only the actionIds are needed. Load the documentation with \`actions load\` before executing.
 
 In \`--agent\` mode:
