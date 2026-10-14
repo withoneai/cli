@@ -85,6 +85,7 @@ one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --tas
 - **`--task`**: send it with every find. It is the whole job in one line, **in general terms**: `"email a weather report to a contact"`, without names, addresses, IDs, or message text. It helps tell similar actions apart.
 - **`-t knowledge`** searches the catalog for writing code and building flows and relays (it includes the platform's own passthrough endpoints); the default, `-t execute`, is the catalog for running actions now.
 - **`--ai-model`**: send it with every find. Your model name as you know it (e.g. `claude-sonnet-5`), recorded with the find; leave it out only if you do not know which model you are.
+- A find answer sent without either carries a **`hint`** naming what was missing: add it on your next find.
 - **`--no-knowledge`** (optional): list the chosen actions without their documentation, when you only need the actionIds. Load the documentation with `actions load` before executing.
 - Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`.
 

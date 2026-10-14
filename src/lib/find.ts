@@ -110,6 +110,24 @@ export interface FindResult {
   answers: FindAnswer[];
   /** What applies to every documented action, stated once: how to execute, or the code guide's rules. */
   guide?: string;
+  /** Set when the find came without `--task` or `--ai-model`: asks for them on the next find (see {@link findHint}). */
+  hint?: string;
+}
+
+/**
+ * What a find should have carried, said back to the agent in its answer: the
+ * task (it helps tell similar actions apart) and the model (recorded with the
+ * find). Agents that never read the skill still read the answer, so this is
+ * where the ask reaches them. Undefined when both were sent; a blank value
+ * counts as missing. Never blocks a find: both stay optional.
+ */
+export function findHint(task?: string, aiModel?: string): string | undefined {
+  const missing = [
+    task?.trim() ? null : '--task "<the whole job in one line, in general terms, without names, addresses, IDs or message text>"',
+    aiModel?.trim() ? null : '--ai-model "<your model name>"',
+  ].filter((m): m is string => m !== null);
+  if (missing.length === 0) return undefined;
+  return `Send ${missing.join(' and ')} with every find: the task helps tell similar actions apart, and both are recorded with the find.`;
 }
 
 /** One `actions load` entry's outcome. */

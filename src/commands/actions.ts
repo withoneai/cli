@@ -13,6 +13,7 @@ import {
   type FindDeps,
   type FindSettings,
   type LoadOptions,
+  findHint,
 } from '../lib/find.js';
 import { knowledgeCachePath, readCache, isFresh, getAge, formatAge } from '../lib/cache.js';
 
@@ -107,13 +108,15 @@ export async function actionsFindCommand(pairs: string[], options: ActionsFindOp
       { knowledgeCatalog: options.type === 'knowledge', knowledge: options.knowledge !== false }
     );
 
+    const hint = findHint(options.task, options.aiModel);
     if (output.isAgentMode()) {
-      output.json(result);
+      output.json(hint ? { ...result, hint } : result);
       return;
     }
     spinner.stop('Found');
     console.log();
     console.log(renderFind(result));
+    if (hint) console.log(`\n${pc.dim(hint)}`);
     console.log();
   } catch (error) {
     spinner.stop('Find failed');
