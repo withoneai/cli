@@ -6,6 +6,7 @@ import {
   FindArgsError,
   REFUSED_LOAD,
   find,
+  findHint,
   load,
   renderFind,
   type DocumentedAction,
@@ -284,5 +285,34 @@ describe('actions load', () => {
     const result = await load(['missing', 'a'], { full: true }, deps([], { a: huge }), settings());
 
     assert.equal((result.loaded[1] as DocumentedAction).knowledge, huge);
+  });
+});
+
+describe('find hint', () => {
+  it('asks for the task and the model when a find carries neither', () => {
+    const hint = findHint(undefined, undefined);
+    assert.ok(hint);
+    assert.match(hint, /--task/);
+    assert.match(hint, /--ai-model/);
+  });
+
+  it('names only what is missing', () => {
+    const noTask = findHint(undefined, 'claude-sonnet-5');
+    assert.ok(noTask);
+    assert.match(noTask, /--task/);
+    assert.doesNotMatch(noTask, /--ai-model/);
+
+    const noModel = findHint('email a report to a contact', undefined);
+    assert.ok(noModel);
+    assert.match(noModel, /--ai-model/);
+    assert.doesNotMatch(noModel, /--task/);
+  });
+
+  it('treats a blank value as missing', () => {
+    assert.match(findHint('   ', 'claude-sonnet-5') ?? '', /--task/);
+  });
+
+  it('says nothing when both were sent', () => {
+    assert.equal(findHint('email a report to a contact', 'claude-sonnet-5'), undefined);
   });
 });

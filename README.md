@@ -269,6 +269,7 @@ one actions find shopify "list products" -t knowledge
 - **`--task`** describes the whole job in one line, in general terms. Agents are asked to send it with every find, since it helps tell similar actions apart.
 - **`-t knowledge`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default is the catalog for running actions now.
 - **`--ai-model`** names the model running the CLI (e.g. `claude-sonnet-5`), recorded with the find beside the CLI and the harness that launched it, so the account's usage can report which model asked. Agents are asked to send it with every find.
+- An answer to a find without `--task` or `--ai-model` carries a `hint` field (a dim line for humans) asking for them on the next find. Both stay optional.
 - **`--no-knowledge`** lists the chosen actions (actionId, title, method, path) without fetching their documentation; load it later with `one actions load <actionId>`.
 
 Each intent's answer gives the action(s) to use with their docs, any actions also needed beside them, a **substitute** when the model was unsure (use one or the other, never both), and a few alternatives, then says once how to execute. Always read the docs before executing. The access settings from `one config` apply: an action they refuse is never offered.

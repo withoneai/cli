@@ -183,6 +183,7 @@ One call for the whole task: one platform and intent pair per operation, on any 
 - **\`--task\`**: send it with every find. It is the whole job in one line, **in general terms**: what it does, without names, addresses, IDs, or message text. It helps tell similar actions apart.
 - **\`-t knowledge\`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default, \`-t execute\`, is the catalog for running actions now. Knowledge-only mode always uses \`knowledge\`.
 - **\`--ai-model\`**: send it with every find. Your model name as you know it (e.g. \`claude-sonnet-5\`), recorded with the find; leave it out only if you do not know which model you are.
+- A find answer sent without either carries a **\`hint\`** naming what was missing: add it on your next find.
 - **\`--no-knowledge\`** (optional) lists the chosen actions without their documentation, when only the actionIds are needed. Load the documentation with \`actions load\` before executing.
 
 In \`--agent\` mode:
