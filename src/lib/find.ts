@@ -75,6 +75,16 @@ export interface FindSettings {
 /** A call that has to be fixed before it can be answered. */
 export class FindArgsError extends Error {}
 
+/**
+ * The first "platform" that is really an intent: platform names are single
+ * kebab-case words, so one with a space means the pairs slipped, as when an
+ * agent writes `find stripe "list charges" "list refunds" ...` with one platform
+ * for several intents. Undefined when every platform looks like one.
+ */
+export function misplacedIntent(requests: FindIntent[]): string | undefined {
+  return requests.map((r) => r.platform.trim()).find((platform) => /\s/.test(platform));
+}
+
 /** An action as the agent refers to it, without documentation. */
 export interface ActionRef {
   actionId: string;
@@ -295,6 +305,13 @@ export async function find(
   const empty = requests.find((r) => !r.platform.trim() || !r.intent.trim());
   if (empty) {
     throw new FindArgsError('Every request needs a platform and an intent.');
+  }
+  const misplaced = misplacedIntent(requests);
+  if (misplaced) {
+    throw new FindArgsError(
+      `"${misplaced}" looks like an intent, not a platform: the pairs are out of step. ` +
+        'Name the platform before every intent, e.g. one actions find stripe "list charges" stripe "list refunds".'
+    );
   }
 
   const platforms = await reachable(settings, deps);

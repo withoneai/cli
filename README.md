@@ -265,7 +265,7 @@ one actions find hubspot "find a contact by email" gmail "send an email" --task 
 one actions find shopify "list products" -t knowledge
 ```
 
-- Each **intent** names the operation alone, in a few words (`"send a message to a channel"`), without its data: IDs, names and message text make the search miss. Up to 10 pairs.
+- Each **intent** names the operation alone, in a few words (`"send a message to a channel"`), without its data: IDs, names and message text make the search miss. Up to 10 pairs. Name the platform before every intent, even when they share one (`stripe "list charges" stripe "list refunds"`); a "platform" containing a space is refused as an intent that slipped out of its pair.
 - **`--task`** describes the whole job in one line, in general terms. Agents are asked to send it with every find, since it helps tell similar actions apart.
 - **`-t knowledge`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default is the catalog for running actions now.
 - **`--ai-model`** names the model running the CLI (e.g. `claude-sonnet-5`), recorded with the find beside the CLI and the harness that launched it, so the account's usage can report which model asked. Agents are asked to send it with every find.
