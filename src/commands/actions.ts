@@ -85,7 +85,9 @@ export async function actionsFindCommand(pairs: string[], options: ActionsFindOp
     output.error('--type must be execute or knowledge.');
   }
   if (pairs.length === 0 || pairs.length % 2 !== 0) {
-    output.error('Pass platform and intent pairs: one actions find <platform> "<intent>" [<platform> "<intent>" ...]');
+    output.error(
+      'Pass platform and intent pairs, naming the platform before every intent: one actions find <platform> "<intent>" [<platform> "<intent>" ...], e.g. one actions find stripe "list charges" stripe "list refunds"'
+    );
   }
   const requests: FindIntent[] = [];
   for (let i = 0; i < pairs.length; i += 2) {

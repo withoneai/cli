@@ -79,7 +79,7 @@ Removes a connection. Returns `{"deleted": true, "platform": "...", "key": "..."
 one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<the job, in general terms>" --ai-model "<your model>"
 ```
 
-**One call for the whole task**: one platform and intent pair per operation, on any platforms (up to 10). One's decision model picks the action for each and returns it **with its documentation**: exactly what parameters are required, how to structure the request, and where each value goes. Never execute without reading it — without it you'll guess wrong on parameters.
+**One call for the whole task**: one platform and intent pair per operation, on any platforms (up to 10). Name the platform before **every** intent, even when they share one: `stripe "list charges" stripe "list refunds"`. One's decision model picks the action for each and returns it **with its documentation**: exactly what parameters are required, how to structure the request, and where each value goes. Never execute without reading it — without it you'll guess wrong on parameters.
 
 - **`intent` names the operation alone**, in a few words: `"send a message to a channel"`, not `"post 'deploy done' in #eng"`. IDs, names, and message text in the intent make the search miss.
 - **`--task`**: send it with every find. It is the whole job in one line, **in general terms**: `"email a weather report to a contact"`, without names, addresses, IDs, or message text. It helps tell similar actions apart.

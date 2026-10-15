@@ -8,6 +8,7 @@ import {
   find,
   findHint,
   load,
+  misplacedIntent,
   renderFind,
   type DocumentedAction,
   type FindDeps,
@@ -89,6 +90,37 @@ describe('actions find', () => {
   it('refuses more than ten intents and a blank one', async () => {
     await assert.rejects(find(Array(11).fill(intent[0]), undefined, deps([]), settings()), FindArgsError);
     await assert.rejects(find([{ platform: 'gmail', intent: ' ' }], undefined, deps([]), settings()), FindArgsError);
+  });
+
+  it('refuses pairs that slipped, naming the intent sitting where a platform should, without asking core', async () => {
+    // `find stripe "list charges" "list refunds" "create a refund"`: one platform for three intents.
+    const slipped = [
+      { platform: 'stripe', intent: 'list charges' },
+      { platform: 'list refunds', intent: 'create a refund' },
+    ];
+    const d = deps([], {}, ['stripe']);
+    await assert.rejects(find(slipped, undefined, d, settings()), (e: unknown) => {
+      assert.ok(e instanceof FindArgsError);
+      assert.match(e.message, /"list refunds" looks like an intent/);
+      assert.match(e.message, /stripe "list charges" stripe "list refunds"/);
+      return true;
+    });
+    assert.equal(d.asked.length, 0, 'nothing is sent to core');
+  });
+});
+
+describe('misplaced intent', () => {
+  it('flags a platform with a space and nothing else', () => {
+    assert.equal(misplacedIntent([{ platform: 'stripe', intent: 'list charges' }]), undefined);
+    assert.equal(misplacedIntent([{ platform: 'google-calendar', intent: 'create an event' }]), undefined);
+    assert.equal(misplacedIntent([{ platform: ' gmail ', intent: 'send an email' }]), undefined);
+    assert.equal(
+      misplacedIntent([
+        { platform: 'stripe', intent: 'list charges' },
+        { platform: 'get worksheet used range', intent: 'update range values' },
+      ]),
+      'get worksheet used range'
+    );
   });
 
   it('searches the catalog for code and flows when asked, or always in knowledge-only mode', async () => {
