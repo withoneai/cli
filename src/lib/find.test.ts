@@ -208,6 +208,40 @@ describe('misplaced intent', () => {
     assert.equal(result.guide, undefined, 'nothing was documented, so no closing guide');
   });
 
+  it('names the platforms core suggests for a name no active platform has, and passes them on', async () => {
+    const unknown = (suggestions?: string[]) =>
+      answer({ platform: 'clickup', intent: 'create a task', selected: [], alternatives: [], selector: 'unknown_platform', confidence: undefined, suggestions });
+    const result = await find(
+      [
+        { platform: 'clickup', intent: 'create a task' },
+        { platform: 'clickup', intent: 'create a task' },
+      ],
+      undefined,
+      deps([unknown(['click-up', 'click-house']), unknown()]),
+      settings()
+    );
+    const [suggested, bare] = result.answers;
+
+    assert.equal(
+      suggested.status,
+      'No active platform is named `clickup`. Did you mean `click-up`, `click-house`? Find again with the platform you meant.'
+    );
+    assert.equal(suggested.selector, 'unknown_platform');
+    assert.deepEqual(suggested.suggestions, ['click-up', 'click-house']);
+    assert.deepEqual(suggested.selected, []);
+    assert.equal(result.guide, undefined, 'nothing was documented, so no closing guide');
+    assert.equal(bare.status, 'No active platform is named `clickup`. Check the platform name: `one platforms` lists them all.');
+    assert.equal(bare.suggestions, undefined, 'an empty list is left out');
+    assert.match(renderFind(result), /Did you mean `click-up`, `click-house`\?/);
+  });
+
+  it('carries no suggestions on an answer for a platform that exists', async () => {
+    const result = await find(intent, undefined, deps([answer()]), settings());
+
+    assert.equal(result.answers[0].suggestions, undefined);
+    assert.equal('suggestions' in result.answers[0], false);
+  });
+
   it('answers an unreachable platform without asking core about it', async () => {
     const core = deps([answer({ platform: 'slack', intent: 'post a message' })], {}, ['slack']);
     const result = await find(

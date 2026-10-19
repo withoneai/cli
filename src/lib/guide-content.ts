@@ -214,7 +214,8 @@ In \`--agent\` mode:
 - **\`alsoSelected\`** — also needed, listed rather than documented to keep the answer small: \`actions load\` them.
 - **\`runnerUp\`** — only when the model was unsure: a **substitute** for the pick. Use one or the other, **never both**.
 - **\`alternatives\`** — other candidates, undocumented.
-- **\`status\`** — why: a confidence, *no action fits* (rephrase the intent by outcome, or check the platform), *the decision model was unavailable* (top search result: check it fits), *not allowed by this CLI* (the next allowed candidate stood in), or *allow none of them* (your access settings block the operation — rephrasing won't help).
+- **\`suggestions\`** — only when \`selector\` is \`unknown_platform\`: no active platform has the name you sent, so nothing was answered. These are the platforms you may have meant, closest first (\`clickup\` → \`click-up\`). Find again with the right one; \`one platforms\` lists every name.
+- **\`status\`** — why: a confidence, *no active platform is named* (use a \`suggestions\` entry, or check \`one platforms\`), *no action fits* (rephrase the intent by outcome, or check the platform), *the decision model was unavailable* (top search result: check it fits), *not allowed by this CLI* (the next allowed candidate stood in), or *allow none of them* (your access settings block the operation — rephrasing won't help).
 - **\`guide\`** — how to execute, stated once for every action.
 - \`truncated: false\` means \`knowledge\` is the whole document; small docs are never trimmed.
 

@@ -274,6 +274,8 @@ one actions find shopify "list products" -t knowledge
 
 Each intent's answer gives the action(s) to use with their docs, any actions also needed beside them, a **substitute** when the model was unsure (use one or the other, never both), and a few alternatives, then says once how to execute. Always read the docs before executing. The access settings from `one config` apply: an action they refuse is never offered.
 
+A platform name no active platform has (`clickup` for `click-up`) is answered with `selector: "unknown_platform"` and a `suggestions` list of the platforms it may have meant, closest first, instead of being searched. Find again with the right name; `one platforms` lists them all.
+
 Large documents come back as a **digest**: request-building sections in full (method/URL, headers, description, enforcement rules, required and optional parameters, sample request, gotchas, error handling), then a notice naming what was left out with the exact command to load it. In knowledge-only mode each pick comes back whole, with how to call it from code.
 
 ### `one actions load <actionId...>`
