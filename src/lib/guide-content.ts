@@ -40,7 +40,7 @@ Before using any feature, read its guide section first: \`one guide actions\`, \
 
 ## Features
 
-### 1. Actions — Execute API calls on 750+ platforms
+### 1. Actions — Execute API calls on 1000+ platforms
 Find the actions a task needs with their docs, in one call, then execute them. This is the core workflow.
 
 **Quick start:**
