@@ -114,6 +114,8 @@ export interface FindAnswer extends FindIntent {
   /** A substitute for the pick: one or the other, never both. Documented unless listed. */
   runnerUp?: DocumentedAction | ActionRef;
   alternatives: ActionRef[];
+  /** With `unknown_platform`: the platforms the intent may have meant, closest first. Find again on one. */
+  suggestions?: string[];
 }
 
 export interface FindResult {
@@ -240,6 +242,13 @@ function status(answer: FoundActions, narrowed: Pick<Narrowed, 'replaced' | 'pic
   }
   if (narrowed.replaced) {
     return 'The chosen action is not allowed by this CLI, so this is the next allowed candidate: check it fits before using it.';
+  }
+  if (answer.selector === 'unknown_platform') {
+    const opening = `No active platform is named \`${answer.platform}\`.`;
+    const suggestions = answer.suggestions ?? [];
+    return suggestions.length === 0
+      ? `${opening} Check the platform name: \`one platforms\` lists them all.`
+      : `${opening} Did you mean ${suggestions.map((s) => `\`${s}\``).join(', ')}? Find again with the platform you meant.`;
   }
   if (answer.selector === 'none_fit' || answer.selected.length === 0) {
     return answer.alternatives.length === 0
@@ -403,6 +412,7 @@ export async function find(
       alsoSelected: [...deferred, ...plan.deferred.map(ref)],
       ...(answer.runnerUp ? { runnerUp: ref(answer.runnerUp) } : {}),
       alternatives: answer.alternatives.map(ref),
+      ...(answer.suggestions?.length ? { suggestions: answer.suggestions } : {}),
     };
   });
 
