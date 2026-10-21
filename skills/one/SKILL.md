@@ -171,6 +171,8 @@ All segments are validated before any execution. Failed actions don't block othe
 
 All errors return JSON: `{"error": "message"}`. Parse output as JSON and check for the `error` key.
 
+The CLI requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+ (older Node trusts the compromised eMudhra CA certificates). On an older Node every command exits 1 with `"code": "NODE_UPGRADE_REQUIRED"` and an `upgrade` field holding the command for the user's setup. Don't retry: show the user that command and ask them to update Node.js.
+
 ## Important Rules
 
 - Always use `--agent` flag for structured JSON output

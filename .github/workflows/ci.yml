@@ -23,9 +23,10 @@ jobs:
         # Windows is not optional here: the bug this workflow was added for
         # (tests sandboxing $HOME, which os.homedir() ignores on win32) was
         # invisible on Linux and macOS while corrupting real user state on
-        # Windows. Node 18 is the floor declared in package.json engines.
+        # Windows. The node lines are the ones package.json engines accepts
+        # (22.23.4+, 24.22.1+, 26.12.1+: the eMudhra CA fix).
         os: [ubuntu-latest, windows-latest]
-        node: ['18', '20', '22']
+        node: ['22', '24', '26']
 
     steps:
       - uses: actions/checkout@v4

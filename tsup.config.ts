@@ -1,9 +1,9 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/node-check.ts'],
   format: ['esm'],
-  target: 'node18',
+  target: 'node22',
   clean: true,
   dts: true,
   shims: true,

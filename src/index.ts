@@ -5,3 +5,4 @@
 // (e.g. a private dev CLI) can `import { program } from '@withone/cli'`, add
 // its own commands, and parse — without this module running on import.
 export { program } from './cli.js';
+export { nodeHasTlsFix } from './node-check.js';

@@ -15,13 +15,21 @@ import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../test-support/h
 // (getBackend → findByKeys → group-by-type → agent JSON) against a real PGlite
 // backend seeded with identity_keys.
 
-/** Force --agent mode and capture the JSON the command writes to stdout. */
+/**
+ * Force --agent mode and capture the JSON the command writes to stdout. Only
+ * string writes are captured: on Node 24+ the test runner reports through this
+ * same stdout in binary, and those chunks must pass through untouched.
+ */
 async function runAgent(fn: () => Promise<void>): Promise<any> {
   const prev = process.env.ONE_AGENT;
   process.env.ONE_AGENT = '1';
   const orig = process.stdout.write.bind(process.stdout);
   let buf = '';
-  (process.stdout as unknown as { write: (c: string) => boolean }).write = (chunk: string) => { buf += chunk; return true; };
+  (process.stdout as unknown as { write: (c: unknown, ...rest: unknown[]) => boolean }).write = (chunk, ...rest) => {
+    if (typeof chunk !== 'string') return (orig as (...args: unknown[]) => boolean)(chunk, ...rest);
+    buf += chunk;
+    return true;
+  };
   try {
     await fn();
   } finally {

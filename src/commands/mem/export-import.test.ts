@@ -14,7 +14,10 @@ import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../test-support/h
 /** Swallow the command's stdout report so the test output stays readable. */
 async function quiet(fn: () => Promise<void>): Promise<void> {
   const orig = process.stdout.write.bind(process.stdout);
-  (process.stdout as unknown as { write: (c: string) => boolean }).write = () => true;
+  // Swallow the command's text, but pass binary chunks through: on Node 24+
+  // the test runner reports through this same stdout.
+  (process.stdout as unknown as { write: (c: unknown, ...rest: unknown[]) => boolean }).write = (chunk, ...rest) =>
+    typeof chunk === 'string' ? true : (orig as (...args: unknown[]) => boolean)(chunk, ...rest);
   try { await fn(); } finally { (process.stdout as unknown as { write: typeof orig }).write = orig; }
 }
 

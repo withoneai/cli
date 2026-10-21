@@ -132,6 +132,7 @@ Request specific sections:
 - **Always use \`--agent\` flag** for structured JSON output
 - Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`google-calendar\`)
 - Always use the **exact action ID** from a find answer — don't guess
+- Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+. Older Node trusts the compromised eMudhra CA certificates, so every command exits 1 there with \`"code": "NODE_UPGRADE_REQUIRED"\` and an \`upgrade\` field holding the command for the user's setup. Don't retry: show the user that command and ask them to update Node.js
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
 - \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`, plus a \`level\`: full, read-write, read-only, custom, none) — what One enforces for this key, narrowed by \`one config\`. Read it before planning so you don't propose an action that will be refused. \`accessSource: "local"\` means One did not report it, so it is unverified
