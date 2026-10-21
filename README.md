@@ -50,10 +50,14 @@ one logout             # Clear credentials (with scope picker and confirmation)
 
 The browser consent page names the key and tags it with where this CLI is installed (scope, project path, machine, OS user, CLI version, chosen harnesses, and the per-install device id unless telemetry is off) so you can find and revoke it from Settings → API keys. The terminal prints exactly what will be sent before the browser opens.
 
-Requires Node.js 22.23.4, 24.22.1 or 26.12.1 and newer. Older Node versions
-trust the compromised eMudhra intermediate CA certificates (October 2026), so a
-network attacker could intercept the CLI's traffic and your API key; on them
-the CLI refuses to run and asks you to update Node.js.
+Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+. Older Node versions trust the
+compromised eMudhra intermediate CA certificates (October 2026), so a network
+attacker could intercept the CLI's traffic and your API key. On them the CLI
+refuses to run and prints the command that updates Node for how you installed
+it. Node 18, 20, 23 and 25 are end-of-life and never got the fix.
+
+If you can't update Node yet, `ONE_ALLOW_UNPATCHED_NODE=1` runs the CLI anyway,
+with a security warning on every run. You remain exposed while it is set.
 
 ## Quick start
 

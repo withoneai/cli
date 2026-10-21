@@ -90,8 +90,10 @@ nothing and exits 0 having run nothing at all.
 
 `engines.node` is `^22.23.4 || ^24.22.1 || >=26.12.1`: the first releases that
 block the compromised eMudhra intermediate CAs. `bin/cli.js` runs
-`src/node-check.ts` before anything else and exits on an older Node. Don't
-lower the floor below those patches.
+`src/node-check.ts` before anything else and exits on an older Node
+(`ONE_ALLOW_UNPATCHED_NODE=1` overrides it with a warning). Node 18, 20, 23 and
+25 are end-of-life and never got the fix. Don't lower the floor below those
+patches.
 
 CI (`.github/workflows/ci.yml`) runs typecheck + tests on Node 22/24/26 across
 ubuntu and windows on every PR. Windows coverage is deliberate — the isolation
