@@ -5,10 +5,9 @@
  * Why this exists instead of `tsx --test "src/**\/*.test.ts"`:
  *
  * Runner-side glob expansion in `node --test` only landed in Node 21. On
- * Node 18 and 20 — both inside this package's declared `engines.node: >=18`
- * range — the quoted pattern is passed through literally, matches nothing,
- * and the runner exits 0 having run NOTHING. A contributor on Node 20 sees a
- * green test run that executed zero assertions.
+ * Node 18 and 20 the quoted pattern is passed through literally, matches
+ * nothing, and the runner exits 0 having run NOTHING: a contributor on an old
+ * Node sees a green test run that executed zero assertions.
  *
  * Discovering the files here makes the run identical on every supported Node
  * and every OS (no shell globbing differences between sh, cmd, and

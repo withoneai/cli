@@ -83,11 +83,17 @@ installed.
 
 `npm test` runs `scripts/run-tests.mjs`, which discovers test files itself.
 Do **not** change it back to `tsx --test "src/**/*.test.ts"` — runner-side glob
-expansion only exists in Node 21+, so on Node 18/20 (both inside our declared
-`engines.node: >=18`) that pattern matches nothing and exits 0 having run
-nothing at all.
+expansion only exists in Node 21+, so on an older Node that pattern matches
+nothing and exits 0 having run nothing at all.
 
-CI (`.github/workflows/ci.yml`) runs typecheck + tests on Node 18/20/22 across
+### Supported Node versions
+
+`engines.node` is `^22.23.4 || ^24.22.1 || >=26.12.1`: the first releases that
+block the compromised eMudhra intermediate CAs. `bin/cli.js` runs
+`src/node-check.ts` before anything else and exits on an older Node. Don't
+lower the floor below those patches.
+
+CI (`.github/workflows/ci.yml`) runs typecheck + tests on Node 22/24/26 across
 ubuntu and windows on every PR. Windows coverage is deliberate — the isolation
 bug above was invisible everywhere else.
 
