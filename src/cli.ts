@@ -43,6 +43,7 @@ import {
   relayEventTypesCommand,
   relayPlatformsCommand,
 } from './commands/relay.js';
+import { connectCreateCommand, connectTypesCommand } from './commands/connect.js';
 
 import { registerSyncCommands } from './lib/memory/sync/index.js';
 import { registerMemoryCommands } from './commands/mem.js';
@@ -94,6 +95,10 @@ program
     one skills add connect                Add the One Connect skill to this project (--global for every project)
     one skills update [connect]           Re-copy from the installed @withone/connect after an upgrade
     one skills remove connect             Remove it
+
+  Connect apps (one.connect.ts, typed by @withone/connect/config):
+    one connect create                    Approve the app (or its new version) in the browser, then write .env
+    one connect types                     Write one-connect-env.d.ts so tool slugs and action names autocomplete
 
   Guide:
     one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, memory, sync, all)
@@ -656,6 +661,30 @@ flow
   .description('Generate a workflow scaffold (templates: basic, conditional, loop, ai)')
   .action(async (template?: string) => {
     await flowScaffoldCommand(template);
+  });
+
+// ── Connect App Commands ──
+
+const connectApp = program
+  .command('connect')
+  .description('Create and update a One Connect app from one.connect.ts');
+
+connectApp
+  .command('create')
+  .description('Open the setup page to approve the app (or, once .env holds its ONE_CLIENT_ID, its new version); a new app gets its two secrets there. Then write .env')
+  .option('--config <file>', 'Config file (default: one.connect.ts, .mts, .mjs or .js in this directory)')
+  .option('--env-file <file>', 'Env file to write (default: .env.local if it exists, else .env)')
+  .option('--no-open', 'Print the setup page link instead of opening it')
+  .action(async (options: { config?: string; envFile?: string; open?: boolean }) => {
+    await connectCreateCommand(options);
+  });
+
+connectApp
+  .command('types')
+  .description('Write one-connect-env.d.ts: every tool slug, and action names for the tools the config asks for')
+  .option('--config <file>', 'Config file (default: one.connect.ts, .mts, .mjs or .js in this directory)')
+  .action(async (options: { config?: string }) => {
+    await connectTypesCommand(options);
   });
 
 // ── Relay Commands ──

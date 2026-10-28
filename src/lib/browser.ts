@@ -33,6 +33,60 @@ export function getApiKeyUrl(): string {
   return `${oneAppUrl()}/settings/api-keys`;
 }
 
+/** The space and env file every setup-page link names. */
+export interface ConnectSetupScope {
+  orgId?: string;
+  projectId?: string;
+  envFile?: string;
+}
+
+function connectSetupParams(scope: ConnectSetupScope, extra: [string, string | undefined][]): string {
+  const params = new URLSearchParams();
+  if (scope.orgId) params.set('orgId', scope.orgId);
+  if (scope.projectId) params.set('projectId', scope.projectId);
+  if (scope.envFile) params.set('env', scope.envFile);
+  for (const [key, value] of extra) if (value) params.set(key, value);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+/**
+ * The browser half of `one connect create`, beside `one login`'s
+ * `/cli/auth`. The person reviews the app (new, or the changes to an
+ * existing one) and approves it with their dashboard session; a new app's
+ * secrets are made and shown there once. The org and project pin the space
+ * whatever the dashboard has selected, `env` names the file to paste into,
+ * `port` and `state` are where the page reports back, and the config rides
+ * in the fragment so no server ever logs it.
+ */
+export function getConnectSetupUrl(
+  opts: ConnectSetupScope & {
+    clientId?: string;
+    permissionSetId?: string;
+    port: number;
+    state: string;
+    handoff: string;
+  }
+): string {
+  const target = opts.clientId ? encodeURIComponent(opts.clientId) : 'new';
+  const qs = connectSetupParams(opts, [
+    ['set', opts.permissionSetId],
+    ['port', String(opts.port)],
+    ['state', opts.state],
+  ]);
+  return `${oneAppUrl()}/cli/connect/${target}${qs}#z=${opts.handoff}`;
+}
+
+/** Where the CLI sends the browser once it has written `.env`: the setup
+ *  page's summary for that app. */
+export function getConnectDoneUrl(
+  clientId: string,
+  outcome: 'created' | 'updated' | 'unchanged',
+  scope: ConnectSetupScope
+): string {
+  return `${oneAppUrl()}/cli/connect/${encodeURIComponent(clientId)}${connectSetupParams(scope, [['outcome', outcome]])}`;
+}
+
 export async function openConnectionPage(platform: string, params?: ConnectionUrlParams): Promise<void> {
   await open(getConnectionUrl(platform, params));
 }

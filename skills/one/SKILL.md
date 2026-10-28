@@ -373,6 +373,15 @@ one --agent skills add connect      # from the @withone/connect version the app 
 
 It lands in `.agents/skills/one-connect` (and `.claude/skills/one-connect`). The result's `next` array says what to do; the skill covers the button, the two routes, key mode vs token mode, and calling One with the grant. Never ask the user to paste the client secret or connect key into chat.
 
+To create the Connect app itself without the dashboard, install `@withone/connect` in the project (0.19.0 or later; the file imports it from there, not from the CLI), write `one.connect.ts` with `defineConnectApp` from `@withone/connect/config` (name, `redirectUris`, `ask` per tool with `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`), then:
+
+```bash
+one --agent connect types      # tool slugs and action names autocomplete in one.connect.ts
+one --agent connect create     # the human approves it in the browser; then writes ONE_CLIENT_ID, ONE_PERMISSION_SET, ONE_REDIRECT_URI to .env
+```
+
+It opens a setup page in the human's browser and waits up to 10 minutes, so run it in the background or with a long timeout; the link is printed to stderr at once, so pass it on if no browser opened. The human reviews the app (or, on a re-run, its new version) and approves it with their dashboard session: an API key never creates or changes a Connect app. For a new app the page also makes `ONE_CLIENT_SECRET` and `ONE_CONNECT_KEY` and shows them once; tell the human to copy them into the env file the result names. The CLI never receives either secret. Run `connect create` again after editing the file to update the same app.
+
 ## Adding New Connections
 
 If the user needs a platform that isn't connected yet, tell them to run:

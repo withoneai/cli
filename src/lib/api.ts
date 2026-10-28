@@ -593,6 +593,23 @@ export class OneApi {
     }
   }
 
+  /** Every action on a platform, page by page, following the server's `pages`. */
+  async listAllAvailableActions(platform: string): Promise<AvailableAction[]> {
+    const all: AvailableAction[] = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const response = await this.requestFull<{ rows?: AvailableAction[]; pages?: number }>({
+        path: `/available-actions/${encodeURIComponent(platform)}`,
+        queryParams: { page: String(page), limit: '100' },
+      });
+      all.push(...(response.rows || []));
+      totalPages = response.pages || 1;
+      page++;
+    } while (page <= totalPages);
+    return all;
+  }
+
   // Webhook Relay methods
 
   async createRelayEndpoint(body: {
