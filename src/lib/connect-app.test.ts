@@ -154,6 +154,28 @@ describe('config files', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('says to install the SDK when the project has none, or one without /config', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-connect-'));
+    try {
+      const file = path.join(dir, 'one.connect.mjs');
+      fs.writeFileSync(
+        file,
+        'import { defineConnectApp } from "@withone/connect/config";\nexport default defineConnectApp({ name: "Mastra" });\n'
+      );
+      await assert.rejects(loadConfigFile(file), /isn't installed in this project\. Run `npm i @withone\/connect` first/);
+
+      const sdk = path.join(dir, 'node_modules', '@withone', 'connect');
+      fs.mkdirSync(sdk, { recursive: true });
+      fs.writeFileSync(
+        path.join(sdk, 'package.json'),
+        JSON.stringify({ name: '@withone/connect', version: '0.18.0', exports: { '.': './index.js' } })
+      );
+      await assert.rejects(loadConfigFile(file), /older than 0\.19\.0.*npm i @withone\/connect@latest/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('renderTypes', () => {

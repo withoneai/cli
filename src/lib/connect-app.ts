@@ -62,7 +62,20 @@ export async function loadConfigFile(file: string): Promise<unknown> {
     const mod = await import(pathToFileURL(file).href);
     return mod.default ?? mod;
   } catch (error) {
-    const code = (error as { code?: string }).code;
+    const { code, message = '' } = error as { code?: string; message?: string };
+    // The config imports the SDK from the project, not from the CLI.
+    if (code === 'ERR_MODULE_NOT_FOUND' && message.includes("'@withone/connect'")) {
+      throw new Error(
+        `it imports @withone/connect, which isn't installed in this project. ` +
+          `Run \`npm i @withone/connect\` first.`
+      );
+    }
+    if (code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' && message.includes('@withone/connect')) {
+      throw new Error(
+        `this project's @withone/connect is older than 0.19.0, which added @withone/connect/config. ` +
+          `Run \`npm i @withone/connect@latest\` first.`
+      );
+    }
     if (code === 'ERR_UNKNOWN_FILE_EXTENSION' && /\.m?ts$/.test(file)) {
       throw new Error(
         `Node ${process.versions.node} can't load ${path.basename(file)}. Use Node 22.18 or later, ` +

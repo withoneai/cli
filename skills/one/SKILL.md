@@ -373,7 +373,7 @@ one --agent skills add connect      # from the @withone/connect version the app 
 
 It lands in `.agents/skills/one-connect` (and `.claude/skills/one-connect`). The result's `next` array says what to do; the skill covers the button, the two routes, key mode vs token mode, and calling One with the grant. Never ask the user to paste the client secret or connect key into chat.
 
-To create the Connect app itself without the dashboard, write `one.connect.ts` with `defineConnectApp` from `@withone/connect/config` (name, `redirectUris`, `ask` per tool with `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`), then:
+To create the Connect app itself without the dashboard, install `@withone/connect` in the project (0.19.0 or later; the file imports it from there, not from the CLI), write `one.connect.ts` with `defineConnectApp` from `@withone/connect/config` (name, `redirectUris`, `ask` per tool with `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`), then:
 
 ```bash
 one --agent connect types      # tool slugs and action names autocomplete in one.connect.ts
