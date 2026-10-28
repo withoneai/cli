@@ -71,7 +71,8 @@ export async function loadConfigFile(file: string): Promise<unknown> {
           `Run \`npm i @withone/connect\` first.`
       );
     }
-    if (code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' && message.includes('@withone/connect')) {
+    // The path in this message uses the platform's separator: @withone\connect on Windows.
+    if (code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' && /@withone[\\/]connect/.test(message)) {
       throw new Error(
         `this project's @withone/connect is older than 0.19.0, which added @withone/connect/config. ` +
           `Run \`npm i @withone/connect@latest\` first.`
