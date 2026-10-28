@@ -113,6 +113,9 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - \`--create-webhook\` auto-registers the webhook URL with the source platform
 - Use \`actions find\` (and \`actions load\` for more) to learn both the incoming payload shape AND the destination API shape before building templates
 
+### One Connect apps — created from \`one.connect.ts\`
+\`one connect create\` creates (or, once .env holds its \`ONE_CLIENT_ID\`, updates) a One Connect app from \`one.connect.ts\`, typed by \`defineConnectApp\` from \`@withone/connect/config\`. It writes \`ONE_CLIENT_ID\`, \`ONE_PERMISSION_SET\` and \`ONE_REDIRECT_URI\` to the env file and opens the app's Credentials page, where the human copies the client secret and connect key; the CLI never receives them. \`one connect types\` writes \`one-connect-env.d.ts\` so tool slugs and action names autocomplete. Each tool's \`access\` is \`read-only\`, \`read-write\`, \`full-access\`, or \`custom\` with \`actions\` (names, or ids from \`actions find\`).
+
 ### 4. Memory + Sync — Unified store with hybrid FTS + semantic search
 One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled \`embedded-postgres\` plugin, with a \`postgres\` plugin for remote/self-hosted) that backs both user-authored notes (\`one mem add\`) and synced platform data (\`one sync run\`). Auto-initializes on first use — no separate install step. Run \`one guide memory\` and \`one guide sync\` for the full references.
 

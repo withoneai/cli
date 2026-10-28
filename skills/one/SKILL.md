@@ -373,6 +373,15 @@ one --agent skills add connect      # from the @withone/connect version the app 
 
 It lands in `.agents/skills/one-connect` (and `.claude/skills/one-connect`). The result's `next` array says what to do; the skill covers the button, the two routes, key mode vs token mode, and calling One with the grant. Never ask the user to paste the client secret or connect key into chat.
 
+To create the Connect app itself without the dashboard, write `one.connect.ts` with `defineConnectApp` from `@withone/connect/config` (name, `redirectUris`, `ask` per tool with `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`), then:
+
+```bash
+one --agent connect types      # tool slugs and action names autocomplete in one.connect.ts
+one --agent connect create     # creates or updates the app; writes ONE_CLIENT_ID, ONE_PERMISSION_SET, ONE_REDIRECT_URI to .env
+```
+
+It opens the app's Credentials page for the human: tell them to copy `ONE_CLIENT_SECRET` and `ONE_CONNECT_KEY` from there into the env file the result names (`pending`). The CLI never receives either secret. Run `connect create` again after editing the file to update the same app.
+
 ## Adding New Connections
 
 If the user needs a platform that isn't connected yet, tell them to run:

@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { getApiKeyUrl, getCliAuthUrl, getConnectionUrl, oneAppUrl } from './browser.js';
+import { getApiKeyUrl, getCliAuthUrl, getConnectCredentialsUrl, getConnectionUrl, oneAppUrl } from './browser.js';
 
 describe('oneAppUrl', () => {
   let saved: string | undefined;
@@ -56,5 +56,22 @@ describe('getCliAuthUrl', () => {
     assert.equal(url.searchParams.get('path'), '/Users/paul/dev/acme app');
     assert.equal(url.searchParams.get('harnesses'), 'claude-code');
     assert.equal(url.searchParams.get('user'), null);
+  });
+});
+
+describe('getConnectCredentialsUrl', () => {
+  let saved: string | undefined;
+  beforeEach(() => { saved = process.env.ONE_APP_URL; delete process.env.ONE_APP_URL; });
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ONE_APP_URL;
+    else process.env.ONE_APP_URL = saved;
+  });
+
+  it('opens the app’s credentials page in the space it was created in', () => {
+    assert.equal(
+      getConnectCredentialsUrl('f305b9fc', { orgId: 'org-1', projectId: 'proj-1' }),
+      'https://app.withone.ai/developers/connect/f305b9fc/credentials?orgId=org-1&projectId=proj-1'
+    );
+    assert.equal(getConnectCredentialsUrl('f305b9fc'), 'https://app.withone.ai/developers/connect/f305b9fc/credentials');
   });
 });

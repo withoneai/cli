@@ -527,6 +527,17 @@ What `one skills add connect` does:
 
 Commit `.agents/skills/one-connect` and the agent links so your team's agents share the skill. Agent mode (`--agent`) returns JSON for every subcommand.
 
+### `one connect`
+
+Create and update a [One Connect](https://www.npmjs.com/package/@withone/connect) app from `one.connect.ts`, typed by `defineConnectApp` from `@withone/connect/config` (0.19.0 or later).
+
+```bash
+one connect types     # writes one-connect-env.d.ts: tool slugs and action names autocomplete
+one connect create    # creates the app, or updates it once .env holds its ONE_CLIENT_ID
+```
+
+`one connect create` uses your API key, writes `ONE_CLIENT_ID`, `ONE_PERMISSION_SET` and `ONE_REDIRECT_URI` to `.env.local` (or `.env`), and opens the app's **Credentials** page in the dashboard, which shows the client secret and the connect key once. The two secrets never pass through the terminal. Each tool in `ask` takes `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`, named as `one connect types` wrote them or by id from `one actions search`. Options: `--config <file>`, `--env-file <file>`, `--no-open`. A `.ts` config needs Node 22.18 or later; on older Node use `one.connect.mjs`.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).

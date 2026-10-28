@@ -33,6 +33,19 @@ export function getApiKeyUrl(): string {
   return `${oneAppUrl()}/settings/api-keys`;
 }
 
+/**
+ * The page that mints a Connect app's client secret and connect key and
+ * shows them once. The org and project name the space the app was created
+ * in, so the page reads it from there whatever the header has selected.
+ */
+export function getConnectCredentialsUrl(clientId: string, params?: Pick<ConnectionUrlParams, 'orgId' | 'projectId'>): string {
+  const searchParams = new URLSearchParams();
+  if (params?.orgId) searchParams.set('orgId', params.orgId);
+  if (params?.projectId) searchParams.set('projectId', params.projectId);
+  const qs = searchParams.toString();
+  return `${oneAppUrl()}/developers/connect/${encodeURIComponent(clientId)}/credentials${qs ? `?${qs}` : ''}`;
+}
+
 export async function openConnectionPage(platform: string, params?: ConnectionUrlParams): Promise<void> {
   await open(getConnectionUrl(platform, params));
 }

@@ -19,6 +19,8 @@ import type {
   FindIntent,
   FoundActions,
   KeyAccessDocument,
+  ConnectAppView,
+  ConnectPermissionSetView,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -591,6 +593,66 @@ export class OneApi {
         },
       };
     }
+  }
+
+  // Connect app methods. A key creates and updates; the secret and the
+  // connect key are minted in the dashboard, never handed to the CLI.
+
+  async createConnectApp(fields: Record<string, unknown>): Promise<ConnectAppView> {
+    return this.requestFull<ConnectAppView>({
+      path: '/oauth-clients',
+      method: 'POST',
+      body: { ...fields, clientType: 'confidential', consentSurface: 'connect' },
+    });
+  }
+
+  async getConnectApp(clientId: string): Promise<ConnectAppView> {
+    return this.request<ConnectAppView>(`/oauth-clients/${encodeURIComponent(clientId)}`);
+  }
+
+  async updateConnectApp(clientId: string, fields: Record<string, unknown>): Promise<ConnectAppView> {
+    return this.requestFull<ConnectAppView>({
+      path: `/oauth-clients/${encodeURIComponent(clientId)}`,
+      method: 'PATCH',
+      body: fields,
+    });
+  }
+
+  async createPermissionSet(clientId: string, body: { name: string; connectorRules: unknown[] }): Promise<ConnectPermissionSetView> {
+    return this.requestFull<ConnectPermissionSetView>({
+      path: `/oauth-clients/${encodeURIComponent(clientId)}/permission-sets`,
+      method: 'POST',
+      body,
+    });
+  }
+
+  async updatePermissionSet(
+    clientId: string,
+    setId: string,
+    body: { name: string; connectorRules: unknown[] }
+  ): Promise<ConnectPermissionSetView> {
+    return this.requestFull<ConnectPermissionSetView>({
+      path: `/oauth-clients/${encodeURIComponent(clientId)}/permission-sets/${encodeURIComponent(setId)}`,
+      method: 'PATCH',
+      body,
+    });
+  }
+
+  /** Every action on a platform, page by page, following the server's `pages`. */
+  async listAllAvailableActions(platform: string): Promise<AvailableAction[]> {
+    const all: AvailableAction[] = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const response = await this.requestFull<{ rows?: AvailableAction[]; pages?: number }>({
+        path: `/available-actions/${encodeURIComponent(platform)}`,
+        queryParams: { page: String(page), limit: '100' },
+      });
+      all.push(...(response.rows || []));
+      totalPages = response.pages || 1;
+      page++;
+    } while (page <= totalPages);
+    return all;
   }
 
   // Webhook Relay methods
