@@ -130,7 +130,7 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
 
     const opening = options.open !== false;
     if (opening) await open(url).catch(() => undefined);
-    const verb = existingId ? 'Review the changes' : 'Create the app';
+    const verb = existingId ? 'Approve the update' : 'Create the app';
     if (output.isAgentMode()) {
       // The JSON result comes only once the person approves; the link goes
       // out now so an agent can hand it over if no browser opened.

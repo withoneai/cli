@@ -97,7 +97,7 @@ program
     one skills remove connect             Remove it
 
   Connect apps (one.connect.ts, typed by @withone/connect/config):
-    one connect create                    Approve the app (or its changes) in the browser, then write .env
+    one connect create                    Approve the app (or its new version) in the browser, then write .env
     one connect types                     Write one-connect-env.d.ts so tool slugs and action names autocomplete
 
   Guide:
@@ -671,7 +671,7 @@ const connectApp = program
 
 connectApp
   .command('create')
-  .description('Open the setup page to approve the app (or, once .env holds its ONE_CLIENT_ID, its changes); a new app gets its two secrets there. Then write .env')
+  .description('Open the setup page to approve the app (or, once .env holds its ONE_CLIENT_ID, its new version); a new app gets its two secrets there. Then write .env')
   .option('--config <file>', 'Config file (default: one.connect.ts, .mts, .mjs or .js in this directory)')
   .option('--env-file <file>', 'Env file to write (default: .env.local if it exists, else .env)')
   .option('--no-open', 'Print the setup page link instead of opening it')
