@@ -1,15 +1,19 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import open from 'open';
 import pc from 'picocolors';
-import { ApiError, OneApi } from '../lib/api.js';
-import { getConnectCredentialsUrl } from '../lib/browser.js';
+import { OneApi } from '../lib/api.js';
+import { getConnectDoneUrl, getConnectSetupUrl } from '../lib/browser.js';
+import { startConnectCallbackServer } from '../lib/connect-callback.js';
 import { ensureWhoAmI, getApiBase, getApiKey } from '../lib/config.js';
 import {
   TYPES_FILE,
   actionNames,
-  clientFields,
+  buildHandoff,
   connectorRule,
+  encodeHandoff,
   defaultEnvFile,
   findConfigFile,
   loadConfigFile,
@@ -23,7 +27,8 @@ import {
 } from '../lib/connect-app.js';
 import * as output from '../lib/output.js';
 
-const ASK_NAME = 'Default permission set';
+/** As long as the person may need to read and approve the page. */
+const SETUP_TIMEOUT_MS = 10 * 60 * 1000;
 
 function requireApi(): OneApi {
   const apiKey = getApiKey();
@@ -93,89 +98,100 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
   const { file, config } = await readConfig(cwd, options.config);
   const envFile = options.envFile ? path.resolve(cwd, options.envFile) : defaultEnvFile(cwd);
   const envText = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+  const existingId = readEnvValue(envText, 'ONE_CLIENT_ID') || undefined;
 
   const spinner = output.createSpinner();
   spinner.start(`Reading ${path.basename(file)}...`);
 
+  let server: http.Server | undefined;
+  let timer: NodeJS.Timeout | undefined;
   try {
     const rules = await buildRules(api, config);
-    const fields = clientFields(config);
-    const existingId = readEnvValue(envText, 'ONE_CLIENT_ID');
-
-    let app;
-    let created = false;
-    if (existingId) {
-      try {
-        app = await api.updateConnectApp(existingId, fields);
-      } catch (error) {
-        if (!(error instanceof ApiError && error.status === 404)) throw error;
-      }
-    }
-    if (!app) {
-      app = await api.createConnectApp(fields);
-      created = true;
-    }
-
-    let permissionSetId = created ? undefined : readEnvValue(envText, 'ONE_PERMISSION_SET') || undefined;
-    if (rules.length > 0) {
-      const body = { name: ASK_NAME, connectorRules: rules };
-      const set = permissionSetId
-        ? await api.updatePermissionSet(app.clientId, permissionSetId, body)
-        : await api.createPermissionSet(app.clientId, body);
-      permissionSetId = set.id;
-    }
-
-    fs.writeFileSync(
-      envFile,
-      upsertEnv(envText, {
-        ONE_CLIENT_ID: app.clientId,
-        ONE_REDIRECT_URI: config.redirectUris[0],
-        ...(permissionSetId ? { ONE_PERMISSION_SET: permissionSetId } : {}),
-        ONE_CLIENT_SECRET: null,
-        ONE_CONNECT_KEY: null,
-      })
-    );
-
     const whoami = await ensureWhoAmI(api);
-    const credentialsUrl = getConnectCredentialsUrl(app.clientId, {
+    const scope = {
       orgId: whoami?.organization?.id,
       projectId: whoami?.project?.id,
       envFile: path.basename(envFile),
-    });
-    const secretsPending = !readEnvValue(envText, 'ONE_CLIENT_SECRET') || !readEnvValue(envText, 'ONE_CONNECT_KEY');
-    const opening = options.open !== false && (created || secretsPending);
-    if (opening) await open(credentialsUrl).catch(() => undefined);
-
-    const result = {
-      created,
-      clientId: app.clientId,
-      permissionSetId: permissionSetId ?? null,
-      redirectUris: config.redirectUris,
-      envFile: path.relative(cwd, envFile) || envFile,
-      credentialsUrl,
-      pending: secretsPending ? ['ONE_CLIENT_SECRET', 'ONE_CONNECT_KEY'] : [],
     };
 
+    const state = crypto.randomBytes(16).toString('hex');
+    const started = await startConnectCallbackServer(state, (done) =>
+      getConnectDoneUrl(done.clientId, done.outcome, scope)
+    );
+    server = started.server;
+    const url = getConnectSetupUrl({
+      ...scope,
+      clientId: existingId,
+      permissionSetId: readEnvValue(envText, 'ONE_PERMISSION_SET') || undefined,
+      port: started.port,
+      state,
+      handoff: encodeHandoff(buildHandoff(config, rules)),
+    });
+
+    const opening = options.open !== false;
+    if (opening) await open(url).catch(() => undefined);
+    const verb = existingId ? 'Review the changes' : 'Create the app';
+    if (output.isAgentMode()) {
+      // The JSON result comes only once the person approves; the link goes
+      // out now so an agent can hand it over if no browser opened.
+      process.stderr.write(`${verb} in the browser: ${url}\n`);
+    } else {
+      spinner.stop(`${verb} in your browser`);
+      console.log(`  ${pc.underline(url)}`);
+      console.log();
+      spinner.start('Waiting for you to approve it...');
+    }
+
+    const outcome = await Promise.race([
+      started.result,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), SETUP_TIMEOUT_MS);
+      }),
+    ]);
+    if (!outcome) output.error('Timed out waiting for the browser. Run `one connect create` again.');
+    if (outcome.kind === 'cancelled') output.error('Cancelled in the browser. Nothing was changed.');
+    if (outcome.kind === 'failed') output.error(`The setup page reported: ${outcome.reason}`);
+
+    const created = outcome.outcome === 'created';
+    fs.writeFileSync(
+      envFile,
+      upsertEnv(envText, {
+        ONE_CLIENT_ID: outcome.clientId,
+        ONE_REDIRECT_URI: config.redirectUris[0],
+        ...(outcome.permissionSetId ? { ONE_PERMISSION_SET: outcome.permissionSetId } : {}),
+        ...(created ? { ONE_CLIENT_SECRET: null, ONE_CONNECT_KEY: null } : {}),
+      })
+    );
+
+    const result = {
+      outcome: outcome.outcome,
+      clientId: outcome.clientId,
+      permissionSetId: outcome.permissionSetId,
+      redirectUris: config.redirectUris,
+      envFile: path.relative(cwd, envFile) || envFile,
+    };
     if (output.isAgentMode()) {
       output.json(result);
       return;
     }
 
-    spinner.stop(created ? `Created ${config.name}` : `Updated ${config.name}`);
+    spinner.stop(
+      created ? `Created ${config.name}` : outcome.outcome === 'updated' ? `Updated ${config.name}` : `${config.name} is up to date`
+    );
     console.log();
-    console.log(`  ${pc.dim('Client ID:')}       ${app.clientId}`);
-    if (permissionSetId) console.log(`  ${pc.dim('Permission set:')}  ${permissionSetId}`);
+    console.log(`  ${pc.dim('Client ID:')}       ${outcome.clientId}`);
+    if (outcome.permissionSetId) console.log(`  ${pc.dim('Permission set:')}  ${outcome.permissionSetId}`);
     console.log(`  ${pc.dim('Wrote')}            ${result.envFile}`);
-    console.log();
-    if (secretsPending) {
-      console.log(`  ${opening ? 'Opening your browser for the two secrets:' : 'Get the two secrets here:'}`);
-      console.log(`  ${pc.underline(credentialsUrl)}`);
-      console.log(`  ${pc.dim('Paste ONE_CLIENT_SECRET and ONE_CONNECT_KEY into')} ${result.envFile}${pc.dim('. They are never printed here.')}`);
-      console.log();
+    if (created) {
+      console.log(`  ${pc.dim('The two secrets came from the browser page, never through here.')}`);
     }
+    console.log();
   } catch (error) {
     spinner.stop('Failed');
     output.error(`Error: ${message(error)}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+    server?.close();
   }
 }
 

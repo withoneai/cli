@@ -6,6 +6,8 @@ import path from 'node:path';
 import {
   actionName,
   actionNames,
+  buildHandoff,
+  encodeHandoff,
   clientFields,
   connectorRule,
   findConfigFile,
@@ -184,5 +186,30 @@ describe('renderTypes', () => {
     assert.match(text, /declare module "@withone\/connect\/config"/);
     assert.match(text, /tools: "gmail" \| "linear";/);
     assert.match(text, /"gmail": "createDraft" \| "sendEmail";/);
+  });
+});
+
+describe('handoff', () => {
+  const config = {
+    name: ' Mastra ',
+    redirectUris: ['http://localhost:3000/api/one/callback'],
+    reason: 'Plans your day',
+  };
+
+  it('carries the app fields and the resolved ask, or null for no ask', () => {
+    const rule = connectorRule(7, { access: 'read-only' });
+    assert.deepEqual(buildHandoff(config, [rule]), {
+      v: 1,
+      app: { name: 'Mastra', redirectUris: config.redirectUris, consentReason: 'Plans your day' },
+      ask: [rule],
+    });
+    assert.equal(buildHandoff(config, []).ask, null);
+  });
+
+  it('encodes as base64url JSON that decodes back', () => {
+    const handoff = buildHandoff(config, []);
+    const encoded = encodeHandoff(handoff);
+    assert.match(encoded, /^[A-Za-z0-9_-]+$/);
+    assert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')), handoff);
   });
 });

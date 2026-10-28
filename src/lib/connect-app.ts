@@ -199,6 +199,29 @@ export function clientFields(config: ConnectAppConfig): Record<string, unknown> 
   return fields;
 }
 
+/**
+ * What `one connect create` hands the setup page: the app's fields and its
+ * ask, already resolved to catalog ids. The page shows it for review and
+ * writes it with the person's dashboard session, so an API key never
+ * creates or changes a Connect app. `ask` is null when the config asks for
+ * nothing, which leaves an existing ask as it is.
+ */
+export interface ConnectHandoff {
+  v: 1;
+  app: Record<string, unknown>;
+  ask: ConnectorRule[] | null;
+}
+
+export function buildHandoff(config: ConnectAppConfig, rules: ConnectorRule[]): ConnectHandoff {
+  return { v: 1, app: clientFields(config), ask: rules.length > 0 ? rules : null };
+}
+
+/** The handoff as the link's fragment carries it: base64url JSON, so it
+ *  never reaches a server log. */
+export function encodeHandoff(handoff: ConnectHandoff): string {
+  return Buffer.from(JSON.stringify(handoff), 'utf8').toString('base64url');
+}
+
 /** `.env.local` when the project has one (Next.js), else `.env`. */
 export function defaultEnvFile(cwd: string): string {
   const local = path.join(cwd, '.env.local');

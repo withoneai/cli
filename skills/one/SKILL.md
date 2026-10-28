@@ -377,10 +377,10 @@ To create the Connect app itself without the dashboard, install `@withone/connec
 
 ```bash
 one --agent connect types      # tool slugs and action names autocomplete in one.connect.ts
-one --agent connect create     # creates or updates the app; writes ONE_CLIENT_ID, ONE_PERMISSION_SET, ONE_REDIRECT_URI to .env
+one --agent connect create     # the human approves it in the browser; then writes ONE_CLIENT_ID, ONE_PERMISSION_SET, ONE_REDIRECT_URI to .env
 ```
 
-It opens a setup page in the human's browser: tell them to copy `ONE_CLIENT_SECRET` and `ONE_CONNECT_KEY` from there into the env file the result names (`pending`). The CLI never receives either secret. Run `connect create` again after editing the file to update the same app.
+It opens a setup page in the human's browser and waits up to 10 minutes, so run it in the background or with a long timeout; the link is printed to stderr at once, so pass it on if no browser opened. The human reviews the app (or, on a re-run, the changes) and approves it with their dashboard session: an API key never creates or changes a Connect app. For a new app the page also makes `ONE_CLIENT_SECRET` and `ONE_CONNECT_KEY` and shows them once; tell the human to copy them into the env file the result names. The CLI never receives either secret. Run `connect create` again after editing the file to update the same app.
 
 ## Adding New Connections
 

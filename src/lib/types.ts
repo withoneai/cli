@@ -186,19 +186,6 @@ export interface AvailableAction {
   method: string;
 }
 
-/** A Connect app as `/v1/oauth-clients` answers an API key: never a secret. */
-export interface ConnectAppView {
-  id: string;
-  clientId: string;
-  name: string;
-  redirectUris: string[];
-}
-
-export interface ConnectPermissionSetView {
-  id: string;
-  name: string;
-}
-
 export interface IoSchemaGroup {
   required?: string[];
   properties?: Record<string, { description?: string; type?: string }>;
