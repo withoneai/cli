@@ -125,24 +125,24 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
       permissionSetId = set.id;
     }
 
-    // The secret comes back once, on creation: it goes straight into the env
-    // file and is never printed or returned.
-    const nextEnv = upsertEnv(envText, {
-      ONE_CLIENT_ID: app.clientId,
-      ONE_REDIRECT_URI: config.redirectUris[0],
-      ...(permissionSetId ? { ONE_PERMISSION_SET: permissionSetId } : {}),
-      ONE_CLIENT_SECRET: app.clientSecret ?? null,
-      ONE_CONNECT_KEY: null,
-    });
-    fs.writeFileSync(envFile, nextEnv);
+    fs.writeFileSync(
+      envFile,
+      upsertEnv(envText, {
+        ONE_CLIENT_ID: app.clientId,
+        ONE_REDIRECT_URI: config.redirectUris[0],
+        ...(permissionSetId ? { ONE_PERMISSION_SET: permissionSetId } : {}),
+        ONE_CLIENT_SECRET: null,
+        ONE_CONNECT_KEY: null,
+      })
+    );
 
     const whoami = await ensureWhoAmI(api);
     const credentialsUrl = getConnectCredentialsUrl(app.clientId, {
       orgId: whoami?.organization?.id,
       projectId: whoami?.project?.id,
     });
-    const pending = (['ONE_CLIENT_SECRET', 'ONE_CONNECT_KEY'] as const).filter((key) => !readEnvValue(nextEnv, key));
-    const opening = options.open !== false && pending.length > 0;
+    const secretsPending = !readEnvValue(envText, 'ONE_CLIENT_SECRET') || !readEnvValue(envText, 'ONE_CONNECT_KEY');
+    const opening = options.open !== false && (created || secretsPending);
     if (opening) await open(credentialsUrl).catch(() => undefined);
 
     const result = {
@@ -152,7 +152,7 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
       redirectUris: config.redirectUris,
       envFile: path.relative(cwd, envFile) || envFile,
       credentialsUrl,
-      pending,
+      pending: secretsPending ? ['ONE_CLIENT_SECRET', 'ONE_CONNECT_KEY'] : [],
     };
 
     if (output.isAgentMode()) {
@@ -166,11 +166,10 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
     if (permissionSetId) console.log(`  ${pc.dim('Permission set:')}  ${permissionSetId}`);
     console.log(`  ${pc.dim('Wrote')}            ${result.envFile}`);
     console.log();
-    if (pending.length > 0) {
-      const what = pending.includes('ONE_CLIENT_SECRET') ? 'the connect key and a new client secret' : 'the connect key';
-      console.log(`  ${opening ? `Opening your browser for ${what}:` : `Get ${what} here:`}`);
+    if (secretsPending) {
+      console.log(`  ${opening ? 'Opening your browser for the two secrets:' : 'Get the two secrets here:'}`);
       console.log(`  ${pc.underline(credentialsUrl)}`);
-      console.log(`  ${pc.dim(`Paste ${pending.join(' and ')} into`)} ${result.envFile}${pc.dim('. Secrets are never printed here.')}`);
+      console.log(`  ${pc.dim('Paste ONE_CLIENT_SECRET and ONE_CONNECT_KEY into')} ${result.envFile}${pc.dim('. They are never printed here.')}`);
       console.log();
     }
   } catch (error) {

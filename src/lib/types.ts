@@ -186,14 +186,12 @@ export interface AvailableAction {
   method: string;
 }
 
-/** A Connect app as `/v1/oauth-clients` answers. `clientSecret` is there
- *  once, on creation; the CLI writes it to the env file and never prints it. */
+/** A Connect app as `/v1/oauth-clients` answers an API key: never a secret. */
 export interface ConnectAppView {
   id: string;
   clientId: string;
   name: string;
   redirectUris: string[];
-  clientSecret?: string | null;
 }
 
 export interface ConnectPermissionSetView {

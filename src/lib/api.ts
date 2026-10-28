@@ -595,8 +595,8 @@ export class OneApi {
     }
   }
 
-  // Connect app methods. A key creates and updates; the client secret comes
-  // back once on creation, and the connect key is minted in the dashboard.
+  // Connect app methods. A key creates and updates; the secret and the
+  // connect key are minted in the dashboard, never handed to the CLI.
 
   async createConnectApp(fields: Record<string, unknown>): Promise<ConnectAppView> {
     return this.requestFull<ConnectAppView>({
