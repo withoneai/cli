@@ -52,26 +52,11 @@ export function findConfigFile(cwd: string, explicit?: string): string | null {
   return null;
 }
 
-/**
- * Imports the config's default export. A `.ts` file loads natively on
- * Node 22.18+ (type stripping); older Node gets a message pointing at the
- * `.mjs` form instead of a stack trace.
- */
+/** Imports the config's default export. Every Node the CLI runs on strips
+ *  types, so a `.ts` file loads as it is. */
 export async function loadConfigFile(file: string): Promise<unknown> {
-  try {
-    const mod = await import(pathToFileURL(file).href);
-    return mod.default ?? mod;
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    if (code === 'ERR_UNKNOWN_FILE_EXTENSION' && /\.m?ts$/.test(file)) {
-      throw new Error(
-        `Node ${process.versions.node} can't load ${path.basename(file)}. Use Node 22.18 or later, ` +
-          `or rename it to one.connect.mjs and type it with ` +
-          `/** @type {import("@withone/connect/config").ConnectAppConfig} */.`
-      );
-    }
-    throw error;
-  }
+  const mod = await import(pathToFileURL(file).href);
+  return mod.default ?? mod;
 }
 
 /** Checks the shape the API would refuse, so the developer hears it before

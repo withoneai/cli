@@ -97,7 +97,7 @@ program
     one skills remove connect             Remove it
 
   Connect apps (one.connect.ts, typed by @withone/connect/config):
-    one connect create                    Create or update the app, write .env, open the page with its two secrets
+    one connect create                    Create or update the app, write .env, open the page for its connect key
     one connect types                     Write one-connect-env.d.ts so tool slugs and action names autocomplete
 
   Guide:
@@ -671,7 +671,7 @@ const connectApp = program
 
 connectApp
   .command('create')
-  .description('Create the app (or update it, once .env holds its ONE_CLIENT_ID), write .env, and open the page that shows its two secrets once')
+  .description('Create the app (or update it, once .env holds its ONE_CLIENT_ID), write .env (the client secret is written, never printed), and open the page that makes its connect key')
   .option('--config <file>', 'Config file (default: one.connect.ts, .mts, .mjs or .js in this directory)')
   .option('--env-file <file>', 'Env file to write (default: .env.local if it exists, else .env)')
   .option('--no-open', 'Print the secrets page instead of opening it')
