@@ -34,16 +34,23 @@ export function getApiKeyUrl(): string {
 }
 
 /**
- * The page that mints a Connect app's client secret and connect key and
+ * The browser half of `one connect create`, beside `one login`'s
+ * `/cli/auth`: mints a Connect app's client secret and connect key and
  * shows them once. The org and project name the space the app was created
- * in, so the page reads it from there whatever the header has selected.
+ * in, so the page reads it from there whatever the dashboard has
+ * selected; `env` names the file the CLI wrote, so the page says where to
+ * paste.
  */
-export function getConnectCredentialsUrl(clientId: string, params?: Pick<ConnectionUrlParams, 'orgId' | 'projectId'>): string {
+export function getConnectCredentialsUrl(
+  clientId: string,
+  params?: Pick<ConnectionUrlParams, 'orgId' | 'projectId'> & { envFile?: string }
+): string {
   const searchParams = new URLSearchParams();
   if (params?.orgId) searchParams.set('orgId', params.orgId);
   if (params?.projectId) searchParams.set('projectId', params.projectId);
+  if (params?.envFile) searchParams.set('env', params.envFile);
   const qs = searchParams.toString();
-  return `${oneAppUrl()}/developers/connect/${encodeURIComponent(clientId)}/credentials${qs ? `?${qs}` : ''}`;
+  return `${oneAppUrl()}/cli/connect/${encodeURIComponent(clientId)}${qs ? `?${qs}` : ''}`;
 }
 
 export async function openConnectionPage(platform: string, params?: ConnectionUrlParams): Promise<void> {

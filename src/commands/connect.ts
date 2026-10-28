@@ -140,6 +140,7 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
     const credentialsUrl = getConnectCredentialsUrl(app.clientId, {
       orgId: whoami?.organization?.id,
       projectId: whoami?.project?.id,
+      envFile: path.basename(envFile),
     });
     const secretsPending = !readEnvValue(envText, 'ONE_CLIENT_SECRET') || !readEnvValue(envText, 'ONE_CONNECT_KEY');
     const opening = options.open !== false && (created || secretsPending);

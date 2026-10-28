@@ -67,11 +67,11 @@ describe('getConnectCredentialsUrl', () => {
     else process.env.ONE_APP_URL = saved;
   });
 
-  it('opens the app’s credentials page in the space it was created in', () => {
+  it('opens the setup page in the space the app was created in, naming the env file', () => {
     assert.equal(
-      getConnectCredentialsUrl('f305b9fc', { orgId: 'org-1', projectId: 'proj-1' }),
-      'https://app.withone.ai/developers/connect/f305b9fc/credentials?orgId=org-1&projectId=proj-1'
+      getConnectCredentialsUrl('f305b9fc', { orgId: 'org-1', projectId: 'proj-1', envFile: '.env.local' }),
+      'https://app.withone.ai/cli/connect/f305b9fc?orgId=org-1&projectId=proj-1&env=.env.local'
     );
-    assert.equal(getConnectCredentialsUrl('f305b9fc'), 'https://app.withone.ai/developers/connect/f305b9fc/credentials');
+    assert.equal(getConnectCredentialsUrl('f305b9fc'), 'https://app.withone.ai/cli/connect/f305b9fc');
   });
 });

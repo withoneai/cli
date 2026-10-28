@@ -536,7 +536,7 @@ one connect types     # writes one-connect-env.d.ts: tool slugs and action names
 one connect create    # creates the app, or updates it once .env holds its ONE_CLIENT_ID
 ```
 
-`one connect create` uses your API key, writes `ONE_CLIENT_ID`, `ONE_PERMISSION_SET` and `ONE_REDIRECT_URI` to `.env.local` (or `.env`), and opens the app's **Credentials** page in the dashboard, which shows the client secret and the connect key once. The two secrets never pass through the terminal. Each tool in `ask` takes `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`, named as `one connect types` wrote them or by id from `one actions search`. Options: `--config <file>`, `--env-file <file>`, `--no-open`. A `.ts` config needs Node 22.18 or later; on older Node use `one.connect.mjs`.
+`one connect create` uses your API key, writes `ONE_CLIENT_ID`, `ONE_PERMISSION_SET` and `ONE_REDIRECT_URI` to `.env.local` (or `.env`), and opens a setup page in your signed-in browser, which makes the client secret and the connect key and shows them once. The two secrets never pass through the terminal. Each tool in `ask` takes `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`, named as `one connect types` wrote them or by id from `one actions search`. Options: `--config <file>`, `--env-file <file>`, `--no-open`. Install `@withone/connect` (0.19.0 or later) in the project first. A `.ts` config needs Node 22.18 or later; on older Node use `one.connect.mjs`.
 
 ### `one guide [topic]`
 

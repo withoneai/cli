@@ -380,7 +380,7 @@ one --agent connect types      # tool slugs and action names autocomplete in one
 one --agent connect create     # creates or updates the app; writes ONE_CLIENT_ID, ONE_PERMISSION_SET, ONE_REDIRECT_URI to .env
 ```
 
-It opens the app's Credentials page for the human: tell them to copy `ONE_CLIENT_SECRET` and `ONE_CONNECT_KEY` from there into the env file the result names (`pending`). The CLI never receives either secret. Run `connect create` again after editing the file to update the same app.
+It opens a setup page in the human's browser: tell them to copy `ONE_CLIENT_SECRET` and `ONE_CONNECT_KEY` from there into the env file the result names (`pending`). The CLI never receives either secret. Run `connect create` again after editing the file to update the same app.
 
 ## Adding New Connections
 
