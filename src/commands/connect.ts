@@ -14,6 +14,8 @@ import {
   buildHandoff,
   connectorRule,
   encodeHandoff,
+  MAX_HANDOFF_LENGTH,
+  MAX_WINDOWS_OPEN_LENGTH,
   defaultEnvFile,
   findConfigFile,
   loadConfigFile,
@@ -84,7 +86,7 @@ async function buildRules(api: OneApi, config: ConnectAppConfig): Promise<Connec
     if ('unknown' in resolved) {
       output.error(
         `${slug} has no action named ${resolved.unknown.join(', ')}. ` +
-          `Run \`one connect types\` for the names, or \`one actions search ${slug} "<query>"\` for an id.`
+          `Run \`one connect types\` for the names, or \`one actions find ${slug} "<what it does>" --no-knowledge\` for an id.`
       );
     }
     rules.push(connectorRule(definitionId, ask, resolved.ids));
@@ -114,6 +116,14 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
       envFile: path.basename(envFile),
     };
 
+    const handoff = encodeHandoff(buildHandoff(config, rules));
+    if (handoff.length > MAX_HANDOFF_LENGTH) {
+      output.error(
+        `${path.basename(file)} is too big to hand to the browser (${Math.ceil(handoff.length / 1024)} KB compressed, ` +
+          `limit ${Math.floor(MAX_HANDOFF_LENGTH / 1024)} KB). Give tools with long custom lists an access level instead.`
+      );
+    }
+
     const state = crypto.randomBytes(16).toString('hex');
     const started = await startConnectCallbackServer(state, (done) =>
       getConnectDoneUrl(done.clientId, done.outcome, scope)
@@ -125,10 +135,13 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
       permissionSetId: readEnvValue(envText, 'ONE_PERMISSION_SET') || undefined,
       port: started.port,
       state,
-      handoff: encodeHandoff(buildHandoff(config, rules)),
+      handoff,
     });
 
-    const opening = options.open !== false;
+    // Windows opens links through PowerShell, which can't take a very long
+    // one; the person opens the printed link instead.
+    const tooLongToOpen = process.platform === 'win32' && url.length > MAX_WINDOWS_OPEN_LENGTH;
+    const opening = options.open !== false && !tooLongToOpen;
     if (opening) await open(url).catch(() => undefined);
     const verb = existingId ? 'Approve the update' : 'Create the app';
     if (output.isAgentMode()) {
@@ -136,7 +149,7 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
       // out now so an agent can hand it over if no browser opened.
       process.stderr.write(`${verb} in the browser: ${url}\n`);
     } else {
-      spinner.stop(`${verb} in your browser`);
+      spinner.stop(opening ? `${verb} in your browser` : `${verb}: open this link in your browser`);
       console.log(`  ${pc.underline(url)}`);
       console.log();
       spinner.start('Waiting for you to approve it...');

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -216,11 +217,23 @@ export function buildHandoff(config: ConnectAppConfig, rules: ConnectorRule[]): 
   return { v: 1, app: clientFields(config), ask: rules.length > 0 ? rules : null };
 }
 
-/** The handoff as the link's fragment carries it: base64url JSON, so it
- *  never reaches a server log. */
+/**
+ * The handoff as the link's fragment carries it: JSON, deflated (the
+ * browser inflates it with its built-in DecompressionStream), then
+ * base64url. The fragment never reaches a server, so size is bounded only
+ * by what can open a URL; deflate roughly halves a long list of action ids.
+ */
 export function encodeHandoff(handoff: ConnectHandoff): string {
-  return Buffer.from(JSON.stringify(handoff), 'utf8').toString('base64url');
+  return zlib.deflateRawSync(Buffer.from(JSON.stringify(handoff), 'utf8'), { level: 9 }).toString('base64url');
 }
+
+/** Past this the link is too long for a terminal to hand over reliably;
+ *  far beyond any real app (about 30 custom tools of 30 actions each). */
+export const MAX_HANDOFF_LENGTH = 32_000;
+
+/** Windows opens links through PowerShell, whose command line holds a
+ *  URL of about 12,000 characters; past this the CLI prints it instead. */
+export const MAX_WINDOWS_OPEN_LENGTH = 11_000;
 
 /** `.env.local` when the project has one (Next.js), else `.env`. */
 export function defaultEnvFile(cwd: string): string {

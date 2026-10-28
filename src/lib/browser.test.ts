@@ -70,14 +70,14 @@ describe('connect setup links', () => {
   it('opens /cli/connect/new for a new app, the config in the fragment', () => {
     assert.equal(
       getConnectSetupUrl({ orgId: 'org-1', envFile: '.env.local', port: 51234, state: 'abc', handoff: 'eyJ2IjoxfQ' }),
-      'https://app.withone.ai/cli/connect/new?orgId=org-1&env=.env.local&port=51234&state=abc#c=eyJ2IjoxfQ'
+      'https://app.withone.ai/cli/connect/new?orgId=org-1&env=.env.local&port=51234&state=abc#z=eyJ2IjoxfQ'
     );
   });
 
   it('opens the app itself for an update, naming its ask', () => {
     assert.equal(
       getConnectSetupUrl({ clientId: 'f305b9fc', permissionSetId: 'ps-1', port: 1, state: 's', handoff: 'x' }),
-      'https://app.withone.ai/cli/connect/f305b9fc?set=ps-1&port=1&state=s#c=x'
+      'https://app.withone.ai/cli/connect/f305b9fc?set=ps-1&port=1&state=s#z=x'
     );
   });
 

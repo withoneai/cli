@@ -74,7 +74,7 @@ export function getConnectSetupUrl(
     ['port', String(opts.port)],
     ['state', opts.state],
   ]);
-  return `${oneAppUrl()}/cli/connect/${target}${qs}#c=${opts.handoff}`;
+  return `${oneAppUrl()}/cli/connect/${target}${qs}#z=${opts.handoff}`;
 }
 
 /** Where the CLI sends the browser once it has written `.env`: the setup

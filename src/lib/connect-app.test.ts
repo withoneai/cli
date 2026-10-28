@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import {
   actionName,
   actionNames,
@@ -206,10 +207,18 @@ describe('handoff', () => {
     assert.equal(buildHandoff(config, []).ask, null);
   });
 
-  it('encodes as base64url JSON that decodes back', () => {
+  it('encodes as deflated base64url JSON that inflates back', () => {
     const handoff = buildHandoff(config, []);
     const encoded = encodeHandoff(handoff);
     assert.match(encoded, /^[A-Za-z0-9_-]+$/);
-    assert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')), handoff);
+    const json = zlib.inflateRawSync(Buffer.from(encoded, 'base64url')).toString('utf8');
+    assert.deepEqual(JSON.parse(json), handoff);
+  });
+
+  it('roughly halves a long list of action ids', () => {
+    const ids = Array.from({ length: 200 }, (_, i) => `conn_mod_def::GJ7Km${i}Q::C4xVtTCm${i}TjeKrcf-4UV9Iw`);
+    const handoff = buildHandoff(config, [connectorRule(7, { access: 'custom', actions: ids }, ids)]);
+    const plain = Buffer.from(JSON.stringify(handoff)).toString('base64url').length;
+    assert.ok(encodeHandoff(handoff).length < plain / 2);
   });
 });
