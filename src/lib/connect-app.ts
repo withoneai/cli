@@ -27,7 +27,13 @@ export interface ConnectAppConfig {
   homepageUrl?: string;
   reason?: string;
   branding?: { panelColor: string; buttonColor: string; cobrandEmail?: boolean };
-  ask?: Record<string, ToolAsk>;
+  /** The tools the app asks for, or everything its users have. */
+  ask: Record<string, ToolAsk> | 'everything';
+}
+
+/** The tools a config names; none when it asks for everything. */
+export function askedTools(config: Pick<ConnectAppConfig, 'ask'>): Array<[string, ToolAsk]> {
+  return config.ask === 'everything' ? [] : Object.entries(config.ask ?? {});
 }
 
 /** The dashboard's mapping from a level to the methods a rule admits
@@ -112,7 +118,18 @@ export function validateConfig(value: unknown): { config: ConnectAppConfig } | {
       if (!HEX_COLOR.test(String(v.branding[key] ?? ''))) errors.push(`\`branding.${key}\` must be a #RRGGBB colour.`);
     }
   }
-  for (const [tool, ask] of Object.entries(v.ask ?? {})) {
+  const asked = v.ask as unknown;
+  if (asked === undefined) {
+    errors.push('`ask` is required: name the tools the app asks for, or write `ask: "everything"`.');
+  } else if (typeof asked === 'string') {
+    if (asked !== 'everything') errors.push(`\`ask\` is "${asked}"; it must be a map of tools or "everything".`);
+  } else if (!asked || typeof asked !== 'object' || Array.isArray(asked)) {
+    errors.push('`ask` must be a map of tools or "everything".');
+  } else if (Object.keys(asked).length === 0) {
+    errors.push('`ask` names no tools. Name at least one, or write `ask: "everything"`.');
+  }
+  const tools = asked && typeof asked === 'object' && !Array.isArray(asked) ? Object.entries(asked) : [];
+  for (const [tool, ask] of tools) {
     const access = (ask as { access?: unknown })?.access;
     if (access === 'custom') {
       const actions = (ask as { actions?: unknown }).actions;
@@ -205,17 +222,27 @@ export function clientFields(config: ConnectAppConfig): Record<string, unknown> 
  * What `one connect create` hands the setup page: the app's fields and its
  * ask, already resolved to catalog ids. The page shows it for review and
  * writes it with the person's dashboard session, so an API key never
- * creates or changes a Connect app. `ask` is null when the config asks for
- * nothing, which leaves an existing ask as it is.
+ * creates or changes a Connect app.
+ *
+ * Version 2 says what the app asks for either way: the tools as rules, or
+ * everything (no ask of its own, so users see every connection they have).
+ * Version 1 sent `ask: null` for a config without tools, which the page
+ * read as "leave the ask alone"; it still accepts that from older CLIs.
  */
+export type HandoffAsk = { kind: 'everything' } | { kind: 'tools'; rules: ConnectorRule[] };
+
 export interface ConnectHandoff {
-  v: 1;
+  v: 2;
   app: Record<string, unknown>;
-  ask: ConnectorRule[] | null;
+  ask: HandoffAsk;
 }
 
 export function buildHandoff(config: ConnectAppConfig, rules: ConnectorRule[]): ConnectHandoff {
-  return { v: 1, app: clientFields(config), ask: rules.length > 0 ? rules : null };
+  return {
+    v: 2,
+    app: clientFields(config),
+    ask: config.ask === 'everything' ? { kind: 'everything' } : { kind: 'tools', rules },
+  };
 }
 
 /**
@@ -266,6 +293,11 @@ export function upsertEnv(text: string, values: Record<string, string | null>): 
   if (appended.length === 0) return next;
   const separator = next.length === 0 || next.endsWith('\n') ? '' : '\n';
   return `${next}${separator}${appended.join('\n')}\n`;
+}
+
+/** Drops each key's line, keeping every other line and comment. */
+export function removeEnvKeys(text: string, keys: string[]): string {
+  return keys.reduce((next, key) => next.replace(new RegExp(`^${key}=.*(?:\r?\n|$)`, 'm'), ''), text);
 }
 
 /** The declaration file `one connect types` writes. */

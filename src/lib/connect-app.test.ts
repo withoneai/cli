@@ -16,6 +16,7 @@ import {
   readEnvValue,
   renderTypes,
   resolveActions,
+  removeEnvKeys,
   upsertEnv,
   validateConfig,
 } from './connect-app.js';
@@ -86,6 +87,7 @@ describe('clientFields', () => {
         redirectUris: ['http://localhost:3000/api/one/callback'],
         reason: 'Mastra plans your day',
         branding: { panelColor: '#A02235', buttonColor: '#6A2557' },
+        ask: 'everything',
       }),
       {
         name: 'Mastra',
@@ -107,6 +109,20 @@ describe('validateConfig', () => {
     assert.ok('config' in result);
   });
 
+  it('accepts an app that asks for everything', () => {
+    const result = validateConfig({ name: 'Agent', redirectUris: ['http://localhost:3000/cb'], ask: 'everything' });
+    assert.ok('config' in result);
+  });
+
+  it('needs ask: a map of tools or "everything"', () => {
+    const base = { name: 'Agent', redirectUris: ['http://localhost:3000/cb'] };
+    for (const ask of [undefined, 'all', {}, []]) {
+      const result = validateConfig({ ...base, ask });
+      assert.ok('errors' in result, `ask ${JSON.stringify(ask)} should be refused`);
+      assert.match(result.errors[0], /ask/);
+    }
+  });
+
   it('lists every problem at once', () => {
     const result = validateConfig({
       name: '',
@@ -116,6 +132,17 @@ describe('validateConfig', () => {
     });
     assert.ok('errors' in result);
     assert.equal(result.errors.length, 5);
+  });
+});
+
+describe('removeEnvKeys', () => {
+  it('drops the key and keeps every other line', () => {
+    assert.equal(
+      removeEnvKeys('# app\nONE_CLIENT_ID=a\nONE_PERMISSION_SET=ps-1\nDATABASE_URL=x\n', ['ONE_PERMISSION_SET']),
+      '# app\nONE_CLIENT_ID=a\nDATABASE_URL=x\n'
+    );
+    assert.equal(removeEnvKeys('ONE_CLIENT_ID=a\nONE_PERMISSION_SET=ps-1', ['ONE_PERMISSION_SET']), 'ONE_CLIENT_ID=a\n');
+    assert.equal(removeEnvKeys('ONE_CLIENT_ID=a\n', ['ONE_PERMISSION_SET']), 'ONE_CLIENT_ID=a\n');
   });
 });
 
@@ -208,18 +235,21 @@ describe('handoff', () => {
     reason: 'Plans your day',
   };
 
-  it('carries the app fields and the resolved ask, or null for no ask', () => {
+  it('carries the app fields and the resolved tools', () => {
     const rule = connectorRule(7, { access: 'read-only' });
-    assert.deepEqual(buildHandoff(config, [rule]), {
-      v: 1,
+    assert.deepEqual(buildHandoff({ ...config, ask: { linear: { access: 'read-only' } } }, [rule]), {
+      v: 2,
       app: { name: 'Mastra', redirectUris: config.redirectUris, consentReason: 'Plans your day' },
-      ask: [rule],
+      ask: { kind: 'tools', rules: [rule] },
     });
-    assert.equal(buildHandoff(config, []).ask, null);
+  });
+
+  it('says so when the app asks for everything', () => {
+    assert.deepEqual(buildHandoff({ ...config, ask: 'everything' }, []).ask, { kind: 'everything' });
   });
 
   it('encodes as deflated base64url JSON that inflates back', () => {
-    const handoff = buildHandoff(config, []);
+    const handoff = buildHandoff({ ...config, ask: 'everything' }, []);
     const encoded = encodeHandoff(handoff);
     assert.match(encoded, /^[A-Za-z0-9_-]+$/);
     const json = zlib.inflateRawSync(Buffer.from(encoded, 'base64url')).toString('utf8');
@@ -228,7 +258,9 @@ describe('handoff', () => {
 
   it('roughly halves a long list of action ids', () => {
     const ids = Array.from({ length: 200 }, (_, i) => `conn_mod_def::GJ7Km${i}Q::C4xVtTCm${i}TjeKrcf-4UV9Iw`);
-    const handoff = buildHandoff(config, [connectorRule(7, { access: 'custom', actions: ids }, ids)]);
+    const handoff = buildHandoff({ ...config, ask: { linear: { access: 'custom', actions: ids } } }, [
+      connectorRule(7, { access: 'custom', actions: ids }, ids),
+    ]);
     const plain = Buffer.from(JSON.stringify(handoff)).toString('base64url').length;
     assert.ok(encodeHandoff(handoff).length < plain / 2);
   });
