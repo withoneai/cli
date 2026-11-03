@@ -11,6 +11,7 @@ import { ensureWhoAmI, getApiBase, getApiKey } from '../lib/config.js';
 import {
   TYPES_FILE,
   actionNames,
+  askedTools,
   buildHandoff,
   connectorRule,
   encodeHandoff,
@@ -20,6 +21,7 @@ import {
   findConfigFile,
   loadConfigFile,
   readEnvValue,
+  removeEnvKeys,
   renderTypes,
   resolveActions,
   upsertEnv,
@@ -64,7 +66,7 @@ function message(error: unknown): string {
 
 /** The ask as connector rules: slugs to catalog ids, action names to ids. */
 async function buildRules(api: OneApi, config: ConnectAppConfig): Promise<ConnectorRule[]> {
-  const asked = Object.entries(config.ask ?? {});
+  const asked = askedTools(config);
   if (asked.length === 0) return [];
 
   const platforms = await api.listPlatforms();
@@ -166,12 +168,15 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
     if (outcome.kind === 'failed') output.error(`The setup page reported: ${outcome.reason}`);
 
     const created = outcome.outcome === 'created';
+    // An app that asks for everything sends no permission set, so a set left
+    // in the file would keep it asking for the old tools.
+    const asksForEverything = config.ask === 'everything';
     fs.writeFileSync(
       envFile,
-      upsertEnv(envText, {
+      upsertEnv(asksForEverything ? removeEnvKeys(envText, ['ONE_PERMISSION_SET']) : envText, {
         ONE_CLIENT_ID: outcome.clientId,
         ONE_REDIRECT_URI: config.redirectUris[0],
-        ...(outcome.permissionSetId ? { ONE_PERMISSION_SET: outcome.permissionSetId } : {}),
+        ...(!asksForEverything && outcome.permissionSetId ? { ONE_PERMISSION_SET: outcome.permissionSetId } : {}),
         ...(created ? { ONE_CLIENT_SECRET: null, ONE_CONNECT_KEY: null } : {}),
       })
     );
@@ -179,7 +184,8 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
     const result = {
       outcome: outcome.outcome,
       clientId: outcome.clientId,
-      permissionSetId: outcome.permissionSetId,
+      permissionSetId: asksForEverything ? null : outcome.permissionSetId,
+      asksForEverything,
       redirectUris: config.redirectUris,
       envFile: path.relative(cwd, envFile) || envFile,
     };
@@ -193,7 +199,8 @@ export async function connectCreateCommand(options: { config?: string; envFile?:
     );
     console.log();
     console.log(`  ${pc.dim('Client ID:')}       ${outcome.clientId}`);
-    if (outcome.permissionSetId) console.log(`  ${pc.dim('Permission set:')}  ${outcome.permissionSetId}`);
+    if (asksForEverything) console.log(`  ${pc.dim('Asks for:')}        everything the user has connected`);
+    else if (outcome.permissionSetId) console.log(`  ${pc.dim('Permission set:')}  ${outcome.permissionSetId}`);
     console.log(`  ${pc.dim('Wrote')}            ${result.envFile}`);
     if (created) {
       console.log(`  ${pc.dim('The two secrets came from the browser page, never through here.')}`);
@@ -217,7 +224,7 @@ export async function connectTypesCommand(options: { config?: string }): Promise
   try {
     const file = findConfigFile(cwd, options.config);
     const config = file ? validateConfig(await loadConfigFile(file)) : null;
-    const tools = Object.keys(config && 'config' in config ? config.config.ask ?? {} : {});
+    const tools = config && 'config' in config ? askedTools(config.config).map(([slug]) => slug) : [];
 
     const platforms = await api.listPlatforms();
     const known = new Set(platforms.map((p) => p.platform));

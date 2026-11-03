@@ -529,14 +529,14 @@ Commit `.agents/skills/one-connect` and the agent links so your team's agents sh
 
 ### `one connect`
 
-Create and update a [One Connect](https://www.npmjs.com/package/@withone/connect) app from `one.connect.ts`, typed by `defineConnectApp` from `@withone/connect/config` (0.19.0 or later).
+Create and update a [One Connect](https://www.npmjs.com/package/@withone/connect) app from `one.connect.ts`, typed by `defineConnectApp` from `@withone/connect/config` (0.20.0 or later).
 
 ```bash
 one connect types     # writes one-connect-env.d.ts: tool slugs and action names autocomplete
 one connect create    # approve the app in the browser; re-run to review and apply changes
 ```
 
-`one connect create` opens a setup page in your signed-in browser, where you review the app (or, on a re-run, its new version) and approve it; nothing is created or changed with your API key. A new app's client secret and connect key are made there and shown once, so they never pass through the terminal. Once you approve, the CLI writes `ONE_CLIENT_ID`, `ONE_PERMISSION_SET` and `ONE_REDIRECT_URI` to `.env.local` (or `.env`). Each tool in `ask` takes `access`: `read-only`, `read-write`, `full-access`, or `custom` with `actions`, named as `one connect types` wrote them or by id from `one actions find <platform> "<what it does>" --no-knowledge`. Options: `--config <file>`, `--env-file <file>`, `--no-open`. Install `@withone/connect` (0.19.0 or later) in the project first. A `.ts` config needs Node 22.18 or later; on older Node use `one.connect.mjs`.
+`one connect create` opens a setup page in your signed-in browser, where you review the app (or, on a re-run, its new version) and approve it; nothing is created or changed with your API key. A new app's client secret and connect key are made there and shown once, so they never pass through the terminal. Once you approve, the CLI writes `ONE_CLIENT_ID`, `ONE_REDIRECT_URI` and, for a list of tools, `ONE_PERMISSION_SET` to `.env.local` (or `.env`). `ask` is required: either the tools, where each takes `access` (`read-only`, `read-write`, `full-access`, or `custom` with `actions`, named as `one connect types` wrote them or by id from `one actions find <platform> "<what it does>" --no-knowledge`), or `"everything"`, where users see every connection they have and can connect any other app. An app switched to `"everything"` loses its ask, and the CLI removes `ONE_PERMISSION_SET` from the env file. Options: `--config <file>`, `--env-file <file>`, `--no-open`. Install `@withone/connect` (0.20.0 or later) in the project first. A `.ts` config needs Node 22.18 or later; on older Node use `one.connect.mjs`.
 
 ### `one guide [topic]`
 
