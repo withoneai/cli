@@ -738,7 +738,7 @@ Drop a `.onerc` file in your project root to override global settings per-projec
 | Key | Purpose |
 |-----|---------|
 | `ONE_SECRET` | API key (also honored as env var) |
-| `ONE_API_BASE` | API base URL (also honored as env var) |
+| `ONE_API_BASE` | API base URL, `https://api.withone.ai` or `https://development-api.withone.ai` only (the env var accepts any origin) |
 | `ONE_PERMISSIONS` | `admin` / `write` / `read` |
 | `ONE_CONNECTION_KEYS` | Comma-separated connection-key allowlist |
 | `ONE_ACTION_IDS` | Comma-separated action-ID allowlist |
