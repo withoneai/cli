@@ -487,7 +487,7 @@ one sync run stripe --full-refresh
 | `schedule add/list/status/remove/repair` | Cron-backed scheduled syncs with drift detection |
 | `remove <platform>` | Delete synced data (`--dry-run` to preview) |
 
-Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` or `one guide memory` for the full reference.
+Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Shell commands in a profile (`transform` and hooks other than `"log"`) only run once approved for that project: commands you pass in `sync init --config` are approved automatically, and commands that arrive in a profile on disk (for example from a cloned repo) need `one sync approve <platform>`. A change to an approved command needs approving again. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` or `one guide memory` for the full reference.
 
 ### `one relay`
 
