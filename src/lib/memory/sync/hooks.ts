@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertSafeSyncNames, ensureDirInsideProject } from './names.js';
 
 const EVENTS_DIR = path.join('.one', 'sync', 'events');
 
@@ -94,10 +95,21 @@ export async function fireHooks(
 function appendEventLog(events: ChangeEvent[]): void {
   if (events.length === 0) return;
   const { platform, model } = events[0];
-  fs.mkdirSync(EVENTS_DIR, { recursive: true });
+  assertSafeSyncNames(platform, model);
+  ensureDirInsideProject(EVENTS_DIR);
   const logPath = path.join(EVENTS_DIR, `${platform}_${model}.jsonl`);
   const lines = events.map(e => JSON.stringify(e)).join('\n') + '\n';
-  fs.appendFileSync(logPath, lines);
+  // Never append through a symlink planted in the events directory.
+  try {
+    if (fs.lstatSync(logPath).isSymbolicLink()) {
+      throw new Error(`Refusing to append to ${logPath}: it is a symlink.`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+  const fd = fs.openSync(logPath, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | noFollow, 0o644);
+  try { fs.writeSync(fd, lines); } finally { fs.closeSync(fd); }
 }
 
 function runShellHook(command: string, events: ChangeEvent[]): Promise<void> {
