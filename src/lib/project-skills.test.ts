@@ -208,6 +208,81 @@ describe('stamps travel between machines', () => {
   });
 });
 
+describe('a stamp committed in a cloned repository (PICA-1562)', () => {
+  /** The audit's payload: a stamp that names a folder outside the project,
+   *  committed next to an older package version so the hook refreshes. */
+  function hostileProject(): { root: string; victim: string } {
+    const root = makeProject('0.0.2');
+    const victim = path.join(path.dirname(root), 'victim-dir');
+    fs.mkdirSync(victim, { recursive: true });
+    fs.writeFileSync(path.join(victim, 'keep.txt'), 'user data');
+    const canonical = path.join(root, '.agents', 'skills', 'one-connect');
+    fs.mkdirSync(canonical, { recursive: true });
+    fs.writeFileSync(path.join(canonical, 'SKILL.md'), 'old');
+    fs.writeFileSync(path.join(canonical, SKILL_STAMP), JSON.stringify({
+      skill: 'connect', package: '@withone/connect', version: '0.0.1', source: 'project', scope: 'project',
+      links: [
+        { path: '../victim-dir', kind: 'symlink', agents: [] },
+        { path: '..\\victim-dir', kind: 'symlink', agents: [] },
+        { path: '.claude/skills/../../../victim-dir', kind: 'symlink', agents: [] },
+        { path: '/etc', kind: 'symlink', agents: [] },
+      ],
+      installedBy: 'x', installedAt: '2026-01-01T00:00:00Z',
+    }));
+    return { root, victim };
+  }
+
+  it('refresh (the hook on every command) ignores stamp links outside the skill\'s own folders', () => {
+    const { root, victim } = hostileProject();
+    const results = refreshProjectSkills(root, '1.0.0');
+    assert.deepEqual(results.map(r => [r.from, r.to]), [['0.0.1', '0.0.2']]);
+    assert.equal(read(path.join(victim, 'keep.txt')), 'user data');
+    assert.match(read(path.join(root, '.agents', 'skills', 'one-connect', 'SKILL.md')), /0\.0\.2/);
+  });
+
+  it('remove ignores them too, and still removes what the skill owns', () => {
+    const { root, victim } = hostileProject();
+    const result = removeSkill(connect, { scope: 'project', root });
+    assert.equal(result.removed, true);
+    assert.equal(read(path.join(victim, 'keep.txt')), 'user data');
+    assert.ok(!fs.existsSync(path.join(root, '.agents', 'skills', 'one-connect')));
+  });
+
+  it('a known agent folder still goes when it is no longer asked for', () => {
+    const root = makeProject('0.16.0', { markers: ['.kiro'] });
+    installSkill(connect, projectSkillSource(connect, root)!, { scope: 'project', root, agents: [] }, '1.0.0');
+    assert.ok(fs.existsSync(path.join(root, '.kiro', 'skills', 'one-connect')));
+    installSkill(connect, projectSkillSource(connect, root)!, { scope: 'project', root, agents: ['claude-code'] }, '1.0.0');
+    assert.ok(!fs.existsSync(path.join(root, '.kiro', 'skills', 'one-connect')));
+  });
+
+  it('refuses to write or delete through an agent folder the repository symlinked outside the project', () => {
+    const root = makeProject('0.16.0');
+    const outside = path.join(path.dirname(root), 'outside-skills');
+    fs.mkdirSync(path.join(outside, 'one-connect'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'one-connect', 'keep.txt'), 'user data');
+    fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
+    fs.symlinkSync(outside, path.join(root, '.claude', 'skills'), 'junction');
+    assert.throws(
+      () => installSkill(connect, projectSkillSource(connect, root)!, { scope: 'project', root, agents: [] }, '1.0.0'),
+      /leads outside the project/,
+    );
+    assert.equal(read(path.join(outside, 'one-connect', 'keep.txt')), 'user data');
+  });
+
+  it('does not copy symlinks from the package\'s skill folder into the project', (t) => {
+    const root = makeProject('0.16.0');
+    const secret = path.join(home.dir, 'secret.txt');
+    fs.writeFileSync(secret, 'outside file');
+    const skillDir = path.join(root, 'node_modules', '@withone', 'connect', 'skills', 'one-connect');
+    try { fs.symlinkSync(secret, path.join(skillDir, 'leak.md'), 'file'); } catch { t.skip('file symlinks not allowed here'); return; }
+    installSkill(connect, projectSkillSource(connect, root)!, { scope: 'project', root, agents: [] }, '1.0.0');
+    const canonical = path.join(root, '.agents', 'skills', 'one-connect');
+    assert.ok(fs.existsSync(path.join(canonical, 'SKILL.md')));
+    assert.ok(!fs.existsSync(path.join(canonical, 'leak.md')));
+  });
+});
+
 describe('global installs', () => {
   it('uses ~/.agents/skills and links only the agents this machine has', () => {
     fs.mkdirSync(path.join(home.dir, '.claude'), { recursive: true });

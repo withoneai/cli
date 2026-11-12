@@ -350,8 +350,11 @@ function copyDir(src: string, dest: string): void {
     if (entry.name === SKILL_STAMP) continue;
     const from = path.join(src, entry.name);
     const to = path.join(dest, entry.name);
+    // A symlink in the package's skill folder could point anywhere on the
+    // machine; copying it would pull that file into the project.
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) copyDir(from, to);
-    else fs.copyFileSync(from, to);
+    else if (entry.isFile()) fs.copyFileSync(from, to);
   }
 }
 
@@ -380,6 +383,44 @@ function linkDir(target: string, linkPath: string): 'symlink' | 'junction' | 'co
   return 'copy';
 }
 
+/** The agent folders this skill can own in a scope, as stamps write them.
+ *  A stamp can come from a cloned repository, so its link paths are only
+ *  acted on when they name one of these. */
+function knownLinkPaths(skill: OptionalSkill, scope: 'project' | 'global'): Set<string> {
+  const canonical = `${UNIVERSAL_PROJECT_DIR}/${skill.dirName}`;
+  return new Set(
+    SKILL_AGENT_TARGETS
+      .map(a => `${scope === 'project' ? a.projectDir : a.homeDir}/${skill.dirName}`)
+      .filter(p => p !== canonical),
+  );
+}
+
+/** The stamp link as a full path, or null when the stamp names a folder
+ *  this skill does not own (e.g. `../victim-dir`). */
+function stampLinkPath(skill: OptionalSkill, plan: Pick<InstallPlan, 'scope' | 'root'>, rel: string): string | null {
+  return knownLinkPaths(skill, plan.scope).has(toPosix(rel)) ? fromStamp(plan.root, rel) : null;
+}
+
+/** In a project, refuse to write or delete through a folder the repository
+ *  made a symlink to somewhere else (say `.claude/skills` -> `../../`).
+ *  Checks the real location of the nearest existing parent. Global
+ *  installs are not checked: a symlinked ~/.claude is a normal setup, and
+ *  the home folder is not attacker-supplied. */
+function assertInsideProject(plan: Pick<InstallPlan, 'scope' | 'root'>, target: string): void {
+  if (plan.scope !== 'project') return;
+  let dir = path.dirname(target);
+  while (!fs.existsSync(dir)) {
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const realRoot = fs.realpathSync(plan.root);
+  const rel = path.relative(realRoot, fs.realpathSync(dir));
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Refusing to change ${target}: a folder on that path leads outside the project (${plan.root}).`);
+  }
+}
+
 /** Copies the skill to its canonical folder, links each agent folder to
  *  it, and stamps what was installed. Replaces an earlier install of the
  *  same skill; never touches other skills. */
@@ -389,17 +430,25 @@ export function installSkill(skill: OptionalSkill, source: SkillSource, plan: In
   // An agent folder this skill linked before and does not link now goes.
   const { readers, folders } = resolveAgentFolders(plan);
   const nextPaths = new Set(folders.map(f => `${f.dir}/${skill.dirName}`));
+  const targets = folders.map(folder => {
+    const rel = `${folder.dir}/${skill.dirName}`;
+    return { rel, full: fromStamp(plan.root, rel), agents: folder.agents };
+  });
+  assertInsideProject(plan, canonical);
+  for (const t of targets) assertInsideProject(plan, t.full);
+
   for (const link of previous?.links ?? []) {
-    if (!nextPaths.has(toPosix(link.path))) removePath(fromStamp(plan.root, link.path));
+    if (nextPaths.has(toPosix(link.path))) continue;
+    const full = stampLinkPath(skill, plan, link.path);
+    if (!full) continue; // not a folder this skill owns: leave it alone
+    assertInsideProject(plan, full);
+    removePath(full);
   }
 
   removePath(canonical);
   copyDir(source.dir, canonical);
 
-  const links: SkillStamp['links'] = folders.map(folder => {
-    const rel = `${folder.dir}/${skill.dirName}`;
-    return { path: rel, kind: linkDir(canonical, fromStamp(plan.root, rel)), agents: folder.agents };
-  });
+  const links: SkillStamp['links'] = targets.map(t => ({ path: t.rel, kind: linkDir(canonical, t.full), agents: t.agents }));
 
   const stamp: SkillStamp = {
     skill: skill.name,
@@ -423,8 +472,11 @@ export function removeSkill(skill: OptionalSkill, plan: Pick<InstallPlan, 'scope
   const stamp = readStamp(canonical);
   if (!stamp && !fs.existsSync(path.join(canonical, 'SKILL.md'))) return { removed: false, paths: [] };
   const paths: string[] = [];
+  assertInsideProject(plan, canonical);
   for (const link of stamp?.links ?? []) {
-    const full = fromStamp(plan.root, link.path);
+    const full = stampLinkPath(skill, plan, link.path);
+    if (!full) continue; // not a folder this skill owns: leave it alone
+    assertInsideProject(plan, full);
     if (fs.existsSync(full) || isDanglingLink(full)) { removePath(full); paths.push(full); }
   }
   removePath(canonical);
