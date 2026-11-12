@@ -334,6 +334,8 @@ export interface FlowExecuteOptions {
   mock?: boolean;
   verbose?: boolean;
   allowBash?: boolean;
+  /** Allow `code.module` steps, which run a `.mjs` file with full Node access. */
+  allowCode?: boolean;
   skipValidation?: boolean;
   /**
    * Stop execution after the step with this id completes. Steps that follow it

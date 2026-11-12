@@ -13,50 +13,50 @@ function ctx(steps: Record<string, StepResult> = {}): FlowContext {
 }
 
 describe('evaluateCondition — null-safe condition evaluation (#89)', () => {
-  it('returns false when referencing the output of a skipped step (no output key)', () => {
+  it('returns false when referencing the output of a skipped step (no output key)', async () => {
     // Exactly the #89 repro: stepA was skipped, so it has { status: 'skipped' }
     // with no `output`. stepB's `if` reads $.steps.stepA.output.result.
     const context = ctx({ stepA: { status: 'skipped' } });
-    assert.equal(evaluateCondition('$.steps.stepA.output.result', context), false);
+    assert.equal(await evaluateCondition('$.steps.stepA.output.result', context), false);
   });
 
-  it('returns false when referencing a step that never ran at all', () => {
-    assert.equal(evaluateCondition('$.steps.neverRan.output.value === true', ctx()), false);
+  it('returns false when referencing a step that never ran at all', async () => {
+    assert.equal(await evaluateCondition('$.steps.neverRan.output.value === true', ctx()), false);
   });
 
-  it('returns false for deep access through several missing segments', () => {
-    assert.equal(evaluateCondition('$.steps.a.output.b.c.d', ctx()), false);
+  it('returns false for deep access through several missing segments', async () => {
+    assert.equal(await evaluateCondition('$.steps.a.output.b.c.d', ctx()), false);
   });
 
-  it('still evaluates truthy/falsy correctly when the value is present', () => {
+  it('still evaluates truthy/falsy correctly when the value is present', async () => {
     const context = ctx({ stepA: { status: 'success', output: { result: 'hello' } } });
-    assert.equal(evaluateCondition('$.steps.stepA.output.result', context), true);
-    assert.equal(evaluateCondition("$.steps.stepA.output.result === 'hello'", context), true);
-    assert.equal(evaluateCondition("$.steps.stepA.output.result === 'nope'", context), false);
+    assert.equal(await evaluateCondition('$.steps.stepA.output.result', context), true);
+    assert.equal(await evaluateCondition("$.steps.stepA.output.result === 'hello'", context), true);
+    assert.equal(await evaluateCondition("$.steps.stepA.output.result === 'nope'", context), false);
   });
 
-  it('coerces non-boolean truthy results to a real boolean', () => {
+  it('coerces non-boolean truthy results to a real boolean', async () => {
     const context = ctx({ s: { status: 'success', output: { n: 0, str: 'x' } } });
-    assert.strictEqual(evaluateCondition('$.steps.s.output.n', context), false);
-    assert.strictEqual(evaluateCondition('$.steps.s.output.str', context), true);
+    assert.strictEqual(await evaluateCondition('$.steps.s.output.n', context), false);
+    assert.strictEqual(await evaluateCondition('$.steps.s.output.str', context), true);
   });
 
-  it('reads input/env without crashing', () => {
+  it('reads input/env without crashing', async () => {
     const context: FlowContext = { input: { flag: true }, env: { X: '1' }, steps: {}, loop: {} };
-    assert.equal(evaluateCondition('$.input.flag', context), true);
-    assert.equal(evaluateCondition('$.input.missing', context), false);
+    assert.equal(await evaluateCondition('$.input.flag', context), true);
+    assert.equal(await evaluateCondition('$.input.missing', context), false);
   });
 
-  it('rethrows genuine syntax errors (does not swallow malformed expressions)', () => {
-    assert.throws(() => evaluateCondition('$.steps.a.output.(', ctx()), SyntaxError);
+  it('rethrows genuine syntax errors (does not swallow malformed expressions)', async () => {
+    await assert.rejects(evaluateCondition('$.steps.a.output.(', ctx()), SyntaxError);
   });
 
-  it('rethrows reference errors for unknown bare identifiers', () => {
-    assert.throws(() => evaluateCondition('someUndefinedGlobal === 1', ctx()), ReferenceError);
+  it('rethrows reference errors for unknown bare identifiers', async () => {
+    await assert.rejects(evaluateCondition('someUndefinedGlobal === 1', ctx()), ReferenceError);
   });
 
-  it('leaves evaluateExpression (transforms) throwing on undefined access', () => {
+  it('leaves evaluateExpression (transforms) throwing on undefined access', async () => {
     // Transforms must still fail loudly — their output feeds downstream steps.
-    assert.throws(() => evaluateExpression('$.steps.gone.output.x', ctx()), TypeError);
+    await assert.rejects(evaluateExpression('$.steps.gone.output.x', ctx()), TypeError);
   });
 });

@@ -607,14 +607,15 @@ flow
   .alias('x')
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
-  .option('--dry-run', 'Resolve each step\'s interpolations and show what they evaluate to, without executing any step ($.steps.* refs resolve at runtime)')
+  .option('--dry-run', 'Resolve each step\'s interpolations and show what they evaluate to, without running actions, code, bash or file steps. Transform and condition expressions are evaluated in the sandbox ($.steps.* refs resolve at runtime)')
   .option('--mock', 'With --dry-run: execute transforms/code with realistic mock API responses')
   .option('--stop-after <stepId>', 'Execute steps up to and including <stepId>, then stop (later steps are not run). With --dry-run, runs earlier steps for real and dry-resolves <stepId> against their output without executing it. See: one flow inspect')
   .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
+  .option('--allow-code', 'Allow code.module steps, which run a .mjs file with full Node access (disabled by default for security). Inline transforms, conditions and code.source run sandboxed and need no flag')
   .option('-v, --verbose', 'Show full request/response for each step')
   .option('--output-file <path>', 'Write the full result to a file (streamed) instead of stdout — avoids truncation/string-limit errors for large results; stdout/agent output then carries an outputFile pointer')
-  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string }) => {
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; allowCode?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string }) => {
     await flowExecuteCommand(keyOrPath, options);
   });
 
@@ -637,7 +638,8 @@ flow
   .command('resume <runId>')
   .description('Resume a paused or failed workflow run')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security) — required to resume any flow containing bash steps')
-  .action(async (runId: string, options: { allowBash?: boolean }) => {
+  .option('--allow-code', 'Allow code.module steps (full Node access) — required to resume any flow containing them')
+  .action(async (runId: string, options: { allowBash?: boolean; allowCode?: boolean }) => {
     await flowResumeCommand(runId, options);
   });
 

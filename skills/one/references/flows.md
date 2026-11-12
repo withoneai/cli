@@ -25,7 +25,7 @@ If a flow's description doesn't tell you how to run it, treat that as a bug in t
 **Storage layout:**
 
 - **Folder layout (REQUIRED for new flows):** `.one/flows/<key>/flow.json`, with an optional `lib/` subfolder for `.mjs` code modules. Like a skill — the folder groups the spec with its helper code, so the whole flow is shareable. **Always create new flows here.**
-- **Legacy single-file layout (DEPRECATED):** `.one/flows/<key>.flow.json`. Still loads and runs for backward compatibility, but do not create new flows in this layout. When touching an existing single-file flow, migrate it: move `<key>.flow.json` to `<key>/flow.json` and extract any non-trivial `code.source` blocks into `<key>/lib/*.mjs` modules.
+- **Legacy single-file layout (DEPRECATED):** `.one/flows/<key>.flow.json`. Still loads and runs for backward compatibility, but do not create new flows in this layout. When touching an existing single-file flow, migrate it: move `<key>.flow.json` to `<key>/flow.json`. Move a `code.source` block into a `<key>/lib/*.mjs` module only if it needs files, network or timers: modules run with full Node access and make the flow require `--allow-code`.
 
 `one flow create` always writes the folder layout.
 
@@ -93,20 +93,20 @@ process.stdout.write(JSON.stringify(items.filter(i => i.active)));
 }
 ```
 
-The module runs as a child `node` process: the flow context `$` is piped to stdin as JSON, and stdout is parsed as JSON and used as the step's output. Modules have full Node APIs available (unlike inline `code.source`, which is sandboxed). Use `code.module` for anything non-trivial; keep `code.source` for one-liners.
+The module runs as a child `node` process: the flow context `$` is piped to stdin as JSON, and stdout is parsed as JSON and used as the step's output. Modules have full Node APIs available (unlike inline `code.source`, which is sandboxed), so **a flow with any `code.module` step only runs with `--allow-code`**, the same way bash steps need `--allow-bash`. Say so in the flow's `description`. Use `code.module` when you need files, network or timers; keep pure data shaping in `code.source`.
 
-#### Inline `code.source` sandbox
+#### Sandbox for inline JavaScript
 
-Inline `code.source` runs inside an async function with a restricted `require`. Only the following Node built-ins are importable:
+Every piece of JavaScript written inside `flow.json` runs in a sandbox: `transform.expression`, `condition.expression`, `while.condition`, step-level `if`/`unless`, and `code.source`. A flow file can come from anywhere (a cloned repo, a shared folder, another agent), so this code cannot start programs, read or write files, or see the CLI's own environment.
 
-- `node:buffer`
-- `node:crypto`
-- `node:url`
-- `node:path`
+- It runs in a separate `node` process started with Node's permission model (`--permission`), an empty environment, and `eval`/`new Function` turned off.
+- `process`, `require` (outside `code.source`), `fetch`, `WebSocket`, `setTimeout`/`setInterval`, `__dirname` and `__filename` are not defined.
+- Inside `code.source`, `await require(name)` loads only these built-ins: `node:buffer`, `node:crypto`, `node:url`, `node:path`. Everything else (`fs`, `http`, `https`, `net`, `child_process`, `process`, `os`, `cluster`, `dgram`, `tls`, `vm`, `worker_threads`) throws `Module "<name>" is blocked in code steps`.
+- `$` is a copy of the flow context. Read from it and `return` a result; changing `$` inside a step does not change what later steps see.
+- Values cross into and out of the sandbox by structured clone: `Date`, `Map`, `Set`, `RegExp`, typed arrays and `undefined` survive; functions and symbols cannot be returned and fail the step.
+- Each evaluation has a 30-second limit for synchronous work and 60 seconds overall. A step that runs longer fails with `timed out`.
 
-Everything else — `fs`, `http`, `https`, `net`, `child_process`, `process`, `os`, `cluster`, `dgram`, `tls`, `vm`, `worker_threads` — is **blocked** and will throw `Module "<name>" is blocked in code steps`. The runtime also does not expose `process`, `__dirname`, `__filename`, `setTimeout`, or `fetch`.
-
-If you need any of those (filesystem reads, network calls, timers, etc.), use a `code.module` step instead — modules run as a real child `node` process and have the full Node API surface.
+These steps need no flag. If you need files, network calls or timers, use a `code.module` step, which requires `--allow-code`.
 
 When an inline `code.source` step throws at runtime, the error message reports the user-relative line and column plus the offending line of source — e.g. `Code step "blowup" failed at line 3:34\n  const c = $.steps.mk.output.data.score;\n  Cannot read properties of null (reading 'score')`. No need to bisect the step manually.
 
@@ -118,7 +118,7 @@ If you touch an existing `.one/flows/<key>.flow.json`, migrate it:
 
 1. `mkdir -p .one/flows/<key>/lib`
 2. `mv .one/flows/<key>.flow.json .one/flows/<key>/flow.json`
-3. Extract non-trivial `code.source` blocks into `lib/<step-id>.mjs` and swap the step config from `{ "source": "..." }` to `{ "module": "lib/<step-id>.mjs" }`. One-liners can stay inline.
+3. Leave `code.source` inline unless it needs files, network or timers. Inline code runs in the sandbox and needs no flag. Moving it to `lib/<step-id>.mjs` (`{ "module": "lib/<step-id>.mjs" }`) gives it full Node access and makes the flow require `--allow-code`.
 4. `one --agent flow validate <key>`
 5. Execute and confirm behavior is unchanged.
 
@@ -708,8 +708,9 @@ Three tools that turn "re-run the whole 40-step flow to debug step 30" into near
 - **Prefer passthrough actions over custom actions.** Custom actions add server-side fan-out that causes timeouts at scale. The flow runner handles pagination, retries, and rate limiting locally. Find with `-t knowledge` to reach passthrough endpoints (e.g. GET `/gmail/v1/users/{userId}/threads` instead of POST `/gmail/get-threads`)
 - Connection keys are inputs, not hardcoded — makes workflows portable
 - Action IDs in examples are placeholders — always use `actions find` to find real IDs
-- Code steps support `require('crypto')`, `require('buffer')`, `require('url')`, `require('path')` — `fs`, `http`, `child_process` are blocked
+- Transforms, conditions, `if`/`unless` and `code.source` run in a sandbox with no file, process or network access. `code.source` supports `require('crypto')`, `require('buffer')`, `require('url')`, `require('path')`; `fs`, `http`, `child_process` are blocked
 - Bash steps require `--allow-bash` flag
+- `code.module` steps require `--allow-code` flag (they run with full Node access)
 - Action steps validate required params before executing — pass `--skip-validation` to bypass
 - `--mock` now returns realistic example data from action schemas (instead of echoed config)
 - State is persisted after every step — resume picks up where it left off

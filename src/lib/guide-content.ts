@@ -83,15 +83,16 @@ one --agent flow list                                 # List all workflows
 
 **Key concepts:**
 - Workflows live at \`.one/flows/<key>/flow.json\` (folder layout — REQUIRED for new flows). Flows can be organized into subdirectory groups: \`.one/flows/<group>/<key>/flow.json\`. Reference them as \`group/key\` or just the bare key. The legacy \`.one/flows/<key>.flow.json\` single-file layout is DEPRECATED but still loads for backward compatibility
-- Code steps can reference an external \`.mjs\` module under the flow's \`lib/\` folder (stdin JSON in, stdout JSON out) — keeps JS out of JSON strings and makes flows shareable
+- Code steps can reference an external \`.mjs\` module under the flow's \`lib/\` folder (stdin JSON in, stdout JSON out). Modules have full Node access, so flows that use them need \`--allow-code\`
+- Inline JavaScript (transforms, conditions, \`if\`/\`unless\`, \`code.source\`) runs in a sandbox: no files, programs, network, timers or environment of its own, and no flag needed
 - 12 step types: action, transform, code, condition, loop, parallel, file-read, file-write, while, flow, paginate, bash
 - Data wiring via selectors: \`$.input.param\`, \`$.steps.stepId.response\`, \`$.loop.item\`
 - AI analysis via bash steps: \`claude --print --output-format json\` with \`parseEnvelope: true\` (unwraps the CLI envelope + fences + preamble into clean parsed JSON; use instead of \`parseJson\` for claude steps)
-- Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with realistic mock responses (uses example data from action schemas)
+- Use \`--allow-bash\` to enable bash steps, \`--allow-code\` to enable \`code.module\` steps, \`--mock\` for dry-run with realistic mock responses (uses example data from action schemas)
 - Use \`--skip-validation\` to bypass input validation on action steps
 - Use \`--output-file <path>\` to stream the full result to a file instead of stdout — for large results that would otherwise be truncated or hit the JSON string-size limit; stdout (and \`--agent\` output) then carries an \`outputFile\` pointer instead of inline \`steps\`
 - Step-level \`if\`/\`unless\` (and \`while\`/\`condition\` steps) are null-safe: a condition referencing a skipped or not-yet-run step's output (e.g. \`$.steps.maybeSkipped.output.x\`) evaluates to \`false\` instead of crashing the flow
-- Debugging: \`--dry-run\` resolves each step's interpolations and shows what they evaluate to without executing (\`$.steps.*\` refs are reported as deferred); \`--stop-after <stepId>\` runs up to a step then stops; \`--dry-run --stop-after <stepId>\` runs earlier steps for real then dry-resolves the target against their output; \`flow inspect <runId>\` shows a past run's per-step outputs (post-mortem, no re-run; \`--full\` for untruncated)
+- Debugging: \`--dry-run\` resolves each step's interpolations and shows what they evaluate to without executing actions, code, bash or file steps (transform and condition expressions are evaluated, in the sandbox; \`$.steps.*\` refs are reported as deferred); \`--stop-after <stepId>\` runs up to a step then stops; \`--dry-run --stop-after <stepId>\` runs earlier steps for real then dry-resolves the target against their output; \`flow inspect <runId>\` shows a past run's per-step outputs (post-mortem, no re-run; \`--full\` for untruncated)
 
 ### 3. Relay — Webhook event forwarding between platforms
 Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calendar) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.

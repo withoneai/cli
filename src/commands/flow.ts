@@ -4,7 +4,7 @@ import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
-import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash, walkSteps } from '../lib/flow-runner.js';
+import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash, flowUsesCodeModules, walkSteps } from '../lib/flow-runner.js';
 import type { DryResolvedStep, DryResolvedRef } from '../lib/flow-engine.js';
 import type { Flow, FlowEvent, StepResult } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
@@ -238,7 +238,7 @@ export async function flowCreateCommand(
 
 export async function flowExecuteCommand(
   keyOrPath: string,
-  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string },
+  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; allowCode?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string },
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -290,6 +290,16 @@ export async function flowExecuteCommand(
     const msg = `Workflow "${flow.key}" contains bash steps. Re-run with --allow-bash to permit shell execution.`;
     if (output.isAgentMode()) {
       output.json({ error: msg, requiresBash: true, flowKey: flow.key });
+      process.exit(1);
+    }
+    output.error(msg);
+  }
+
+  // Same for code.module steps: they run a .mjs file with full Node access.
+  if (!options.allowCode && flowUsesCodeModules(flow)) {
+    const msg = `Workflow "${flow.key}" contains code.module steps, which run with full Node access. Re-run with --allow-code to permit them.`;
+    if (output.isAgentMode()) {
+      output.json({ error: msg, requiresCode: true, flowKey: flow.key });
       process.exit(1);
     }
     output.error(msg);
@@ -367,6 +377,7 @@ export async function flowExecuteCommand(
       mock: options.mock,
       verbose: options.verbose,
       allowBash: options.allowBash,
+      allowCode: options.allowCode,
       skipValidation: options.skipValidation,
       stopAfter: options.stopAfter,
       rootDir,
@@ -503,7 +514,7 @@ export async function flowListCommand(): Promise<void> {
       layout: f.layout,
       inputCount: String(f.inputCount),
       stepCount: String(f.stepCount),
-      flags: f.requiresBash ? '--allow-bash' : '',
+      flags: [f.requiresBash ? '--allow-bash' : '', f.usesCodeModules ? '--allow-code' : ''].filter(Boolean).join(' '),
     })),
   );
   console.log();
@@ -566,7 +577,7 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
 
 export async function flowResumeCommand(
   runId: string,
-  options: { allowBash?: boolean } = {},
+  options: { allowBash?: boolean; allowCode?: boolean } = {},
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -605,6 +616,16 @@ export async function flowResumeCommand(
     output.error(msg);
   }
 
+  // Same for code.module steps: they run a .mjs file with full Node access.
+  if (!options.allowCode && flowUsesCodeModules(flow)) {
+    const msg = `Workflow "${flow.key}" contains code.module steps, which run with full Node access. Re-run with --allow-code to permit them.`;
+    if (output.isAgentMode()) {
+      output.json({ error: msg, requiresCode: true, flowKey: flow.key, runId });
+      process.exit(1);
+    }
+    output.error(msg);
+  }
+
   const runner = FlowRunner.fromRunState(state!);
 
   const onEvent = (event: FlowEvent): void => {
@@ -621,6 +642,7 @@ export async function flowResumeCommand(
       onEvent,
       rootDir,
       allowBash: options.allowBash,
+      allowCode: options.allowCode,
     });
     spinner.stop('Workflow completed');
 

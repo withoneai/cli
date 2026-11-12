@@ -23,6 +23,7 @@ import type {
 } from './flow-types.js';
 import { getByDotPath, setByDotPath } from './dot-path.js';
 import { getNestedStepsKeys } from './flow-schema.js';
+import { sandboxEvaluate, sandboxRunCode } from './flow-sandbox.js';
 
 const execAsync = promisify(exec);
 
@@ -387,9 +388,12 @@ export function resolveValue(value: unknown, context: FlowContext): unknown {
   return value;
 }
 
-export function evaluateExpression(expr: string, context: FlowContext): unknown {
-  const fn = new Function('$', `return (${expr})`);
-  return fn(context);
+/**
+ * Evaluate a flow JavaScript expression. Runs in the flow code sandbox
+ * (`flow-sandbox.ts`): no programs, files, environment or network APIs.
+ */
+export async function evaluateExpression(expr: string, context: FlowContext): Promise<unknown> {
+  return sandboxEvaluate(expr, context);
 }
 
 /**
@@ -403,9 +407,9 @@ export function evaluateExpression(expr: string, context: FlowContext): unknown 
  * throw so genuinely malformed expressions surface (the validator also
  * catches these at flow-create time). See issue #89.
  */
-export function evaluateCondition(expr: string, context: FlowContext): boolean {
+export async function evaluateCondition(expr: string, context: FlowContext): Promise<boolean> {
   try {
-    return Boolean(evaluateExpression(expr, context));
+    return Boolean(await evaluateExpression(expr, context));
   } catch (err) {
     if (err instanceof TypeError) return false;
     throw err;
@@ -551,7 +555,7 @@ function stepInterpolationSource(step: FlowStep): unknown {
  * step/loop value not yet produced — a `deferred` flag, or a real `error`.
  * Powers `--dry-run` (issue #97).
  */
-export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolvedStep {
+export async function dryResolveStep(step: FlowStep, context: FlowContext): Promise<DryResolvedStep> {
   const base = { stepId: step.id, name: step.name, type: step.type };
 
   // Expression steps: evaluating the whole expression is more honest than
@@ -564,7 +568,7 @@ export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolve
   if (step.type === 'transform' || step.type === 'condition' || step.type === 'while') {
     if (!expr) return { ...base, references: [] };
     try {
-      return { ...base, references: [], resolved: evaluateExpression(expr, context) };
+      return { ...base, references: [], resolved: await evaluateExpression(expr, context) };
     } catch (err) {
       // A TypeError ("Cannot read properties of undefined") usually means the
       // expression walked into a step output that hasn't been produced yet.
@@ -607,21 +611,21 @@ export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolve
  * given context. Used by the no-stop `--dry-run` plan view, where nothing runs,
  * so `$.steps.*` / `$.loop.*` refs are reported as `deferred`.
  */
-export function dryResolveAllSteps(steps: FlowStep[], context: FlowContext): DryResolvedStep[] {
+export async function dryResolveAllSteps(steps: FlowStep[], context: FlowContext): Promise<DryResolvedStep[]> {
   const out: DryResolvedStep[] = [];
-  const visit = (list: FlowStep[]): void => {
+  const visit = async (list: FlowStep[]): Promise<void> => {
     for (const step of list) {
-      out.push(dryResolveStep(step, context));
+      out.push(await dryResolveStep(step, context));
       const config = step as unknown as Record<string, unknown>;
       for (const { configKey, fieldName } of getNestedStepsKeys()) {
         const block = config[configKey] as Record<string, unknown> | undefined;
         if (block && Array.isArray(block[fieldName])) {
-          visit(block[fieldName] as FlowStep[]);
+          await visit(block[fieldName] as FlowStep[]);
         }
       }
     }
   };
-  visit(steps);
+  await visit(steps);
   return out;
 }
 
@@ -631,32 +635,7 @@ export function dryResolveAllSteps(steps: FlowStep[], context: FlowContext): Dry
 
 // ── Code Sandbox ──
 
-const ALLOWED_MODULES: Record<string, () => Promise<unknown>> = {
-  buffer: () => import('node:buffer'),
-  crypto: () => import('node:crypto'),
-  url: () => import('node:url'),
-  path: () => import('node:path'),
-};
-
-const BLOCKED_MODULES = new Set([
-  'fs', 'http', 'https', 'net', 'child_process', 'process', 'os',
-  'cluster', 'dgram', 'tls', 'vm', 'worker_threads',
-]);
-
-function createSandboxedRequire() {
-  const cache: Record<string, unknown> = {};
-  return async (moduleName: string) => {
-    const clean = moduleName.replace(/^node:/, '');
-    if (BLOCKED_MODULES.has(clean)) {
-      throw new Error(`Module "${moduleName}" is blocked in code steps`);
-    }
-    if (!ALLOWED_MODULES[clean]) {
-      throw new Error(`Module "${moduleName}" not available. Allowed: ${Object.keys(ALLOWED_MODULES).join(', ')}`);
-    }
-    if (!cache[clean]) cache[clean] = await ALLOWED_MODULES[clean]();
-    return cache[clean];
-  };
-}
+// Inline code and expressions run in ./flow-sandbox.ts.
 
 /** Strip markdown code fences (e.g. ```json\n...\n```) that LLMs wrap around JSON output. */
 function stripCodeFences(text: string): string {
@@ -819,8 +798,8 @@ async function executeActionStep(
   };
 }
 
-function executeTransformStep(step: FlowStep, context: FlowContext): StepResult {
-  const output = evaluateExpression(step.transform!.expression, context);
+async function executeTransformStep(step: FlowStep, context: FlowContext): Promise<StepResult> {
+  const output = await evaluateExpression(step.transform!.expression, context);
   return { status: 'success', output, response: output };
 }
 
@@ -840,17 +819,13 @@ async function executeCodeStep(
     throw new Error(`Code step "${step.id}" must define either "source" or "module"`);
   }
 
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const sandboxedRequire = createSandboxedRequire();
-  // Tag the source with a sourceURL so V8 stack frames are attributable to
-  // this specific code step, then run it. On error, rewrite the stack so the
-  // line numbers reference the user's source (not the AsyncFunction wrapper)
-  // and prepend the offending line of code.
+  // Runs in the flow code sandbox under the file name `code:<stepId>`, so
+  // V8 stack frames are attributable to this step. On error, rewrite the
+  // stack so line numbers reference the user's source (not the async
+  // function wrapper) and prepend the offending line of code.
   const sourceURL = `code:${step.id}`;
-  const taggedSource = `${config.source}\n//# sourceURL=${sourceURL}`;
-  const fn = new AsyncFunction('$', 'require', taggedSource);
   try {
-    const output = await fn(context, sandboxedRequire);
+    const output = await sandboxRunCode(config.source, context, sourceURL);
     return { status: 'success', output, response: output };
   } catch (err) {
     throw rewriteCodeStepError(err, step.id, config.source, sourceURL);
@@ -906,6 +881,11 @@ async function executeCodeModule(
   context: FlowContext,
   options: FlowExecuteOptions,
 ): Promise<unknown> {
+  // Modules are full Node programs (files, network, child processes), unlike
+  // inline code, which runs in the sandbox. Same trust model as bash steps.
+  if (!options.allowCode) {
+    throw new Error(`Code step "${stepId}" runs module "${modulePath}" with full Node access and requires the --allow-code flag`);
+  }
   const rootDir = options.rootDir;
   if (!rootDir) {
     throw new Error(`Code step "${stepId}" uses module "${modulePath}" but no flow rootDir is available. Flows that use code modules must be loaded via loadFlowWithMeta.`);
@@ -976,7 +956,7 @@ async function executeConditionStep(
   flowStack: string[],
 ): Promise<StepResult> {
   const condition = step.condition!;
-  const result = evaluateCondition(condition.expression, context);
+  const result = await evaluateCondition(condition.expression, context);
 
   const branch = result ? condition.then : (condition.else || []);
   const branchResults = await executeSteps(branch, context, api, permissions, allowedActionIds, options, undefined, flowStack);
@@ -1181,7 +1161,7 @@ async function executeWhileStep(
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Do-while: skip condition check on iteration 0
     if (iteration > 0) {
-      const conditionResult = evaluateCondition(config.condition, context);
+      const conditionResult = await evaluateCondition(config.condition, context);
       if (!conditionResult) break;
     }
 
@@ -1527,7 +1507,7 @@ export async function executeSingleStep(
 ): Promise<StepResult> {
   // Conditional execution
   if (step.if) {
-    const condResult = evaluateCondition(step.if, context);
+    const condResult = await evaluateCondition(step.if, context);
     if (!condResult) {
       const result: StepResult = { status: 'skipped' };
       context.steps[step.id] = result;
@@ -1535,7 +1515,7 @@ export async function executeSingleStep(
     }
   }
   if (step.unless) {
-    const condResult = evaluateCondition(step.unless, context);
+    const condResult = await evaluateCondition(step.unless, context);
     if (condResult) {
       const result: StepResult = { status: 'skipped' };
       context.steps[step.id] = result;
@@ -1617,7 +1597,7 @@ export async function executeSingleStep(
           case 'action':
             return await executeActionStep(step, context, api, permissions, allowedActionIds, options);
           case 'transform':
-            return executeTransformStep(step, context);
+            return await executeTransformStep(step, context);
           case 'code':
             return await executeCodeStep(step, context, options);
           case 'condition':
@@ -1759,7 +1739,7 @@ export async function executeSteps(
     if (isDryResolve && options.stopAfter === step.id) {
       options.onEvent?.({
         event: 'step:dry-resolve',
-        ...dryResolveStep(step, context),
+        ...(await dryResolveStep(step, context)),
         timestamp: new Date().toISOString(),
       });
       throw new FlowStopSignal(step.id);
@@ -1919,7 +1899,7 @@ export async function executeFlow(
       event: 'flow:dry-run',
       flowKey: flow.key,
       resolvedInputs,
-      steps: dryResolveAllSteps(flow.steps, context),
+      steps: await dryResolveAllSteps(flow.steps, context),
       timestamp: new Date().toISOString(),
     });
     return context;
