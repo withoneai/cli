@@ -48,19 +48,22 @@ describe('MCP config files that hold the API key', () => {
     }
   });
 
-  it('creates global config files readable by the owner only', { skip: !posix }, () => {
-    for (const agent of getAllAgents()) {
-      const { configPath } = installMcpConfig(agent, KEY, 'global');
-      assert.equal(mode(configPath), 0o600, `${agent.id}: ${configPath}`);
-    }
-  });
-
-  it('tightens an existing world-readable config and keeps its other settings', { skip: !posix }, () => {
+  it('leaves global config permissions as they were', { skip: !posix }, () => {
     const agent = getAllAgents().find(a => a.id === 'claude-code')!;
     const configPath = getAgentConfigPath(agent, 'global');
-    fs.writeFileSync(configPath, JSON.stringify({ theme: 'dark' }), { mode: 0o644 });
+    fs.writeFileSync(configPath, JSON.stringify({ theme: 'dark' }));
     fs.chmodSync(configPath, 0o644);
     installMcpConfig(agent, KEY, 'global');
+    assert.equal(mode(configPath), 0o644);
+    assert.ok(!fs.existsSync(path.join(project, '.gitignore')), 'global install touched .gitignore');
+  });
+
+  it('tightens an existing world-readable project config and keeps its other settings', { skip: !posix }, () => {
+    const agent = getAllAgents().find(a => a.id === 'claude-code')!;
+    const configPath = getAgentConfigPath(agent, 'project');
+    fs.writeFileSync(configPath, JSON.stringify({ theme: 'dark' }));
+    fs.chmodSync(configPath, 0o644);
+    installMcpConfig(agent, KEY, 'project');
     assert.equal(mode(configPath), 0o600);
     assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf-8')).theme, 'dark');
   });

@@ -167,9 +167,13 @@ export function writeAgentConfig(agent: Agent, config: Record<string, unknown>, 
   }
 
   const body = agent.configFormat === 'toml' ? stringifyToml(config) : JSON.stringify(config, null, 2);
-  // Agent configs hold the One API key in plain text, so they are readable by
-  // the owner only. `mode` covers a new file; chmod tightens an existing one,
-  // which writeFileSync leaves at its old mode.
+  if (scope !== 'project') {
+    fs.writeFileSync(configPath, body);
+    return;
+  }
+  // A project config holds the One API key in plain text inside the project
+  // folder, so it is readable by the owner only. `mode` covers a new file;
+  // chmod tightens an existing one, which writeFileSync leaves at its old mode.
   fs.writeFileSync(configPath, body, { mode: 0o600 });
   if (process.platform !== 'win32') {
     try { fs.chmodSync(configPath, 0o600); } catch { /* not ours to chmod; leave it */ }

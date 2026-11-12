@@ -829,7 +829,7 @@ The workflow is the same: list → find → execute. Never execute without readi
 | Codex | `~/.codex/config.toml` | `.codex/config.toml` |
 | Kiro | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
 
-These files contain your One API key, so the CLI writes them readable by you only. Project configs are added to `.gitignore`: don't commit or share them. Each team member runs `one init` to set up MCP with their own key.
+These files contain your One API key. Project configs are written readable by you only and added to `.gitignore`: don't commit or share them. Each team member runs `one init` to set up MCP with their own key.
 
 ## Development
 
