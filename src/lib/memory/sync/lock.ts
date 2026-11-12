@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertSafeSyncNames, ensureDirInsideProject } from './names.js';
 
 /**
  * Cross-process sync lock for a single platform/model.
@@ -21,7 +22,36 @@ export interface SyncLock {
 }
 
 function lockPath(platform: string, model: string): string {
+  try {
+    assertSafeSyncNames(platform, model);
+  } catch (err) {
+    throw new SyncLockError(err instanceof Error ? err.message : String(err));
+  }
   return path.join(LOCK_DIR_REL, `${platform}_${model}`);
+}
+
+const PID_FILE = 'pid';
+
+/**
+ * True only for a directory this lock code could have created: a real
+ * directory (not a symlink) holding nothing but an optional pid file.
+ */
+function looksLikeOurLock(dir: string): boolean {
+  try {
+    if (!fs.lstatSync(dir).isDirectory()) return false;
+    const entries = fs.readdirSync(dir);
+    if (!entries.every(e => e === PID_FILE)) return false;
+    if (entries.length === 1 && !fs.lstatSync(path.join(dir, PID_FILE)).isFile()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove a lock directory without recursing: the pid file, then the dir. */
+function removeLockDir(dir: string): void {
+  try { fs.unlinkSync(path.join(dir, PID_FILE)); } catch { /* may not exist */ }
+  fs.rmdirSync(dir);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -46,16 +76,20 @@ export class SyncLockError extends Error {
  * another process already holds it.
  */
 export function acquireSyncLock(platform: string, model: string): SyncLock {
-  fs.mkdirSync(LOCK_DIR_REL, { recursive: true });
   const dir = lockPath(platform, model);
-  const pidFile = path.join(dir, 'pid');
+  try {
+    ensureDirInsideProject(LOCK_DIR_REL);
+  } catch (err) {
+    throw new SyncLockError(err instanceof Error ? err.message : String(err));
+  }
+  const pidFile = path.join(dir, PID_FILE);
 
   try {
     fs.mkdirSync(dir);
   } catch (err) {
     // EEXIST means someone else holds the lock — check whether it's stale
     const stat = (() => {
-      try { return fs.statSync(dir); } catch { return null; }
+      try { return fs.lstatSync(dir); } catch { return null; }
     })();
 
     if (stat) {
@@ -73,9 +107,15 @@ export function acquireSyncLock(platform: string, model: string): SyncLock {
       const veryOld = age > STALE_MS;
 
       if (ownerDead || veryOld) {
-        // Take over the stale lock
+        // Take over the stale lock — but only a directory this code made.
+        // Anything else at this path is left alone.
+        if (!looksLikeOurLock(dir)) {
+          throw new SyncLockError(
+            `${dir} exists but is not a sync lock. Remove it manually if no sync is running.`
+          );
+        }
         try {
-          fs.rmSync(dir, { recursive: true, force: true });
+          removeLockDir(dir);
           fs.mkdirSync(dir);
         } catch {
           throw new SyncLockError(
@@ -103,7 +143,7 @@ export function acquireSyncLock(platform: string, model: string): SyncLock {
   return {
     release() {
       try {
-        fs.rmSync(dir, { recursive: true, force: true });
+        if (looksLikeOurLock(dir)) removeLockDir(dir);
       } catch {
         // Best-effort; a stale directory will be cleaned up on the next run
       }

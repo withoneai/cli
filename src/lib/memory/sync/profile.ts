@@ -3,10 +3,12 @@ import path from 'node:path';
 import type { Connection } from '../../types.js';
 import type { OneApi } from '../../api.js';
 import type { SyncProfile } from './types.js';
+import { assertSafeSyncNames, isSafeSyncName } from './names.js';
 
 const PROFILES_DIR = path.join('.one', 'sync', 'profiles');
 
 function profilePath(platform: string, model: string): string {
+  assertSafeSyncNames(platform, model);
   return path.join(PROFILES_DIR, `${platform}_${model}.json`);
 }
 
@@ -15,7 +17,11 @@ export function readProfile(platform: string, model: string): SyncProfile | null
   try {
     if (!fs.existsSync(filePath)) return null;
     const raw = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw) as SyncProfile;
+    const profile = JSON.parse(raw) as SyncProfile;
+    // The file name passed the check; the names inside it must too, since
+    // they are what later builds lock and event-log paths.
+    if (!isSafeSyncName(profile?.platform) || !isSafeSyncName(profile?.model)) return null;
+    return profile;
   } catch {
     return null;
   }
@@ -104,6 +110,13 @@ export function listProfiles(platform?: string): SyncProfile[] {
     try {
       const raw = fs.readFileSync(path.join(PROFILES_DIR, file), 'utf-8');
       const profile = JSON.parse(raw) as SyncProfile;
+      if (!isSafeSyncName(profile?.platform) || !isSafeSyncName(profile?.model)) {
+        process.stderr.write(
+          `Skipping sync profile ${file}: platform and model must be plain names ` +
+          `(letters, digits, ".", "_", "-", no "..").\n`
+        );
+        continue;
+      }
       if (!platform || profile.platform === platform) {
         profiles.push(profile);
       }
