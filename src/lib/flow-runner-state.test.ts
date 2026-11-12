@@ -27,7 +27,7 @@ after(() => {
   stopSandbox();
   delete process.env[SECRET_VAR];
   process.chdir(origCwd);
-  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 50, retryDelay: 100 });
 });
 
 const flow: Flow = {
