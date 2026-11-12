@@ -35,13 +35,14 @@ import {
   getAllAgents,
   installMcpConfig,
   isMcpInstalled,
-  getAgentConfigPath,
   supportsProjectScope,
   getAgentStatuses,
   type InstallScope,
   type AgentStatus,
+  type McpInstallResult,
 } from '../lib/agents.js';
 import { OneApi, TimeoutError } from '../lib/api.js';
+import { noteProjectMcp } from './project-mcp-notice.js';
 import { getApiKeyUrl, oneAppUrl, openApiKeyPage, openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { configCommand } from './config.js';
 import open from 'open';
@@ -553,13 +554,14 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   // Re-install MCP to every agent that currently has it (preserve scopes)
   const ac = (scope === 'project' ? readProjectConfig() : readGlobalConfig())?.accessControl ?? {};
   const reinstalled: string[] = [];
+  const projectResults: McpInstallResult[] = [];
   for (const s of statuses) {
     if (s.globalMcp) {
       installMcpConfig(s.agent, newKey, 'global', ac);
       reinstalled.push(`${s.agent.name} (global)`);
     }
     if (s.projectMcp) {
-      installMcpConfig(s.agent, newKey, 'project', ac);
+      projectResults.push(installMcpConfig(s.agent, newKey, 'project', ac));
       reinstalled.push(`${s.agent.name} (project)`);
     }
   }
@@ -567,6 +569,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   if (reinstalled.length > 0) {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
   }
+  noteProjectMcp(projectResults);
 
   p.outro('API key updated.');
 }
@@ -632,14 +635,9 @@ async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Pro
       return;
     }
 
-    installMcpConfig(agent, apiKey, 'project', ac);
-    const configPath = getAgentConfigPath(agent, 'project');
-    p.log.success(`${agent.name}: ${configPath} created`);
-    p.note(
-      pc.yellow('Project config files can be committed to share with your team.\n') +
-      pc.yellow('Team members will need their own API key.'),
-      'Tip',
-    );
+    const result = installMcpConfig(agent, apiKey, 'project', ac);
+    p.log.success(`${agent.name}: ${result.configPath} created`);
+    noteProjectMcp([result]);
     p.outro('Done.');
     return;
   }
@@ -658,17 +656,14 @@ async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Pro
   }
 
   const agents = missing.filter(s => (selected as string[]).includes(s.agent.id));
+  const results: McpInstallResult[] = [];
   for (const s of agents) {
-    installMcpConfig(s.agent, apiKey, 'project', ac);
-    const configPath = getAgentConfigPath(s.agent, 'project');
-    p.log.success(`${s.agent.name}: ${configPath} created`);
+    const result = installMcpConfig(s.agent, apiKey, 'project', ac);
+    results.push(result);
+    p.log.success(`${s.agent.name}: ${result.configPath} created`);
   }
 
-  p.note(
-    pc.yellow('Project config files can be committed to share with your team.\n') +
-    pc.yellow('Team members will need their own API key.'),
-    'Tip',
-  );
+  noteProjectMcp(results);
   p.outro('Done.');
 }
 
@@ -1034,12 +1029,13 @@ async function promptAndInstallMcp(
       return;
     }
 
+    const projectResults: McpInstallResult[] = [];
     for (const agent of projectAgents) {
       const wasInstalled = isMcpInstalled(agent, 'project');
-      installMcpConfig(agent, apiKey, 'project');
-      const configPath = getAgentConfigPath(agent, 'project');
+      const result = installMcpConfig(agent, apiKey, 'project');
+      projectResults.push(result);
       const status = wasInstalled ? 'updated' : 'created';
-      p.log.success(`${agent.name}: ${configPath} ${status}`);
+      p.log.success(`${agent.name}: ${result.configPath} ${status}`);
     }
 
     if (nonProjectAgents.length > 0) {
@@ -1055,11 +1051,7 @@ async function promptAndInstallMcp(
     const allInstalled = [...projectAgents, ...nonProjectAgents];
     updateConfigAgentsList(allInstalled.map(a => a.id));
 
-    p.note(
-      pc.yellow('Project config files can be committed to share with your team.\n') +
-      pc.yellow('Team members will need their own API key.'),
-      'Tip',
-    );
+    noteProjectMcp(projectResults);
     return;
   }
 

@@ -1,7 +1,8 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { readConfig, writeConfig, getApiBase, getAccessControl, updateAccessControl, updateApiBase } from '../lib/config.js';
-import { getAgentStatuses, installMcpConfig } from '../lib/agents.js';
+import { getAgentStatuses, installMcpConfig, type McpInstallResult } from '../lib/agents.js';
+import { noteProjectMcp } from './project-mcp-notice.js';
 import { OneApi } from '../lib/api.js';
 import { getApiKeyUrl } from '../lib/browser.js';
 import * as output from '../lib/output.js';
@@ -275,6 +276,7 @@ export async function configCommand(): Promise<void> {
   const ac = getAccessControl();
   const statuses = getAgentStatuses();
   const reinstalled: string[] = [];
+  const projectResults: McpInstallResult[] = [];
 
   for (const s of statuses) {
     if (s.globalMcp) {
@@ -282,7 +284,7 @@ export async function configCommand(): Promise<void> {
       reinstalled.push(`${s.agent.name} (global)`);
     }
     if (s.projectMcp) {
-      installMcpConfig(s.agent, newApiKey, 'project', ac);
+      projectResults.push(installMcpConfig(s.agent, newApiKey, 'project', ac));
       reinstalled.push(`${s.agent.name} (project)`);
     }
   }
@@ -290,6 +292,7 @@ export async function configCommand(): Promise<void> {
   if (reinstalled.length > 0) {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
   }
+  noteProjectMcp(projectResults);
 
   p.outro('Configuration updated.');
 }

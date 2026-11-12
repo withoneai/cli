@@ -2,6 +2,7 @@ import { homeDir } from './home.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import type { Agent, AccessControlSettings } from './types.js';
 
@@ -165,10 +166,13 @@ export function writeAgentConfig(agent: Agent, config: Record<string, unknown>, 
     fs.mkdirSync(configDir, { recursive: true });
   }
 
-  if (agent.configFormat === 'toml') {
-    fs.writeFileSync(configPath, stringifyToml(config));
-  } else {
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  const body = agent.configFormat === 'toml' ? stringifyToml(config) : JSON.stringify(config, null, 2);
+  // Agent configs hold the One API key in plain text, so they are readable by
+  // the owner only. `mode` covers a new file; chmod tightens an existing one,
+  // which writeFileSync leaves at its old mode.
+  fs.writeFileSync(configPath, body, { mode: 0o600 });
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(configPath, 0o600); } catch { /* not ours to chmod; leave it */ }
   }
 }
 
@@ -199,7 +203,16 @@ export function getMcpServerConfig(apiKey: string, accessControl?: AccessControl
   };
 }
 
-export function installMcpConfig(agent: Agent, apiKey: string, scope: InstallScope = 'global', accessControl?: AccessControlSettings): void {
+export interface McpInstallResult {
+  configPath: string;
+  /**
+   * Project scope only: the config file is already tracked by git, so the
+   * .gitignore entry does not stop it (and the key in it) from being committed.
+   */
+  committed: boolean;
+}
+
+export function installMcpConfig(agent: Agent, apiKey: string, scope: InstallScope = 'global', accessControl?: AccessControlSettings): McpInstallResult {
   const config = readAgentConfig(agent, scope);
   const configKey = agent.configKey;
 
@@ -208,6 +221,55 @@ export function installMcpConfig(agent: Agent, apiKey: string, scope: InstallSco
 
   config[configKey] = mcpServers;
   writeAgentConfig(agent, config, scope);
+
+  const configPath = getAgentConfigPath(agent, scope);
+  if (scope !== 'project' || !agent.projectConfigPath) {
+    return { configPath, committed: false };
+  }
+  // A project config holds the installer's own API key: keep it out of git.
+  const root = process.cwd();
+  const relPath = agent.projectConfigPath.split(path.sep).join('/');
+  ensureGitignored(root, relPath);
+  return { configPath, committed: isTrackedByGit(root, relPath) };
+}
+
+function runGit(cwd: string, args: string[]): boolean {
+  try {
+    execFileSync('git', args, { cwd, stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch {
+    return false; // non-zero exit, not a repository, or git not installed
+  }
+}
+
+function isTrackedByGit(root: string, relPath: string): boolean {
+  return runGit(root, ['ls-files', '--error-unmatch', '--', relPath]);
+}
+
+/**
+ * Add `/<relPath>` to `<root>/.gitignore` unless git already ignores it.
+ * Never writes through a symlinked .gitignore: a cloned repository could
+ * point it anywhere on the machine.
+ */
+export function ensureGitignored(root: string, relPath: string): void {
+  if (runGit(root, ['check-ignore', '-q', '--', relPath])) return;
+
+  const gitignore = path.join(root, '.gitignore');
+  let existing = '';
+  try {
+    const st = fs.lstatSync(gitignore);
+    if (!st.isFile()) return;
+    existing = fs.readFileSync(gitignore, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return;
+  }
+
+  const lines = existing.split(/\r?\n/).map(l => l.trim());
+  if (lines.includes(relPath) || lines.includes(`/${relPath}`)) return;
+
+  const prefix = existing === '' || existing.endsWith('\n') ? '' : '\n';
+  const header = lines.includes('# One MCP config (contains your API key)') ? '' : '# One MCP config (contains your API key)\n';
+  fs.appendFileSync(gitignore, `${prefix}${header}/${relPath}\n`);
 }
 
 export function isMcpInstalled(agent: Agent, scope: InstallScope = 'global'): boolean {
