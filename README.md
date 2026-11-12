@@ -739,12 +739,14 @@ Drop a `.onerc` file in your project root to override global settings per-projec
 |-----|---------|
 | `ONE_SECRET` | API key (also honored as env var) |
 | `ONE_API_BASE` | API base URL, `https://api.withone.ai` or `https://development-api.withone.ai` only (the env var accepts any origin) |
-| `ONE_PERMISSIONS` | `admin` / `write` / `read` |
-| `ONE_CONNECTION_KEYS` | Comma-separated connection-key allowlist |
-| `ONE_ACTION_IDS` | Comma-separated action-ID allowlist |
-| `ONE_KNOWLEDGE_AGENT` | `true` / `false` — knowledge-only mode |
+| `ONE_PERMISSIONS` | `admin` / `write` / `read`, can only lower the configured level |
+| `ONE_CONNECTION_KEYS` | Comma-separated connection-key allowlist, intersected with the configured one |
+| `ONE_ACTION_IDS` | Comma-separated action-ID allowlist, intersected with the configured one |
+| `ONE_KNOWLEDGE_AGENT` | `true` turns knowledge-only mode on; it cannot turn it off |
 
-Precedence: env var > `.onerc` > `~/.one/config.json`.
+Precedence: env var > `.onerc` > `~/.one/config.json`. The access keys are the exception: a `.onerc` can only narrow the access settings in your config, never widen them, because it can arrive with a cloned repository. A value that would widen them is ignored with a warning; use `one config` instead.
+
+The access settings are enforced on every call to a connected app, whatever the command: `actions execute`, flows, sync and its validation runs. Headers named `x-one-secret`, `x-one-connection-key` or `x-one-action-id` cannot be passed with `--headers`, method-override headers are judged against the permission level, and a path variable cannot be `.` or `..`.
 
 ```bash
 # .onerc

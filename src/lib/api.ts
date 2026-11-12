@@ -1,4 +1,6 @@
 import { callerHeaders } from './caller.js';
+import { checkPassthroughAccess, IDENTITY_HEADERS } from './access-gate.js';
+import { getAccessControlFromAllSources } from './config.js';
 import { createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -19,6 +21,7 @@ import type {
   FindIntent,
   FoundActions,
   KeyAccessDocument,
+  AccessControlSettings,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -87,7 +90,14 @@ function parseRetryAfter(value: string | null): number | undefined {
 export class OneApi {
   private apiBase: string;
 
-  constructor(private apiKey: string, apiBase?: string) {
+  /**
+   * The local access settings every passthrough call is checked against.
+   * Read from config and `.onerc` at call time unless a caller supplies them.
+   */
+  private accessSettings?: AccessControlSettings;
+
+  constructor(private apiKey: string, apiBase?: string, accessSettings?: AccessControlSettings) {
+    this.accessSettings = accessSettings;
     this.apiBase = apiBase ?? 'https://api.withone.ai/v1';
   }
 
@@ -414,10 +424,16 @@ export class OneApi {
         ? 'application/x-www-form-urlencoded'
         : 'application/json';
 
+    // The local access settings, checked here so no path to a connected app
+    // can skip them (see access-gate.ts).
+    checkPassthroughAccess(this.accessSettings ?? getAccessControlFromAllSources(), {
+      actionId: action._id,
+      connectionKey: args.connectionKey,
+      method,
+      headers: args.headers,
+    });
+
     const requestHeaders: Record<string, string> = {
-      'x-one-secret': this.apiKey,
-      'x-one-connection-key': args.connectionKey,
-      'x-one-action-id': action._id,
       'Content-Type': contentType,
       Accept: 'application/json, text/event-stream, */*',
       // Who is calling, for the Logs page. Before the caller's own headers so
@@ -425,13 +441,23 @@ export class OneApi {
       ...callerHeaders(),
       ...args.headers,
     };
+    // The identity One executes is always the one the gate approved. The gate
+    // already refuses caller copies; this keeps the invariant local.
+    for (const name of Object.keys(requestHeaders)) {
+      if (IDENTITY_HEADERS.includes(name.toLowerCase())) delete requestHeaders[name];
+    }
+    requestHeaders['x-one-secret'] = this.apiKey;
+    requestHeaders['x-one-connection-key'] = args.connectionKey;
+    requestHeaders['x-one-action-id'] = action._id;
 
     const finalActionPath = args.pathVariables
       ? replacePathVariables(action.path, args.pathVariables)
       : action.path;
 
     const normalizedPath = finalActionPath.startsWith('/') ? finalActionPath : `/${finalActionPath}`;
-    const url = `${this.apiBase.replace('/v1', '')}/v1/passthrough${normalizedPath}`;
+    const passthroughBase = `${this.apiBase.replace('/v1', '')}/v1/passthrough`;
+    const url = `${passthroughBase}${normalizedPath}`;
+    assertUnderPassthrough(passthroughBase, url);
 
     // Check if action has "custom" tag and add connectionKey to body if needed
     const isCustomAction = action.tags?.includes('custom');
@@ -707,6 +733,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * A path variable fills one segment. `.` and `..` would make fetch drop
+ * segments and leave `/v1/passthrough` for another One route, so they are
+ * refused rather than encoded.
+ */
+function encodePathValue(name: string, value: string | number | boolean): string {
+  const text = value.toString();
+  if (text === '.' || text === '..') {
+    throw new Error(`Path variable "${name}" cannot be "${text}".`);
+  }
+  return encodeURIComponent(text).replace(/%3A/gi, ':');
+}
+
+/**
+ * Every action call must stay on the passthrough route, whatever the action
+ * template or its variables resolve to, so the access settings describe what
+ * is actually called.
+ */
+export function assertUnderPassthrough(passthroughBase: string, url: string): void {
+  const prefix = new URL(passthroughBase).pathname.replace(/\/+$/, '');
+  const resolved = new URL(url).pathname;
+  if (resolved !== prefix && !resolved.startsWith(`${prefix}/`)) {
+    throw new Error(`Action path resolves outside ${prefix} (${resolved}).`);
+  }
+}
+
 export function replacePathVariables(
   path: string,
   variables: Record<string, string | number | boolean>
@@ -722,7 +774,7 @@ export function replacePathVariables(
     if (value === undefined || value === null || value === '') {
       throw new Error(`Missing value for path variable: ${trimmedVariable}`);
     }
-    return encodeURIComponent(value.toString()).replace(/%3A/gi, ':');
+    return encodePathValue(trimmedVariable, value);
   });
 
   // Then, replace single bracket variables {variableName}
@@ -732,33 +784,10 @@ export function replacePathVariables(
     if (value === undefined || value === null || value === '') {
       throw new Error(`Missing value for path variable: ${trimmedVariable}`);
     }
-    return encodeURIComponent(value.toString()).replace(/%3A/gi, ':');
+    return encodePathValue(trimmedVariable, value);
   });
 
   return result;
 }
 
-import type { PermissionLevel } from './types.js';
-
-/** `null` means "no method restriction" (admin). */
-export const PERMISSION_METHODS: Record<PermissionLevel, string[] | null> = {
-  read: ['GET'],
-  write: ['GET', 'POST', 'PUT', 'PATCH'],
-  admin: null,
-};
-
-export function isMethodAllowed(
-  method: string,
-  permissions: PermissionLevel
-): boolean {
-  const allowed = PERMISSION_METHODS[permissions];
-  if (allowed === null) return true;
-  return allowed.includes(method.toUpperCase());
-}
-
-export function isActionAllowed(
-  actionId: string,
-  allowedActionIds: string[]
-): boolean {
-  return allowedActionIds.includes('*') || allowedActionIds.includes(actionId);
-}
+export { PERMISSION_METHODS, isMethodAllowed, isActionAllowed } from './access-gate.js';
