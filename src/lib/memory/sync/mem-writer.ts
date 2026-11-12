@@ -11,7 +11,7 @@
  * exclusively to memory.
  */
 
-import { upsertRecord } from '../runtime.js';
+import { upsertRecord, getBackend } from '../runtime.js';
 import type { SyncProfile } from './types.js';
 import { getByDotPath } from '../../dot-path.js';
 
@@ -30,6 +30,19 @@ export interface MemWriteReport {
    * every single sync.
    */
   preserved: number;
+  /**
+   * Records written as their own record, without merging, because a merge
+   * key they carried (usually `email:...`) already belongs to a record of
+   * another type. The key goes into `identity_keys[]` instead, so
+   * `mem find-by-key` still links the two. (PICA-1568/1583)
+   */
+  keptSeparate: number;
+  /**
+   * Records not written because their own source key already sits on a
+   * record of another type (merged there by an older CLI). Writing would
+   * replace that record's data, so it is left alone.
+   */
+  skippedOtherType: number;
   /**
    * Source keys (`<platform>/<model>:<id>`) that landed during this page.
    * Used by `--full-refresh` to reconcile against memory records whose
@@ -182,6 +195,8 @@ export async function writePageToMemory(
     updated: 0,
     skipped: 0,
     preserved: 0,
+    keptSeparate: 0,
+    skippedOtherType: 0,
     sourceKeysSeen: [],
     inserts: [],
     updates: [],
@@ -284,7 +299,7 @@ export async function writePageToMemory(
     // identity_keys[] = participant associations (plural identityKeys, #128) —
     // a SEPARATE column that never triggers merge, so a Gmail thread carrying
     // many participant emails stays its own record. See schema.ts.
-    const keys = [sourceKey, ...collectEntityKeys(record, profile)];
+    let keys = [sourceKey, ...collectEntityKeys(record, profile)];
 
     // Three-state contract for identity_keys, mirrored by mem_upsert_by_keys
     // (schema.ts) — under `replace: true`, NULL keeps and non-NULL replaces:
@@ -303,10 +318,46 @@ export async function writePageToMemory(
     // second. So while an enrich profile's record is still the list shape we
     // stay silent and let the enriched write be the authority.
     const preEnrichShape = !!profile.enrich && record[enrichTimestampField] == null;
-    const identityKeys =
+    let identityKeys =
       !declaresIdentityKeys || preEnrichShape
         ? undefined
         : collectAssociationKeys(record, profile);
+
+    // NEVER UPDATE A RECORD OF ANOTHER TYPE. mem_upsert_by_keys matches on
+    // ANY overlapping key regardless of type, and sync writes with
+    // `replace: true`, so a Stripe customer carrying `email:jane@acme.com`
+    // used to replace the data of the Attio contact (or a hand-written note)
+    // holding that key. Upstream data decides that email, so an outsider
+    // can pick it. Keys another type already holds are moved to the
+    // non-merging `identity_keys[]` — the record is stored separately and
+    // `mem find-by-key` still links the two. If the source key itself is
+    // held by another type (merged by an older CLI), skip the write.
+    let foreign: Set<string>;
+    try {
+      foreign = await keysHeldByOtherTypes(await getBackend(), type, keys);
+    } catch {
+      // Can't tell who owns the merge keys: write without them rather than
+      // risk landing on someone else's record. The source key is
+      // type-prefixed, so it can only collide with a record an older CLI
+      // already merged — accepted for this fallback.
+      foreign = new Set(keys.filter(k => k !== sourceKey));
+    }
+    if (foreign.has(sourceKey)) {
+      report.skippedOtherType++;
+      continue;
+    }
+    if (foreign.size > 0) {
+      keys = keys.filter(k => !foreign.has(k));
+      report.keptSeparate++;
+      // Only add to identity_keys when this write already speaks for the
+      // column. A pre-enrich write sends `undefined` ("keep what's stored")
+      // and must not narrow it; the enriched write adds the link.
+      if (identityKeys !== undefined) {
+        identityKeys = dedupe([...identityKeys, ...foreign]);
+      } else if (!preEnrichShape) {
+        identityKeys = [...foreign];
+      }
+    }
 
     // Strip sync-internal bookkeeping from the payload
     const data = { ...record };
@@ -363,6 +414,28 @@ export async function writePageToMemory(
     }
   }
   return report;
+}
+
+/**
+ * Which of `keys` are held by a record whose type is NOT `type`, at any
+ * status (the upsert also matches archived rows when no active one
+ * overlaps, and reactivates them). Throws when the backend can't answer.
+ */
+export async function keysHeldByOtherTypes(
+  backend: Awaited<ReturnType<typeof getBackend>>,
+  type: string,
+  keys: string[],
+): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+  if (typeof backend.raw !== 'function') {
+    throw new Error('backend has no raw SQL support');
+  }
+  const res = await backend.raw(
+    `SELECT DISTINCT k FROM mem_records r, unnest(r.keys) AS k
+     WHERE r.keys && $1::text[] AND r.type <> $2 AND k = ANY($1::text[])`,
+    [keys, type],
+  );
+  return new Set(res.rows.map(row => String((row as { k: unknown }).k)));
 }
 
 function deriveEmbedFlag(profile: SyncProfile): boolean {

@@ -262,6 +262,8 @@ export async function syncModel(
   // steady-state gmail sync can see that "0 written to memory" is the healthy
   // outcome, not a silent failure.
   let memPreserved = 0;
+  let memKeptSeparate = 0;
+  let memSkippedOtherType = 0;
 
   try {
     if (needsSqlite) db = await openDatabase(platform);
@@ -571,6 +573,8 @@ export async function syncModel(
           );
           pageReport = report;
           memPreserved += report.preserved;
+          memKeptSeparate += report.keptSeparate;
+          memSkippedOtherType += report.skippedOtherType;
           for (const key of report.sourceKeysSeen) seenSourceKeys.add(key);
           if (hasHooks && !db) {
             inserts = report.inserts;
@@ -780,6 +784,18 @@ export async function syncModel(
       );
     }
 
+    if (!isAgentMode() && memKeptSeparate > 0) {
+      process.stderr.write(
+        `  Stored ${memKeptSeparate} record(s) separately: their identity key already belongs to a record of another type. ` +
+        `They stay linked through \`one mem find-by-key\`.\n`
+      );
+    }
+    if (!isAgentMode() && memSkippedOtherType > 0) {
+      process.stderr.write(
+        `  Skipped ${memSkippedOtherType} record(s) that an older CLI merged into a record of another type; that record was left unchanged.\n`
+      );
+    }
+
     // Phase 2: Enrich unenriched rows (runs after list sync completes).
     // Queries _enriched_at IS NULL so it's inherently resumable — if the
     // process dies mid-enrichment, re-running picks up where it left off.
@@ -901,6 +917,8 @@ export async function syncModel(
       ...(reconcileSkipped ? { reconcileSkipped } : {}),
       ...(statusCounts ? { statusCounts } : {}),
       ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
+      ...(memKeptSeparate > 0 ? { memKeptSeparate } : {}),
+      ...(memSkippedOtherType > 0 ? { memSkippedOtherType } : {}),
       // `memPreserved` counts already-enriched rows this run wrote
       // non-authoritatively (enriched payload kept, list fields refreshed).
       // Reported to agents too — the human path only gets a stderr line, and

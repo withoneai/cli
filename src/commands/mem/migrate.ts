@@ -36,7 +36,8 @@ import { loadBuiltinProfile, getProfilesDir } from '../../lib/memory/sync/builti
 import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../../lib/memory/sync/db.js';
 import { okJson, requireMemoryInit } from './util.js';
 import { getByDotPath } from '../../lib/dot-path.js';
-import { resolveEntityIdentity, normalizeEntityIdentityValue } from '../../lib/memory/sync/mem-writer.js';
+import { resolveEntityIdentity, normalizeEntityIdentityValue, keysHeldByOtherTypes } from '../../lib/memory/sync/mem-writer.js';
+export { keysHeldByOtherTypes };
 import { importLegacySyncState, legacySyncStatePaths } from '../../lib/memory/sync/state.js';
 
 interface MigrateFlags {
@@ -493,28 +494,6 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         }
       : {}),
   });
-}
-
-/**
- * Which of `keys` are held by a record whose type is NOT `type` (any status:
- * the upsert also matches archived rows when no active one overlaps).
- * Throws when the backend can't answer, so the caller fails closed.
- */
-export async function keysHeldByOtherTypes(
-  backend: Awaited<ReturnType<typeof getBackend>>,
-  type: string,
-  keys: string[],
-): Promise<Set<string>> {
-  if (keys.length === 0) return new Set();
-  if (typeof backend.raw !== 'function') {
-    throw new Error('backend has no raw SQL support');
-  }
-  const res = await backend.raw(
-    `SELECT DISTINCT k FROM mem_records r, unnest(r.keys) AS k
-     WHERE r.keys && $1::text[] AND r.type <> $2 AND k = ANY($1::text[])`,
-    [keys, type],
-  );
-  return new Set(res.rows.map(row => String((row as { k: unknown }).k)));
 }
 
 /**

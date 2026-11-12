@@ -347,7 +347,7 @@ Without declared paths, the default walker concatenates every string in the reco
 
 **Cross-platform identity on a profile.** Two separate fields, and picking the wrong one silently mangles data:
 
-- `"identityKey": "properties.email"` — singular. "This record IS this entity." One dot-path; the value lands in `keys[]` and MERGES records for the same entity across platforms (HubSpot + Attio for one person collapse into a single record).
+- `"identityKey": "properties.email"` — singular. "This record IS this entity." One dot-path; the value lands in `keys[]` and merges re-syncs of the same record. Records from different platforms for one person (HubSpot + Attio) stay separate records, linked by `mem find-by-key`: sync never updates a record of another type.
 - `"identityKeys": [{"prefix": "email", "path": "attendees[].email"}]` — plural. "This record INVOLVES these people." Paths support `[]` wildcards and a `[name=From]` equality filter (Gmail headers). Values land in the separate `identity_keys[]` column, which does NOT merge — a 20-attendee event stays one event, not 20 contacts. Use this for anything with N participants.
 
 Both are queryable with `one --agent mem find-by-key <prefix>:<value>`.
