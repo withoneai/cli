@@ -718,9 +718,29 @@ async function executeActionStep(
   allowedActionIds: string[],
   options: FlowExecuteOptions,
 ): Promise<StepResult> {
-  const action = step.action!;
-  const platform = resolveValue(action.platform, context) as string;
-  const actionId = resolveValue(action.actionId, context) as string;
+  const resolved = resolveValue(step.action!, context) as FlowActionConfig;
+  return executeResolvedAction(step.id, resolved, context, api, permissions, allowedActionIds, options);
+}
+
+/**
+ * Run an action whose config has ALREADY been resolved against the flow
+ * context. Nothing in `action` is treated as a selector or template here:
+ * values that came from upstream API responses (a paginate step's page
+ * token, say) are data, and must be sent exactly as received. Resolving
+ * them a second time would let a response like `"$.env.SECRET"` pull flow
+ * context into the outgoing request.
+ */
+async function executeResolvedAction(
+  stepId: string,
+  action: FlowActionConfig,
+  context: FlowContext,
+  api: OneApi,
+  permissions: PermissionLevel,
+  allowedActionIds: string[],
+  options: FlowExecuteOptions,
+): Promise<StepResult> {
+  const platform = action.platform as string;
+  const actionId = action.actionId as string;
 
   // Resolve the connection key from either the legacy literal form or the
   // late-bound { platform, tag? } ref. Mutual exclusion is enforced by the
@@ -730,24 +750,24 @@ async function executeActionStep(
   const hasRef = !!action.connection?.platform;
   if (hasKey && hasRef) {
     throw new Error(
-      `Action step "${step.id}" has both "connectionKey" and "connection" — set exactly one. ` +
+      `Action step "${stepId}" has both "connectionKey" and "connection" — set exactly one. ` +
       `Prefer "connection: { platform, tag? }" so re-auth doesn't break the flow.`
     );
   }
   if (!hasKey && !hasRef) {
     throw new Error(
-      `Action step "${step.id}" must set "connection: { platform: <name> }" ` +
+      `Action step "${stepId}" must set "connection: { platform: <name> }" ` +
       `(or legacy "connectionKey: <key>").`
     );
   }
   let connectionKey: string;
   if (hasKey) {
-    connectionKey = resolveValue(action.connectionKey, context) as string;
+    connectionKey = action.connectionKey as string;
   } else {
-    // Resolve selectors inside the ref first (e.g. tag: "$.input.userEmail"),
-    // then look up the matching connection. Cache the connection list on the
-    // context so a many-step flow does ONE listConnections per run.
-    const ref = resolveValue(action.connection, context) as { platform: string; tag?: string };
+    // Selectors inside the ref (e.g. tag: "$.input.userEmail") were resolved
+    // by the caller. Cache the connection list on the context so a many-step
+    // flow does ONE listConnections per run.
+    const ref = action.connection as { platform: string; tag?: string };
     if (!context._connections) {
       context._connections = await api.listConnections();
     }
@@ -755,10 +775,10 @@ async function executeActionStep(
     connectionKey = conn.key;
   }
 
-  const data = action.data ? resolveValue(action.data, context) as Record<string, unknown> : undefined;
-  const pathVars = action.pathVars ? resolveValue(action.pathVars, context) as Record<string, string | number | boolean> : undefined;
-  const queryParams = action.queryParams ? resolveValue(action.queryParams, context) as Record<string, any> : undefined;
-  const headers = action.headers ? resolveValue(action.headers, context) as Record<string, string> : undefined;
+  const data = action.data ? action.data as Record<string, unknown> : undefined;
+  const pathVars = action.pathVars ? action.pathVars as Record<string, string | number | boolean> : undefined;
+  const queryParams = action.queryParams ? action.queryParams as Record<string, any> : undefined;
+  const headers = action.headers ? action.headers as Record<string, string> : undefined;
 
   // Access control checks
   if (!isActionAllowed(actionId, allowedActionIds)) {
@@ -777,7 +797,7 @@ async function executeActionStep(
       const details = validation.missing
         .map(m => `${m.flag} is missing "${m.param}"`)
         .join('; ');
-      throw new Error(`Validation failed for step "${step.id}": ${details}. Pass --skip-validation to bypass.`);
+      throw new Error(`Validation failed for step "${stepId}": ${details}. Pass --skip-validation to bypass.`);
     }
   }
 
@@ -1287,49 +1307,28 @@ async function executePaginateStep(
   let pageToken: unknown = undefined;
   let pages = 0;
 
+  // Resolve the action template ONCE. Page tokens come from the upstream
+  // response and are inserted into the resolved copy as plain data; they
+  // are never run through resolveValue.
+  const resolvedTemplate = resolveValue(config.action, context) as FlowActionConfig;
+
   for (let page = 0; page < maxPages; page++) {
-    // Clone the action config and inject page token
-    const actionConfig: FlowActionConfig = JSON.parse(JSON.stringify(config.action));
-    if (pageToken !== undefined && pageToken !== null) {
-      const resolved = resolveValue(actionConfig, context) as Record<string, unknown>;
-      setByDotPath(resolved, config.inputTokenParam, pageToken);
-      // Build a synthetic action step
-      const syntheticStep: FlowStep = {
-        id: `${step.id}__page${page}`,
-        name: `${step.id} page ${page}`,
-        type: 'action',
-        action: resolved as any,
-      };
-      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds, options);
-      const response = result.response as Record<string, unknown>;
-      const pageResults = getByDotPath(response, config.resultsField);
-      if (Array.isArray(pageResults)) allResults.push(...pageResults);
-      pageToken = getByDotPath(response, config.pageTokenField);
-      pages++;
-
-      options.onEvent?.({ event: 'step:page', stepId: step.id, page: pages });
-
-      if (pageToken === undefined || pageToken === null) break;
-    } else if (page === 0) {
-      // First page — no token yet
-      const resolvedAction = resolveValue(actionConfig, context) as any;
-      const syntheticStep: FlowStep = {
-        id: `${step.id}__page0`,
-        name: `${step.id} page 0`,
-        type: 'action',
-        action: resolvedAction,
-      };
-      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds, options);
-      const response = result.response as Record<string, unknown>;
-      const pageResults = getByDotPath(response, config.resultsField);
-      if (Array.isArray(pageResults)) allResults.push(...pageResults);
-      pageToken = getByDotPath(response, config.pageTokenField);
-      pages++;
-
-      options.onEvent?.({ event: 'step:page', stepId: step.id, page: pages });
-
-      if (pageToken === undefined || pageToken === null) break;
+    const actionConfig = structuredClone(resolvedTemplate) as FlowActionConfig;
+    if (page > 0) {
+      setByDotPath(actionConfig as unknown as Record<string, unknown>, config.inputTokenParam, pageToken);
     }
+    const result = await executeResolvedAction(
+      `${step.id}__page${page}`, actionConfig, context, api, permissions, allowedActionIds, options,
+    );
+    const response = result.response as Record<string, unknown>;
+    const pageResults = getByDotPath(response, config.resultsField);
+    if (Array.isArray(pageResults)) allResults.push(...pageResults);
+    pageToken = getByDotPath(response, config.pageTokenField);
+    pages++;
+
+    options.onEvent?.({ event: 'step:page', stepId: step.id, page: pages });
+
+    if (pageToken === undefined || pageToken === null) break;
   }
 
   return {
