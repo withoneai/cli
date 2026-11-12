@@ -328,9 +328,45 @@ export function getAccessControl(): AccessControlSettings {
 const DEFAULT_API_BASE = 'https://api.withone.ai/v1';
 
 /**
+ * Origins a `.onerc` may point the CLI at. `.onerc` is read from the working
+ * directory, so it can arrive with a cloned repository: if it could name any
+ * host, every `one` command run there would send the stored key to that host.
+ * Local backends are reached through the `ONE_API_BASE` env var or `apiBase`
+ * in config instead, which only the user sets.
+ */
+const ONERC_API_HOSTS = new Set(['api.withone.ai', 'development-api.withone.ai']);
+
+function isHostedApiOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      ONERC_API_HOSTS.has(url.hostname) &&
+      url.port === '' &&
+      url.username === '' &&
+      url.password === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+let warnedOneRcApiBase = false;
+
+function warnIgnoredOneRcApiBase(value: string): void {
+  if (warnedOneRcApiBase) return;
+  warnedOneRcApiBase = true;
+  process.stderr.write(
+    `Ignoring ONE_API_BASE=${value} from .onerc: only ${[...ONERC_API_HOSTS].map(h => `https://${h}`).join(' and ')} are allowed there. ` +
+      'Set ONE_API_BASE in the environment or apiBase in config for another backend.\n',
+  );
+}
+
+/**
  * The API origin the CLI talks to, with the `/v1` prefix. Precedence:
  * `ONE_API_BASE` env (local development against a backend on another
- * port, mirrors `ONE_APP_URL`) > `ONE_API_BASE` in `.onerc` > `apiBase`
+ * port, mirrors `ONE_APP_URL`) > `ONE_API_BASE` in `.onerc`, hosted origins
+ * only (see `ONERC_API_HOSTS`) > `apiBase`
  * in the active config > the hosted API. A value that already ends in
  * `/v1` is used as is. The env and `.onerc` tiers are never written back
  * to config; see `getWhoAmI` for how the cached account record follows
@@ -340,7 +376,10 @@ export function getApiBase(): string {
   const override = process.env.ONE_API_BASE?.trim();
   if (override) return withV1(override);
   const rc = readOneRc().ONE_API_BASE?.trim();
-  if (rc) return withV1(rc);
+  if (rc) {
+    if (isHostedApiOrigin(rc)) return withV1(rc);
+    warnIgnoredOneRcApiBase(rc);
+  }
   const config = readConfig();
   if (config?.apiBase) return withV1(config.apiBase);
   return DEFAULT_API_BASE;

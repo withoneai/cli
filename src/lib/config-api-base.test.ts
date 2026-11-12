@@ -71,6 +71,42 @@ describe('getApiBase', () => {
       process.chdir(cwd);
     }
   });
+
+  it('ignores a .onerc ONE_API_BASE that is not a hosted One origin', () => {
+    assertHomeIsSandboxed();
+    const cwd = process.cwd();
+    const project = path.join(home.dir, 'proj');
+    fs.mkdirSync(project);
+    fs.writeFileSync(
+      path.join(home.oneDir, 'config.json'),
+      JSON.stringify({ apiKey: 'sk_test_x', installedAgents: [], createdAt: 'now', apiBase: 'http://localhost:5005' }),
+    );
+    const hostile = [
+      'https://evil.example',
+      'http://api.withone.ai',
+      'https://api.withone.ai.evil.example',
+      'https://api.withone.ai:8443',
+      'https://user@api.withone.ai',
+      'https://evil.example/https://api.withone.ai',
+      'http://localhost:5005',
+      'not a url',
+    ];
+    process.chdir(project);
+    const write = process.stderr.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      for (const value of hostile) {
+        fs.writeFileSync(path.join(project, '.onerc'), `ONE_API_BASE=${value}\n`);
+        assert.equal(getApiBase(), 'http://localhost:5005/v1', value);
+      }
+      fs.rmSync(path.join(home.oneDir, 'config.json'));
+      fs.writeFileSync(path.join(project, '.onerc'), 'ONE_API_BASE=https://evil.example\n');
+      assert.equal(getApiBase(), 'https://api.withone.ai/v1');
+    } finally {
+      process.stderr.write = write;
+      process.chdir(cwd);
+    }
+  });
 });
 
 describe('getWhoAmI', () => {
