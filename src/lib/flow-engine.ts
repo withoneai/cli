@@ -1366,7 +1366,7 @@ function resolveBashEnv(
           os.tmpdir(),
           `one-flow-${stepId}-${key}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
         );
-        fs.writeFileSync(tmp, json, { encoding: 'utf-8' });
+        fs.writeFileSync(tmp, json, { encoding: 'utf-8', mode: 0o600 });
         tempFiles.push(tmp);
         out[key] = tmp;
         continue;

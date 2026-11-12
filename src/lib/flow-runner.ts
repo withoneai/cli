@@ -20,8 +20,32 @@ const LOGS_DIR = '.one/flows/.logs';
 
 function ensureDir(dir: string): void {
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
+}
+
+/**
+ * Run-state and log files hold flow inputs and step outputs, which can carry
+ * API responses. Keep them readable by the owner only. Best-effort: Windows
+ * ignores POSIX modes.
+ */
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIR_MODE = 0o700;
+
+function restrictMode(p: string, mode: number): void {
+  try { fs.chmodSync(p, mode); } catch { /* best-effort */ }
+}
+
+/**
+ * The state to write to disk. `context.env` is the live `process.env` (API
+ * key and every other secret in the environment), so it is never persisted:
+ * resume repopulates it from the current environment. Only the top-level
+ * context's env is dropped; step outputs that happen to have an `env` key
+ * are left alone.
+ */
+export function persistableState(state: FlowRunState): FlowRunState {
+  if (!state.context) return state;
+  return { ...state, context: { ...state.context, env: {} } };
 }
 
 function generateRunId(): string {
@@ -57,6 +81,8 @@ export class FlowRunner {
 
     ensureDir(RUNS_DIR);
     ensureDir(LOGS_DIR);
+    restrictMode(RUNS_DIR, PRIVATE_DIR_MODE);
+    restrictMode(LOGS_DIR, PRIVATE_DIR_MODE);
 
     this.statePath = path.join(RUNS_DIR, `${flow.key}-${this.runId}.state.json`);
     this.logPath = path.join(LOGS_DIR, `${flow.key}-${this.runId}.log`);
@@ -108,11 +134,18 @@ export class FlowRunner {
       msg,
       ...data,
     };
-    fs.appendFileSync(this.logPath, JSON.stringify(entry) + '\n');
+    fs.appendFileSync(this.logPath, JSON.stringify(entry) + '\n', { mode: PRIVATE_FILE_MODE });
   }
 
   private saveState(): void {
-    fs.writeFileSync(this.statePath, JSON.stringify(this.state, stripStepsAlias, 2));
+    fs.writeFileSync(
+      this.statePath,
+      JSON.stringify(persistableState(this.state), stripStepsAlias, 2),
+      { mode: PRIVATE_FILE_MODE },
+    );
+    // writeFileSync's mode only applies on create; tighten files written by
+    // older versions too.
+    restrictMode(this.statePath, PRIVATE_FILE_MODE);
   }
 
   private createEventHandler(externalHandler?: (event: FlowEvent) => void): (event: FlowEvent) => void {
