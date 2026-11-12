@@ -173,10 +173,52 @@ async function probePgvector(client: PgClient): Promise<boolean> {
   }
 }
 
+/**
+ * Role that `one mem sql` / `one sync sql` queries run as. The store's own
+ * connection is the cluster superuser, which can read any file the Postgres
+ * process can (pg_read_file, COPY FROM, ...). This role can log in and read
+ * the store's tables, and nothing else: no superuser, no pg_read_server_files.
+ */
+export const READER_ROLE = 'one_mem_reader';
+
+/** Advisory lock id for reader-role setup (distinct from the schema lock). */
+const READER_LOCK_ID = 7_342_901_118;
+
+/**
+ * Create the reader role if needed and grant it SELECT on every table in
+ * the store's schema that it can't read yet. Idempotent and cheap when
+ * nothing is missing, so it runs once per process before the first raw query
+ * (sync tables can appear after the schema was set up).
+ */
+export const READER_SETUP_SQL = `
+DO $setup$
+DECLARE
+  s text := current_schema();
+  r record;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${READER_ROLE}') THEN
+    CREATE ROLE ${READER_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+  END IF;
+  IF NOT has_schema_privilege('${READER_ROLE}', s, 'USAGE') THEN
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO ${READER_ROLE}', s);
+  END IF;
+  FOR r IN
+    SELECT c.oid::regclass AS rel
+      FROM pg_class c
+     WHERE c.relnamespace = s::regnamespace
+       AND c.relkind IN ('r', 'v', 'm', 'p')
+       AND NOT has_table_privilege('${READER_ROLE}', c.oid, 'SELECT')
+  LOOP
+    EXECUTE format('GRANT SELECT ON %s TO ${READER_ROLE}', r.rel);
+  END LOOP;
+END
+$setup$`;
+
 class LazyEmbeddedPostgresBackend implements MemBackend {
   private backend: CoreBackend | null = null;
   private config: EmbeddedPostgresConfig;
   private resolvedCaps: BackendCapabilities = BASE_CAPABILITIES;
+  private readerPool: PgClient | null = null;
 
   constructor(config: EmbeddedPostgresConfig) { this.config = config; }
 
@@ -222,14 +264,44 @@ class LazyEmbeddedPostgresBackend implements MemBackend {
       ? BASE_CAPABILITIES
       : { ...BASE_CAPABILITIES, vectorSearch: false, maxVectorDims: null };
 
-    this.backend = new CoreBackend(client, this.resolvedCaps);
+    // Raw user SQL gets its own pool, logged in as the reader role, created
+    // on first use. The superuser pool prepares the role first.
+    let readerClient: Promise<PgClient> | null = null;
+    const rawClient = () => {
+      readerClient ??= (async () => {
+        await client.transaction(async (tx) => {
+          await tx.query(`SELECT pg_advisory_xact_lock(${READER_LOCK_ID}::bigint)`);
+          await tx.query(READER_SETUP_SQL);
+        });
+        const reader = wrapClient(new PoolCtor({
+          host: this.config.host,
+          port: this.config.port,
+          database: this.config.database,
+          user: READER_ROLE,
+          password: '',
+        }));
+        this.readerPool = reader;
+        return reader;
+      })().catch((err: unknown) => {
+        readerClient = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`Could not open a read-only connection for raw SQL: ${msg}`);
+      });
+      return readerClient;
+    };
+
+    this.backend = new CoreBackend(client, this.resolvedCaps, rawClient);
     return this.backend;
   }
 
   capabilities(): BackendCapabilities { return this.resolvedCaps; }
 
   async init(): Promise<void> { await this.ensure(); }
-  async close(): Promise<void> { if (this.backend) await this.backend.close(); this.backend = null; }
+  async close(): Promise<void> {
+    if (this.readerPool) { await this.readerPool.close(); this.readerPool = null; }
+    if (this.backend) await this.backend.close();
+    this.backend = null;
+  }
   async ensureSchema(): Promise<void> { return (await this.ensure()).ensureSchema(); }
   async getSchemaVersion(): ReturnType<MemBackend['getSchemaVersion']> { return (await this.ensure()).getSchemaVersion(); }
 
