@@ -162,6 +162,20 @@ function detectColumnType(value: unknown): string {
   return 'TEXT';
 }
 
+/**
+ * Quote a column name as a SQLite identifier. Column names come from API
+ * record keys, so they can contain anything: an embedded `"` is doubled so
+ * the whole key stays one identifier and can't close the quote and add SQL.
+ * NUL can't be represented (SQLite stops reading the statement there), so a
+ * key containing one is refused.
+ */
+export function quoteIdent(name: string): string {
+  if (name.includes('\u0000')) {
+    throw new Error(`Field name contains a NUL character and can't be stored as a column: ${JSON.stringify(name)}`);
+  }
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
 /** Sanitize a model name for use as a SQL table name */
 export function sanitizeTableName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -205,7 +219,7 @@ export function ensureTable(
 
   for (const [key, value] of Object.entries(firstRecord)) {
     const colType = detectColumnType(value);
-    colDefs.push(`"${key}" ${colType}`);
+    colDefs.push(`${quoteIdent(key)} ${colType}`);
     columns.push(key);
   }
 
@@ -218,8 +232,7 @@ export function ensureTable(
   db.exec(`CREATE TABLE IF NOT EXISTS "${table}" (${colDefs.join(', ')})`);
 
   // Create unique index on idField
-  const safeIdField = idField.replace(/"/g, '""');
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "idx_${table}_${sanitizeTableName(idField)}" ON "${table}" ("${safeIdField}")`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "idx_${table}_${sanitizeTableName(idField)}" ON "${table}" (${quoteIdent(idField)})`);
 
   return columns;
 }
@@ -241,7 +254,7 @@ export function rebuildFtsIndex(db: Database.Database, model: string): void {
 
   if (textCols.length === 0) return;
 
-  const quotedCols = textCols.map(c => `"${c}"`).join(', ');
+  const quotedCols = textCols.map(quoteIdent).join(', ');
 
   // Drop old FTS table and triggers if they exist
   db.exec(`DROP TABLE IF EXISTS "${ftsTable}"`);
@@ -263,7 +276,7 @@ export function evolveSchema(db: Database.Database, model: string, record: Recor
   for (const [key, value] of Object.entries(record)) {
     if (!existingCols.has(key)) {
       const colType = detectColumnType(value);
-      db.exec(`ALTER TABLE "${table}" ADD COLUMN "${key}" ${colType}`);
+      db.exec(`ALTER TABLE "${table}" ADD COLUMN ${quoteIdent(key)} ${colType}`);
     }
   }
 }
@@ -308,7 +321,7 @@ export function upsertRecords(
       if (newKeys.length > 0) {
         for (const key of newKeys) {
           const colType = detectColumnType(record[key]);
-          db.exec(`ALTER TABLE "${table}" ADD COLUMN "${key}" ${colType}`);
+          db.exec(`ALTER TABLE "${table}" ADD COLUMN ${quoteIdent(key)} ${colType}`);
           existingCols.push(key);
         }
       }
@@ -316,7 +329,7 @@ export function upsertRecords(
       // Build the record with _synced_at
       const fullRecord: Record<string, unknown> = { ...record, _synced_at: now };
       const cols = Object.keys(fullRecord).filter(k => existingCols.includes(k) || k === '_synced_at');
-      const quotedCols = cols.map(c => `"${c}"`).join(', ');
+      const quotedCols = cols.map(quoteIdent).join(', ');
       const placeholders = cols.map(() => '?').join(', ');
       const values = cols.map(c => prepareValue(fullRecord[c]));
 
@@ -325,13 +338,12 @@ export function upsertRecords(
       // that aren't in the new data (e.g. _enriched_at from Phase 2).
       // ON CONFLICT DO UPDATE only touches the columns we're providing,
       // preserving any enrichment columns.
-      const safeIdField = idField.replace(/"/g, '""');
       const updateCols = cols.filter(c => c !== idField)
-        .map(c => `"${c}" = excluded."${c}"`)
+        .map(c => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`)
         .join(', ');
       db.prepare(
         `INSERT INTO "${table}" (${quotedCols}) VALUES (${placeholders}) ` +
-        `ON CONFLICT("${safeIdField}") DO UPDATE SET ${updateCols}`
+        `ON CONFLICT(${quoteIdent(idField)}) DO UPDATE SET ${updateCols}`
       ).run(...values);
       count++;
     }
