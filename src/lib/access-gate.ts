@@ -113,3 +113,65 @@ export function intersectAllowlists(a: string[], b: string[]): string[] {
   if (b.includes('*')) return a;
   return a.filter(x => b.includes(x));
 }
+
+// ── One's own resources: relays and connections ───────────────────────
+
+/**
+ * A command that changes a One resource rather than calling a connected app,
+ * named by the HTTP method it sends: `write` for create, update and activate,
+ * `delete` for delete. Knowledge-only refuses both, and the permission level
+ * must allow the method, the same way it would for an action.
+ */
+export function checkManagementAccess(settings: AccessControlSettings, op: 'write' | 'delete', what: string): void {
+  const permissions = settings.permissions ?? 'admin';
+  if (settings.knowledgeAgent) {
+    throw new AccessDeniedError(`${what} is disabled (knowledge-only mode).`);
+  }
+  const method = op === 'delete' ? 'DELETE' : 'POST';
+  if (!isMethodAllowed(method, permissions)) {
+    throw new AccessDeniedError(`${what} needs ${op === 'delete' ? 'the "admin"' : 'the "write" or "admin"'} permission level (current: "${permissions}").`);
+  }
+}
+
+/** True when neither allowlist names anything, so nothing narrower than "all" applies. */
+export function allowlistsUnrestricted(settings: AccessControlSettings): boolean {
+  return (settings.actionIds ?? ['*']).includes('*') && (settings.connectionKeys ?? ['*']).includes('*');
+}
+
+/**
+ * Checks the actions a relay will run when its webhook events arrive. They run
+ * on One's servers later, so this is the only moment the CLI can apply its
+ * settings to them:
+ * - a `passthrough` action is judged like `actions execute` (allowlists,
+ *   method, headers), using `methodOf` to read the action's method;
+ * - a `url` or `agent` action sends event data somewhere the allowlists cannot
+ *   describe, so it is allowed only when both allowlists are `*`.
+ */
+export async function checkRelayActions(
+  settings: AccessControlSettings,
+  actions: unknown,
+  methodOf: (actionId: string) => Promise<string>,
+): Promise<void> {
+  if (actions === undefined || actions === null) return;
+  if (!Array.isArray(actions)) throw new AccessDeniedError('--actions must be a JSON array.');
+  for (const [i, raw] of actions.entries()) {
+    const action = (raw ?? {}) as Record<string, unknown>;
+    if (action.type === 'passthrough') {
+      const actionId = String(action.actionId ?? '');
+      const connectionKey = String(action.connectionKey ?? '');
+      if (!actionId || !connectionKey) {
+        throw new AccessDeniedError(`Relay action [${i}] needs an actionId and a connectionKey.`);
+      }
+      // Allowlists first, so a refused action costs no lookup.
+      checkPassthroughAccess({ ...settings, permissions: 'admin', knowledgeAgent: false }, { actionId, connectionKey, method: 'GET' });
+      const headers = action.headers && typeof action.headers === 'object' ? (action.headers as Record<string, string>) : undefined;
+      checkPassthroughAccess(settings, { actionId, connectionKey, method: await methodOf(actionId), headers });
+      continue;
+    }
+    if (!allowlistsUnrestricted(settings)) {
+      throw new AccessDeniedError(
+        `Relay action [${i}] of type "${String(action.type)}" forwards events outside the connection and action allowlists, so it is allowed only when both are "*".`,
+      );
+    }
+  }
+}

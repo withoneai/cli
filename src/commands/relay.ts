@@ -1,6 +1,9 @@
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
+import { checkManagementAccess, checkRelayActions, isConnectionAllowed } from '../lib/access-gate.js';
+import { resolveActionDetails } from '../lib/action-details.js';
+import type { AccessControlSettings } from '../lib/types.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 
@@ -10,9 +13,59 @@ function getConfig() {
     output.error('Not configured. Run `one init` first.');
   }
 
-  const ac = getAccessControlFromAllSources();
-  const connectionKeys: string[] = ac.connectionKeys || ['*'];
-  return { apiKey, connectionKeys };
+  const settings = getAccessControlFromAllSources();
+  const connectionKeys: string[] = settings.connectionKeys || ['*'];
+  return { apiKey, connectionKeys, settings };
+}
+
+/**
+ * Which relay records the connection allowlist lets this CLI see or change.
+ * Relays and events name their connection by id, and the allowlist names
+ * keys, so a restricted allowlist costs one connection listing.
+ */
+async function connectionIdFilter(api: OneApi, settings: AccessControlSettings): Promise<(connectionId: string) => boolean> {
+  const keys = settings.connectionKeys ?? ['*'];
+  if (keys.includes('*')) return () => true;
+  const connections = await api.listConnections();
+  const ids = new Set(connections.filter(c => isConnectionAllowed(c.key, keys)).map(c => c.id));
+  return id => ids.has(id);
+}
+
+function restricted(settings: AccessControlSettings): boolean {
+  return !(settings.connectionKeys ?? ['*']).includes('*');
+}
+
+/** Loads an endpoint and refuses it when its connection is outside the allowlist. */
+async function allowedEndpoint(api: OneApi, settings: AccessControlSettings, id: string): Promise<any> {
+  const allowed = await connectionIdFilter(api, settings);
+  const endpoint = await api.getRelayEndpoint(id);
+  if (!allowed(endpoint.connectionId)) {
+    throw new Error(`Relay endpoint "${id}" is on a connection that is not allowed.`);
+  }
+  return endpoint;
+}
+
+/** Loads an event and refuses it when its connection is outside the allowlist. */
+async function allowedEvent(api: OneApi, settings: AccessControlSettings, id: string): Promise<any> {
+  const allowed = await connectionIdFilter(api, settings);
+  const event = await api.getRelayEvent(id);
+  if (!allowed(event.connectionId)) {
+    throw new Error(`Relay event "${id}" is on a connection that is not allowed.`);
+  }
+  return event;
+}
+
+function actionMethod(api: OneApi): (actionId: string) => Promise<string> {
+  return async actionId => (await resolveActionDetails(api, actionId)).details.method;
+}
+
+/** Runs a check that may throw, printing its message as a CLI error. */
+function guard(check: () => void): void {
+  try {
+    check();
+  } catch (error) {
+    output.error(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function parseJsonArg(value: string, argName: string): any {
@@ -33,8 +86,9 @@ export async function relayCreateCommand(options: {
   metadata?: string;
   createWebhook?: boolean;
 }): Promise<void> {
-  const { apiKey, connectionKeys } = getConfig();
+  const { apiKey, connectionKeys, settings } = getConfig();
 
+  guard(() => checkManagementAccess(settings, 'write', 'Creating a relay endpoint'));
   if (!connectionKeys.includes('*') && !connectionKeys.includes(options.connectionKey)) {
     output.error(`Connection key "${options.connectionKey}" is not allowed.`);
   }
@@ -83,7 +137,7 @@ export async function relayListCommand(options: {
   limit?: string;
   page?: string;
 }): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay endpoints...');
@@ -94,11 +148,14 @@ export async function relayListCommand(options: {
     if (options.page) query.page = options.page;
 
     const result = await api.listRelayEndpoints(query);
-    const endpoints = result.rows || [];
+    const allowed = await connectionIdFilter(api, settings);
+    const endpoints = (result.rows || []).filter((e: any) => allowed(e.connectionId));
 
     if (output.isAgentMode()) {
       output.json({
-        total: result.total,
+        // With a connection allowlist the server's total also counts rows
+        // the allowlist hides, so report only what is shown.
+        total: restricted(settings) ? endpoints.length : result.total,
         showing: endpoints.length,
         endpoints: endpoints.map((e: any) => ({
           id: e.id,
@@ -143,13 +200,13 @@ export async function relayListCommand(options: {
 }
 
 export async function relayGetCommand(id: string): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay endpoint...');
 
   try {
-    const result = await api.getRelayEndpoint(id);
+    const result = await allowedEndpoint(api, settings, id);
 
     if (output.isAgentMode()) {
       output.json(result);
@@ -187,7 +244,8 @@ export async function relayUpdateCommand(
     actions?: string;
   }
 ): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
+  guard(() => checkManagementAccess(settings, 'write', 'Updating a relay endpoint'));
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Updating relay endpoint...');
@@ -199,6 +257,12 @@ export async function relayUpdateCommand(
     if (options.eventFilters) body.eventFilters = parseJsonArg(options.eventFilters, '--event-filters');
     if (options.tags) body.tags = parseJsonArg(options.tags, '--tags');
     if (options.actions) body.actions = parseJsonArg(options.actions, '--actions');
+
+    const existing = await allowedEndpoint(api, settings, id);
+    // New actions are checked; so are the stored ones when this turns the
+    // endpoint on, since they are what will run.
+    const effective = body.actions ?? (options.active === true ? existing.actions : undefined);
+    await checkRelayActions(settings, effective, actionMethod(api));
 
     const result = await api.updateRelayEndpoint(id, body);
 
@@ -219,12 +283,14 @@ export async function relayUpdateCommand(
 }
 
 export async function relayDeleteCommand(id: string): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
+  guard(() => checkManagementAccess(settings, 'delete', 'Deleting a relay endpoint'));
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Deleting relay endpoint...');
 
   try {
+    await allowedEndpoint(api, settings, id);
     const result = await api.deleteRelayEndpoint(id);
 
     if (output.isAgentMode()) {
@@ -245,13 +311,16 @@ export async function relayActivateCommand(
   id: string,
   options: { actions: string; webhookSecret?: string }
 ): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
+  guard(() => checkManagementAccess(settings, 'write', 'Activating a relay endpoint'));
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Activating relay endpoint...');
 
   try {
     const actions = parseJsonArg(options.actions, '--actions');
+    await allowedEndpoint(api, settings, id);
+    await checkRelayActions(settings, actions, actionMethod(api));
     const body: Record<string, unknown> = { actions };
     if (options.webhookSecret) body.webhookSecret = options.webhookSecret;
 
@@ -281,7 +350,7 @@ export async function relayEventsCommand(options: {
   after?: string;
   before?: string;
 }): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay events...');
@@ -296,11 +365,14 @@ export async function relayEventsCommand(options: {
     if (options.before) query.before = options.before;
 
     const result = await api.listRelayEvents(query);
-    const events = result.rows || [];
+    const allowed = await connectionIdFilter(api, settings);
+    const events = (result.rows || []).filter((e: any) => allowed(e.connectionId));
 
     if (output.isAgentMode()) {
       output.json({
-        total: result.total,
+        // With a connection allowlist the server's total also counts rows
+        // the allowlist hides, so report only what is shown.
+        total: restricted(settings) ? events.length : result.total,
         showing: events.length,
         events: events.map((e: any) => ({
           id: e.id,
@@ -340,13 +412,13 @@ export async function relayEventsCommand(options: {
 }
 
 export async function relayEventGetCommand(id: string): Promise<void> {
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay event...');
 
   try {
-    const result = await api.getRelayEvent(id);
+    const result = await allowedEvent(api, settings, id);
 
     if (output.isAgentMode()) {
       output.json(result);
@@ -376,12 +448,14 @@ export async function relayDeliveriesCommand(options: {
     output.error('Provide either --endpoint-id or --event-id');
   }
 
-  const { apiKey } = getConfig();
+  const { apiKey, settings } = getConfig();
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading deliveries...');
 
   try {
+    if (options.endpointId) await allowedEndpoint(api, settings, options.endpointId);
+    else await allowedEvent(api, settings, options.eventId!);
     const deliveries = options.endpointId
       ? await api.listRelayEndpointDeliveries(options.endpointId)
       : await api.listRelayEventDeliveries(options.eventId!);

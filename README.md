@@ -748,6 +748,8 @@ Precedence: env var > `.onerc` > `~/.one/config.json`. The access keys are the e
 
 The access settings are enforced on every call to a connected app, whatever the command: `actions execute`, flows, sync and its validation runs. Headers named `x-one-secret`, `x-one-connection-key` or `x-one-action-id` cannot be passed with `--headers`, method-override headers are judged against the permission level, and a path variable cannot be `.` or `..`.
 
+They also apply to commands that change One's own resources. Creating, updating or activating a relay needs the `write` level and deleting one needs `admin`; `connection delete` needs `admin`; knowledge-only refuses all of them. A relay's `passthrough` actions are checked like `actions execute` when they are set, because they run later on One's servers. `url` and `agent` relay actions are allowed only when the connection and action allowlists are both `*`. With a connection allowlist, relay endpoints, events and deliveries on other connections are hidden or refused.
+
 ```bash
 # .onerc
 ONE_SECRET=sk_live_xxx
