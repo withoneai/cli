@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
+import { checkManagementAccess } from '../lib/access-gate.js';
 import { OneApi, TimeoutError, PERMISSION_METHODS } from '../lib/api.js';
 import {
   resolveAllowedActions,
@@ -340,6 +341,12 @@ export async function connectionDeleteCommand(
   const apiKey = getApiKey();
   if (!apiKey) {
     output.error('Not configured. Run `one init` first.');
+  }
+
+  try {
+    checkManagementAccess(getAccessControlFromAllSources(), 'delete', 'Deleting a connection');
+  } catch (error) {
+    output.error(error instanceof Error ? error.message : String(error));
   }
 
   const api = new OneApi(apiKey, getApiBase());
