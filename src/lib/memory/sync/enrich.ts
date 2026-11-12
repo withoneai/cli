@@ -8,6 +8,7 @@ import { writePageToMemory, resolveEntityIdentity } from './mem-writer.js';
 import type Database from 'better-sqlite3';
 import { transformRecords } from './transform.js';
 import { fireHooks, type ChangeEvent } from './hooks.js';
+import { quoteIdent } from './db.js';
 
 /**
  * Phase 2 enrichment engine. Runs AFTER the list sync completes.
@@ -276,7 +277,7 @@ function ensureColumn(
 ): void {
   const cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
   if (!cols.some(c => c.name === column)) {
-    db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${column}" ${type}`);
+    db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN ${quoteIdent(column)} ${type}`);
   }
 }
 
@@ -302,7 +303,7 @@ export function clearEnrichmentStamps(
   if (!cols.some(c => c.name === timestampField)) return 0;
 
   const result = db.prepare(
-    `UPDATE "${safeTable}" SET "${timestampField}" = NULL WHERE "${timestampField}" IS NOT NULL`
+    `UPDATE "${safeTable}" SET ${quoteIdent(timestampField)} = NULL WHERE ${quoteIdent(timestampField)} IS NOT NULL`
   ).run();
   return result.changes;
 }
@@ -346,10 +347,10 @@ export function invalidateStaleEnrichments(
 
   // `IS NOT` is SQLite's null-safe inequality.
   const result = db.prepare(
-    `UPDATE "${safeTable}" SET "${tsField}" = NULL
-      WHERE "${tsField}" IS NOT NULL
-        AND "${ENRICH_FINGERPRINT_COLUMN}" IS NOT NULL
-        AND "${ENRICH_FINGERPRINT_COLUMN}" IS NOT CAST("${fpField}" AS TEXT)`
+    `UPDATE "${safeTable}" SET ${quoteIdent(tsField)} = NULL
+      WHERE ${quoteIdent(tsField)} IS NOT NULL
+        AND ${quoteIdent(ENRICH_FINGERPRINT_COLUMN)} IS NOT NULL
+        AND ${quoteIdent(ENRICH_FINGERPRINT_COLUMN)} IS NOT CAST(${quoteIdent(fpField)} AS TEXT)`
   ).run();
   return result.changes;
 }
@@ -378,12 +379,12 @@ export async function enrichPhase(
   // Ensure the _enriched_at column exists
   const cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
   if (!cols.some(c => c.name === tsField)) {
-    db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${tsField}" TEXT`);
+    db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN ${quoteIdent(tsField)} TEXT`);
   }
 
   // Get all unenriched rows
   const unenriched = db.prepare(
-    `SELECT * FROM "${safeTable}" WHERE "${tsField}" IS NULL`
+    `SELECT * FROM "${safeTable}" WHERE ${quoteIdent(tsField)} IS NULL`
   ).all() as Record<string, unknown>[];
 
   const total = unenriched.length;
@@ -524,7 +525,7 @@ export async function enrichPhase(
       const values: (string | number | null)[] = [];
       for (const [key, val] of Object.entries(merged)) {
         if (key === idField) continue;
-        setClauses.push(`"${key}" = ?`);
+        setClauses.push(`${quoteIdent(key)} = ?`);
         values.push(prepareValue(val));
       }
       values.push(prepareValue(id));
@@ -534,7 +535,7 @@ export async function enrichPhase(
         for (const [key, val] of Object.entries(merged)) {
           if (!existingCols.has(key)) {
             const colType = detectColumnType(val);
-            db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${key}" ${colType}`);
+            db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN ${quoteIdent(key)} ${colType}`);
             existingCols.add(key);
           }
         }

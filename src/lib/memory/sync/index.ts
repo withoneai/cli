@@ -17,7 +17,7 @@ import { searchSyncedData } from './search.js';
 import { extractSearchableFromPaths, getSearchablePaths } from './mem-writer.js';
 import { defaultSearchableText } from '../embedding.js';
 import { suggestSearchablePaths } from './suggest-searchable.js';
-import { openDatabase, getDatabaseSize, dropTable, deleteDatabase, countRecords, listTables, deleteRecords, rebuildFtsIndex, tableExists, sanitizeTableName } from './db.js';
+import { openDatabase, getDatabaseSize, dropTable, deleteDatabase, countRecords, listTables, deleteRecords, rebuildFtsIndex, tableExists, sanitizeTableName, quoteIdent } from './db.js';
 import type { SyncProfile, SyncRunOptions, SyncQueryOptions } from './types.js';
 import { isSqliteAvailable, loadSqlite } from './sqlite-loader.js';
 import { spawn } from 'node:child_process';
@@ -916,7 +916,7 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
       // Find the idField from the profile
       const profile = readProfile(platform, model);
       const idField = profile?.idField || 'id';
-      where = `"${idField}" = ?`;
+      where = `${quoteIdent(idField)} = ?`;
       params = [options.id];
     } else if (options.whereSql) {
       // Raw SQL predicate — allows json_each(), subqueries, etc.
@@ -932,7 +932,7 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
       for (const cond of conditions) {
         try {
           const parsed = parseCondition(cond);
-          clauses.push(`"${parsed.field}" ${parsed.operator} ?`);
+          clauses.push(`${quoteIdent(parsed.field)} ${parsed.operator} ?`);
           params.push(parsed.value);
         } catch (err) {
           db.close();
