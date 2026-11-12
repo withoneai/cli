@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { FlowRunner, persistableState } from './flow-runner.js';
 import type { Flow, FlowStep } from './flow-types.js';
+import { stopSandbox } from './flow-sandbox.js';
 import type { OneApi } from './api.js';
 
 const SECRET_VAR = 'ONE_FLOW_STATE_TEST_SECRET';
@@ -21,6 +22,9 @@ before(() => {
 });
 
 after(() => {
+  // The sandbox child inherited the temp dir as its cwd; Windows won't
+  // delete a directory a live process is sitting in.
+  stopSandbox();
   delete process.env[SECRET_VAR];
   process.chdir(origCwd);
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
