@@ -21,6 +21,7 @@ import { openDatabase, getDatabaseSize, dropTable, deleteDatabase, countRecords,
 import type { SyncProfile, SyncRunOptions, SyncQueryOptions } from './types.js';
 import { isSqliteAvailable, loadSqlite } from './sqlite-loader.js';
 import { spawn } from 'node:child_process';
+import { approveShellCommands, isShellApproved, shellCommandsOf, SHELL_FIELDS } from './approval.js';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 
@@ -415,15 +416,94 @@ async function syncInitCommand(platform: string, model: string, options: { confi
     delete profile.connection;
   }
 
+  // Shell commands the user passed in this --config are theirs, so they're
+  // approved now. Commands carried over from a profile already on disk
+  // (which may have come from a cloned repo) stay approved only if they
+  // already were; otherwise they need `one sync approve`.
+  const existingApproved = existing ? isShellApproved(existing) : false;
+  const mergedCommands = shellCommandsOf(profile);
+  const userSupplied = SHELL_FIELDS.every(f => {
+    const value = mergedCommands[f];
+    if (value === undefined) return true;
+    if ((patch as Record<string, unknown>)[f] === value) return true;
+    return existingApproved && (existing as unknown as Record<string, unknown>)[f] === value;
+  });
+
   try {
     writeProfile(profile);
+    const needsApproval = Object.keys(mergedCommands).length > 0 && !userSupplied;
+    if (!needsApproval) approveShellCommands(profile);
     if (output.isAgentMode()) {
-      output.json({ status: 'created', platform, model, profile });
+      output.json({
+        status: 'created', platform, model, profile,
+        ...(needsApproval ? { shellApproval: 'required', _hint: `Run: one sync approve ${platform} --models ${model}` } : {}),
+      });
     } else {
       output.outro(`Sync profile saved for ${platform}/${model}`);
+      if (needsApproval) {
+        console.log(
+          `  ${pc.yellow('!')} This profile runs shell commands you didn't supply here. ` +
+          `Review them, then run ${pc.bold(`one sync approve ${platform} --models ${model}`)}.`
+        );
+      }
     }
   } catch (err) {
     output.error(`Error saving profile: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// ── sync approve ──
+
+async function syncApproveCommand(platform: string, options: { models?: string; yes?: boolean }): Promise<void> {
+  const models = options.models?.split(',').map(m => m.trim()).filter(Boolean);
+  const profiles = listProfiles(platform).filter(pr => !models || models.includes(pr.model));
+  if (profiles.length === 0) {
+    output.error(`No sync profiles found for ${platform}${models ? ` with models: ${models.join(', ')}` : ''}.`);
+  }
+
+  const pending = profiles.filter(pr => !isShellApproved(pr));
+  if (pending.length === 0) {
+    if (output.isAgentMode()) {
+      output.json({ status: 'approved', platform, approved: [], alreadyApproved: profiles.map(pr => pr.model) });
+    } else {
+      output.outro(`Nothing to approve: ${platform} profiles run no unapproved shell commands.`);
+    }
+    return;
+  }
+
+  if (!output.isAgentMode()) {
+    for (const pr of pending) {
+      const lines = Object.entries(shellCommandsOf(pr)).map(([f, c]) => `${f}: ${c}`).join('\n');
+      output.note(lines, `${pr.platform}/${pr.model} runs these with sh -c`);
+    }
+  }
+
+  if (!options.yes) {
+    if (output.isAgentMode()) {
+      output.json({
+        status: 'confirmation_required',
+        platform,
+        pending: pending.map(pr => ({ model: pr.model, commands: shellCommandsOf(pr) })),
+        _hint: 'Show these commands to the user. Re-run with --yes only after they approve them.',
+      });
+      return;
+    }
+    const confirmed = await p.confirm({
+      message: `Allow sync to run ${pending.length === 1 ? 'this command set' : 'these command sets'} in ${process.cwd()}?`,
+      initialValue: false,
+    });
+    if (p.isCancel(confirmed) || !confirmed) {
+      output.cancel('Not approved.');
+      return;
+    }
+  }
+
+  for (const pr of pending) approveShellCommands(pr);
+  if (output.isAgentMode()) {
+    output.json({ status: 'approved', platform, approved: pending.map(pr => pr.model) });
+  } else {
+    output.outro(`Approved shell commands for ${pending.map(pr => `${platform}/${pr.model}`).join(', ')}. ` +
+      `If they change, sync will ask again.`);
   }
 }
 
@@ -1168,8 +1248,21 @@ async function syncScheduleAddCommand(platform: string, options: { every: string
       models: options.models?.split(',').map(m => m.trim()),
     });
 
+    // Scheduled runs enforce shell-command approval too; say so now rather
+    // than letting every tick fail silently in the cron log.
+    const scheduledModels = entry.models;
+    const unapproved = listProfiles(platform)
+      .filter(pr => !scheduledModels || scheduledModels.includes(pr.model))
+      .filter(pr => !isShellApproved(pr))
+      .map(pr => pr.model);
+
     if (output.isAgentMode()) {
-      output.json({ status: replaced ? 'replaced' : 'scheduled', ...entry });
+      output.json({
+        status: replaced ? 'replaced' : 'scheduled', ...entry,
+        ...(unapproved.length > 0
+          ? { unapprovedShellCommands: unapproved, _hint: `These models will fail until approved: one sync approve ${platform} --models ${unapproved.join(',')}` }
+          : {}),
+      });
       return;
     }
 
@@ -1178,6 +1271,13 @@ async function syncScheduleAddCommand(platform: string, options: { every: string
       `${verb} ${pc.bold(entry.id)} — every ${pc.bold(entry.every)} ` +
       `(cron: ${pc.dim(entry.cronExpr)})\nLogs: ${pc.dim(entry.logFile)}`
     );
+    if (unapproved.length > 0) {
+      console.log(
+        `  ${pc.yellow('!')} ${unapproved.map(m => `${platform}/${m}`).join(', ')} run shell commands that aren't approved, ` +
+        `so scheduled runs will skip ${unapproved.length === 1 ? 'it' : 'them'}. ` +
+        `Run ${pc.bold(`one sync approve ${platform} --models ${unapproved.join(',')}`)}.`
+      );
+    }
   } catch (err) {
     output.error(err instanceof Error ? err.message : String(err));
   }
@@ -1460,6 +1560,15 @@ function registerSyncSubcommands(sync: Command): void {
     .option('--yes', 'Skip confirmation prompt')
     .action(async (platformModel: string, options: { id?: string; where?: string; whereSql?: string; yes?: boolean }) => {
       await syncDeleteCommand(platformModel, options);
+    });
+
+  sync
+    .command('approve <platform>')
+    .description("Approve the shell commands (transform, onInsert, onUpdate, onChange) in this project's sync profiles")
+    .option('--models <models>', 'Only these models (comma-separated)')
+    .option('--yes', 'Approve without the confirmation prompt')
+    .action(async (platform: string, options: { models?: string; yes?: boolean }) => {
+      await syncApproveCommand(platform, options);
     });
 
   sync

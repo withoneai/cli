@@ -1091,6 +1091,15 @@ Hooks fire after each page (not end-of-sync) for real-time processing. Each even
 
 Every record has a \`_synced_at\` timestamp so you can track when it was last pulled.
 
+### Approving shell commands
+
+\`transform\` and every hook except \`"log"\` run through \`sh -c\`. Profiles live in the project, so a cloned repo can ship them. \`sync run\` (and scheduled runs) refuse a profile's shell commands until they are approved for that project directory:
+
+- Commands you pass yourself in \`sync init --config\` are approved automatically.
+- Commands already in a profile on disk, e.g. from a cloned repo, need \`one sync approve <platform> [--models <m>]\`. It shows the exact commands and asks before approving. In agent mode it returns \`confirmation_required\` with the commands; show them to the user and pass \`--yes\` only once they agree.
+- The approval covers the exact commands. If they change, e.g. after a \`git pull\`, sync refuses them again until re-approved.
+- Approvals are stored in \`~/.one/sync/shell-approvals.json\`, never in the project. \`--dry-run\` stops before any command runs and needs no approval.
+
 ## Full Refresh (deletion detection)
 
 \`\`\`bash

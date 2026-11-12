@@ -6,6 +6,7 @@ import os from 'node:os';
 import { writePageToMemory } from './mem-writer.js';
 import { findEnrichedIds } from './enrich.js';
 import { syncModel } from './runner.js';
+import { approveShellCommands } from './approval.js';
 import { openDatabase } from './db.js';
 import { loadSqlite } from './sqlite-loader.js';
 import type { SyncProfile } from './types.js';
@@ -515,6 +516,8 @@ describe('syncModel — a second run must not thin out the enriched memory recor
     const backend = await getBackend();
     const half = (id: string) => backend.findBySource(`gmailhalf/threads:${id}`);
 
+    // The transform is a shell command, so the user has to approve it first.
+    approveShellCommands(halfProfile);
     await syncModel(halfApi('v1'), halfProfile, { toMemory: true });
     assert.equal(((await half('S1'))!.data as any).messages[0].snippet, 'FULL BODY of S1');
     assert.equal(((await half('S2'))!.data as any).messages, undefined, 'S2 never got enriched');

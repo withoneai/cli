@@ -18,6 +18,7 @@ import {
   type EnrichResult,
 } from './enrich.js';
 import { transformRecords } from './transform.js';
+import { assertShellApproved } from './approval.js';
 import { extractRecords } from './extract.js';
 import { resolveProfileConnectionKey } from './profile.js';
 import type Database from 'better-sqlite3';
@@ -136,6 +137,11 @@ export async function syncModel(
       '--full-refresh and --since cannot be used together. --full-refresh always fetches the whole collection.'
     );
   }
+
+  // Shell commands from a project profile (transform / hooks) only run once
+  // the user has approved exactly these commands. Dry-run stops after the
+  // first page, before any of them runs, so it can still preview.
+  if (!options.dryRun) assertShellApproved(profile);
 
   // Resolve the connection key once up front. Profiles using the new
   // `connection: { platform, tag? }` form get a fresh lookup; profiles using
