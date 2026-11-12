@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { FlowRunner, persistableState } from './flow-runner.js';
 import type { Flow, FlowStep } from './flow-types.js';
-import { stopSandbox } from './flow-sandbox.js';
+import { sandboxEvaluate, stopSandbox } from './flow-sandbox.js';
 import type { OneApi } from './api.js';
 
 const SECRET_VAR = 'ONE_FLOW_STATE_TEST_SECRET';
@@ -14,7 +14,11 @@ const SECRET = 'sk_live_must_not_be_written_to_disk';
 let origCwd: string;
 let tmp: string;
 
-before(() => {
+before(async () => {
+  // Start the flow sandbox before moving into the temp project, so its
+  // child process doesn't hold the temp dir as its cwd (Windows then
+  // refuses to delete it).
+  await sandboxEvaluate('1', { input: {}, env: {}, steps: {}, loop: {} });
   origCwd = process.cwd();
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'one-flow-state-')));
   process.chdir(tmp);
@@ -22,8 +26,6 @@ before(() => {
 });
 
 after(() => {
-  // The sandbox child inherited the temp dir as its cwd; Windows won't
-  // delete a directory a live process is sitting in.
   stopSandbox();
   delete process.env[SECRET_VAR];
   process.chdir(origCwd);
