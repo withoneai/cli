@@ -41,136 +41,136 @@ async function run(
 // ── dryResolveStep ──────────────────────────────────────────────────────────
 
 describe('dryResolveStep — expression steps (#97)', () => {
-  it('evaluates a transform against the context', () => {
+  it('evaluates a transform against the context', async () => {
     const step = { id: 's', name: 'S', type: 'transform', transform: { expression: "$.input.name + '!'" } } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx({ input: { name: 'hi' } }));
+    const r = await dryResolveStep(step, ctx({ input: { name: 'hi' } }));
     assert.equal(r.resolved, 'hi!');
     assert.equal(r.error, undefined);
     assert.deepEqual(r.references, []);
   });
 
-  it('marks the step deferred (not errored) when it reads a step that has not run yet', () => {
+  it('marks the step deferred (not errored) when it reads a step that has not run yet', async () => {
     const step = { id: 's', name: 'S', type: 'transform', transform: { expression: '$.steps.gone.output.x' } } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx());
+    const r = await dryResolveStep(step, ctx());
     assert.equal(r.deferred, true);
     assert.equal(r.error, undefined);
     assert.deepEqual(r.references.map(x => x.selector), ['$.steps.gone']);
     assert.equal(r.references[0].status, 'deferred');
   });
 
-  it('marks deferred when reading a loop var that is not in scope yet', () => {
+  it('marks deferred when reading a loop var that is not in scope yet', async () => {
     const step = { id: 's', type: 'transform', transform: { expression: '$.loop.item.id.toString()' } } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx());
+    const r = await dryResolveStep(step, ctx());
     assert.equal(r.deferred, true);
     assert.equal(r.error, undefined);
   });
 
-  it('still ERRORS on a missing field of a step that DID run (genuine wiring bug)', () => {
+  it('still ERRORS on a missing field of a step that DID run (genuine wiring bug)', async () => {
     // `ran` ran and produced {}, so $.steps.ran resolves — the throw is a real
     // missing-field bug, not "runs later". Must surface as an error.
     const step = { id: 's', type: 'transform', transform: { expression: '$.steps.ran.output.foo.bar' } } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx({ steps: { ran: { status: 'success', output: {} } } }));
+    const r = await dryResolveStep(step, ctx({ steps: { ran: { status: 'success', output: {} } } }));
     assert.equal(r.deferred, undefined);
     assert.match(r.error ?? '', /Cannot read properties of undefined/);
   });
 
-  it('still ERRORS on a syntax error (never downgraded to deferred)', () => {
+  it('still ERRORS on a syntax error (never downgraded to deferred)', async () => {
     const step = { id: 's', type: 'transform', transform: { expression: '$.steps.gone.output.(' } } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx());
+    const r = await dryResolveStep(step, ctx());
     assert.equal(r.deferred, undefined);
     assert.ok(r.error, 'a syntax error is reported, not deferred');
   });
 
-  it('evaluates a condition expression to a boolean-ish value', () => {
+  it('evaluates a condition expression to a boolean-ish value', async () => {
     const step = { id: 'c', type: 'condition', condition: { expression: '$.input.n > 3', then: [] } } as unknown as FlowStep;
-    assert.equal(dryResolveStep(step, ctx({ input: { n: 5 } })).resolved, true);
+    assert.equal((await dryResolveStep(step, ctx({ input: { n: 5 } }))).resolved, true);
   });
 
-  it('handles a while condition expression', () => {
+  it('handles a while condition expression', async () => {
     const step = { id: 'w', type: 'while', while: { condition: '$.input.go', steps: [] } } as unknown as FlowStep;
-    assert.equal(dryResolveStep(step, ctx({ input: { go: false } })).resolved, false);
+    assert.equal((await dryResolveStep(step, ctx({ input: { go: false } }))).resolved, false);
   });
 });
 
 describe('dryResolveStep — declarative steps + reference classification (#97)', () => {
-  it('classifies $.input refs that resolve as "resolved"', () => {
+  it('classifies $.input refs that resolve as "resolved"', async () => {
     const step = {
       id: 'a', type: 'action',
       action: { platform: 'x', actionId: 'y', connection: { platform: 'x' }, data: { to: '$.input.email' } },
     } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx({ input: { email: 'a@b.com' } }));
+    const r = await dryResolveStep(step, ctx({ input: { email: 'a@b.com' } }));
     const ref = r.references.find(x => x.selector === '$.input.email');
     assert.ok(ref);
     assert.equal(ref.status, 'resolved');
     assert.equal(ref.value, 'a@b.com');
   });
 
-  it('classifies $.steps refs as "deferred" pre-execution (not a bug — runs later)', () => {
+  it('classifies $.steps refs as "deferred" pre-execution (not a bug — runs later)', async () => {
     const step = {
       id: 'a', type: 'action',
       action: { platform: 'x', actionId: 'y', connection: { platform: 'x' }, data: { id: '$.steps.fetch.output.id' } },
     } as unknown as FlowStep;
-    const ref = dryResolveStep(step, ctx()).references.find(x => x.selector.startsWith('$.steps.'));
+    const ref = (await dryResolveStep(step, ctx())).references.find(x => x.selector.startsWith('$.steps.'));
     assert.ok(ref);
     assert.equal(ref.status, 'deferred');
   });
 
-  it('classifies an unknown $.input ref as "missing" (the actionable wiring signal)', () => {
+  it('classifies an unknown $.input ref as "missing" (the actionable wiring signal)', async () => {
     const step = {
       id: 'a', type: 'action',
       action: { platform: 'x', actionId: 'y', connection: { platform: 'x' }, data: { to: '$.input.typo' } },
     } as unknown as FlowStep;
-    const ref = dryResolveStep(step, ctx({ input: { email: 'a@b.com' } })).references.find(x => x.selector === '$.input.typo');
+    const ref = (await dryResolveStep(step, ctx({ input: { email: 'a@b.com' } }))).references.find(x => x.selector === '$.input.typo');
     assert.ok(ref);
     assert.equal(ref.status, 'missing');
   });
 
-  it('extracts selectors embedded inside {{ }} templates', () => {
+  it('extracts selectors embedded inside {{ }} templates', async () => {
     const step = {
       id: 'w', type: 'file-write',
       fileWrite: { path: 'out.txt', content: 'Hi {{$.input.name}} / {{$.steps.greet.output}}' },
     } as unknown as FlowStep;
-    const r = dryResolveStep(step, ctx({ input: { name: 'world' } }));
+    const r = await dryResolveStep(step, ctx({ input: { name: 'world' } }));
     const sels = r.references.map(x => x.selector).sort();
     assert.deepEqual(sels, ['$.input.name', '$.steps.greet.output']);
     assert.equal(r.references.find(x => x.selector === '$.input.name')!.status, 'resolved');
     assert.equal(r.references.find(x => x.selector === '$.steps.greet.output')!.status, 'deferred');
   });
 
-  it('resolves loop.over selectors', () => {
+  it('resolves loop.over selectors', async () => {
     const step = { id: 'l', type: 'loop', loop: { over: '$.steps.list.output.items', as: 'item', steps: [] } } as unknown as FlowStep;
-    const ref = dryResolveStep(step, ctx()).references.find(x => x.selector === '$.steps.list.output.items');
+    const ref = (await dryResolveStep(step, ctx())).references.find(x => x.selector === '$.steps.list.output.items');
     assert.equal(ref!.status, 'deferred');
   });
 
-  it('does not descend into nested step arrays when collecting references', () => {
+  it('does not descend into nested step arrays when collecting references', async () => {
     const step = {
       id: 'l', type: 'loop',
       loop: { over: '$.input.items', as: 'item', steps: [
         { id: 'inner', type: 'transform', transform: { expression: '$.input.deep' } },
       ] },
     } as unknown as FlowStep;
-    const sels = dryResolveStep(step, ctx({ input: { items: [1] } })).references.map(x => x.selector);
+    const sels = (await dryResolveStep(step, ctx({ input: { items: [1] } }))).references.map(x => x.selector);
     assert.deepEqual(sels, ['$.input.items']);
   });
 
-  it('reports "(no references)" cleanly for a config with no interpolations', () => {
+  it('reports "(no references)" cleanly for a config with no interpolations', async () => {
     const step = { id: 'a', type: 'action', action: { platform: 'x', actionId: 'y', connection: { platform: 'x' }, data: { fixed: 'literal' } } } as unknown as FlowStep;
-    assert.deepEqual(dryResolveStep(step, ctx()).references, []);
+    assert.deepEqual((await dryResolveStep(step, ctx())).references, []);
   });
 
-  it('de-duplicates a selector used more than once', () => {
+  it('de-duplicates a selector used more than once', async () => {
     const step = {
       id: 'a', type: 'action',
       action: { platform: 'x', actionId: 'y', connection: { platform: 'x' }, data: { a: '$.input.x', b: '$.input.x' } },
     } as unknown as FlowStep;
-    const matches = dryResolveStep(step, ctx({ input: { x: 1 } })).references.filter(r => r.selector === '$.input.x');
+    const matches = (await dryResolveStep(step, ctx({ input: { x: 1 } }))).references.filter(r => r.selector === '$.input.x');
     assert.equal(matches.length, 1);
   });
 });
 
 describe('dryResolveAllSteps — recurses into nested blocks (#97)', () => {
-  it('flattens top-level and nested steps', () => {
+  it('flattens top-level and nested steps', async () => {
     const steps = [
       { id: 'top', type: 'transform', transform: { expression: '1' } },
       { id: 'cond', type: 'condition', condition: { expression: 'true', then: [
@@ -179,7 +179,7 @@ describe('dryResolveAllSteps — recurses into nested blocks (#97)', () => {
         { id: 'inElse', type: 'transform', transform: { expression: '3' } },
       ] } },
     ] as unknown as FlowStep[];
-    const ids = dryResolveAllSteps(steps, ctx()).map(s => s.stepId);
+    const ids = (await dryResolveAllSteps(steps, ctx())).map(s => s.stepId);
     assert.deepEqual(ids, ['top', 'cond', 'inThen', 'inElse']);
   });
 });
@@ -215,7 +215,7 @@ describe('executeFlow — --stop-after (#97)', () => {
     assert.ok(context.steps.s1 && context.steps.s2 && context.steps.s3);
   });
 
-  it('a FlowStopSignal carries the target step id', () => {
+  it('a FlowStopSignal carries the target step id', async () => {
     const sig = new FlowStopSignal('abc');
     assert.equal(sig.stepId, 'abc');
     assert.ok(sig instanceof Error);

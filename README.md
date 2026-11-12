@@ -610,13 +610,16 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 | Option | What it does |
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
-| `--dry-run` | Resolve each step's interpolations and show what they evaluate to, without executing any step. `$.input.*`/`$.env.*` resolve up front; `$.steps.*` refs are reported as deferred (they're produced at runtime). |
+| `--dry-run` | Resolve each step's interpolations and show what they evaluate to, without running actions, code, bash or file steps. Transform and condition expressions are evaluated, in the sandbox. `$.input.*`/`$.env.*` resolve up front; `$.steps.*` refs are reported as deferred (they're produced at runtime). |
 | `--mock` | With `--dry-run`: execute transforms/code with realistic mock API responses |
 | `--stop-after <stepId>` | Execute steps up to and including `<stepId>`, then stop (later steps are not run). Combined with `--dry-run`, runs earlier steps for real and dry-resolves `<stepId>` against their output without executing it. Inspect what ran with `one flow inspect <runId>`. |
 | `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
+| `--allow-code` | Allow `code.module` steps, which run a `.mjs` file with full Node access (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
 | `--output-file <path>` | Stream the full result to a file instead of stdout — for large results that would otherwise be truncated or exceed the JSON string-size limit. stdout (and `--agent` output) then carries an `outputFile` pointer instead of inline `steps`. |
+
+Inline JavaScript in a flow (transforms, conditions, `if`/`unless`, `code.source`) runs in a sandbox: a separate Node process with no file, child-process or network access and no environment of its own. It needs no flag. `code.module` steps are full Node programs and need `--allow-code`.
 
 Step-level `if`/`unless` conditions (and `while`/`condition` steps) are null-safe: a condition that references a skipped or not-yet-run step's output (e.g. `$.steps.maybeSkipped.output.x`) evaluates to `false` rather than crashing the run.
 
@@ -643,9 +646,10 @@ Resume a paused or failed workflow run from where it left off.
 ```bash
 one flow resume abc123
 one flow resume abc123 --allow-bash    # required if the flow has bash steps
+one flow resume abc123 --allow-code    # required if the flow has code.module steps
 ```
 
-`--allow-bash` is gated the same way as on `flow execute` — resuming doesn't
+`--allow-bash` and `--allow-code` are gated the same way as on `flow execute` — resuming doesn't
 inherit the permission from the original run, so pass it again. `one flow list`
 shows which flows need it.
 

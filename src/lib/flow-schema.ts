@@ -117,8 +117,8 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
       configKey: 'code',
       description: 'JS code — inline source or an external .mjs module under the flow\'s lib/ folder',
       fields: {
-        source: { type: 'string', required: false, description: 'Inline JS function body (flow context as $, supports await). Mutually exclusive with "module".' },
-        module: { type: 'string', required: false, description: 'Relative path to a .mjs file under the flow folder (e.g. "lib/normalize.mjs"). Reads $ from stdin as JSON, writes result to stdout as JSON. Mutually exclusive with "source".' },
+        source: { type: 'string', required: false, description: 'Inline JS function body (flow context as $, supports await). Runs in the sandbox: no files, programs, network or timers. Mutually exclusive with "module".' },
+        module: { type: 'string', required: false, description: 'Relative path to a .mjs file under the flow folder (e.g. "lib/normalize.mjs"). Reads $ from stdin as JSON, writes result to stdout as JSON. Mutually exclusive with "source". Runs with full Node access and requires --allow-code.' },
       },
       example: {
         id: 'processData', name: 'Process and enrich data', type: 'code',
@@ -337,7 +337,7 @@ export function generateFlowGuide(): string {
 Workflows live in \`.one/flows/\` (relative to your current working directory — the CLI does NOT walk up parent directories or fall back to a global location) and chain actions across platforms. Two layouts are supported:
 
 - **Folder layout (REQUIRED for new flows)** — \`.one/flows/<key>/flow.json\`, with an optional \`lib/\` subfolder for JavaScript modules. This is like a skill: the folder groups the JSON spec with any JavaScript modules it needs, so the whole flow is shareable. **Always create new flows in this layout.**
-- **Single-file layout (DEPRECATED)** — \`.one/flows/<key>.flow.json\`. Still loads and runs for backward compatibility, but is deprecated. Do not create new flows in this layout. When editing an existing single-file flow, migrate it to the folder layout: move \`<key>.flow.json\` to \`<key>/flow.json\` and extract any non-trivial \`code.source\` blocks into \`<key>/lib/*.mjs\` modules.
+- **Single-file layout (DEPRECATED)** — \`.one/flows/<key>.flow.json\`. Still loads and runs for backward compatibility, but is deprecated. Do not create new flows in this layout. When editing an existing single-file flow, migrate it to the folder layout: move \`<key>.flow.json\` to \`<key>/flow.json\`. Move a \`code.source\` block into a \`<key>/lib/*.mjs\` module only if it needs files, network or timers: modules run with full Node access and make the flow require \`--allow-code\`.
 
 **Subdirectory groups** — Flows can be organized into subdirectories: \`.one/flows/<group>/<key>/flow.json\`. For example:
 \`\`\`
@@ -357,16 +357,17 @@ When resolving a flow by key, the CLI checks the folder layout first, then the d
 **Agents: always inspect a flow before running it.** Nothing about a flow's runtime requirements is guessable from its name. Before \`flow execute\`, do one of these:
 
 1. Run \`one --agent flow list\` — the JSON output includes \`requiresBash\`, \`usesCodeModules\`, \`inputs\` (with \`autoResolvable\` flags), \`stepTypes\`, and the flow's \`description\`. This is the fastest path.
-2. Read the flow's \`description\` field directly from the JSON. Flow authors are required (see "Author conventions" below) to state any \`--allow-bash\` requirement and any non-auto-resolving inputs in the description.
+2. Read the flow's \`description\` field directly from the JSON. Flow authors are required (see "Author conventions" below) to state any \`--allow-bash\` or \`--allow-code\` requirement and any non-auto-resolving inputs in the description.
 3. Run \`one --agent flow execute <key> --dry-run\` to see the resolved inputs and step plan without side effects.
 
-If you skip this step you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* — the CLI now pre-flights and fails fast, so you won't waste a long run, but the error is still avoidable by reading first.
+If you skip this step you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* (or the same for \`code.module\` steps and \`--allow-code\`) — the CLI now pre-flights and fails fast, so you won't waste a long run, but the error is still avoidable by reading first.
 
 ## Author conventions — WRITE flows that are safe to execute blind
 
 When you create a flow, its \`description\` field is the contract with future executors (human or agent). It MUST state:
 
 - **\`--allow-bash\` if any step is type \`bash\`.** Example: *"Fetches recent Gmail threads and summarizes them with Claude Haiku. Requires \`--allow-bash\`."*
+- **\`--allow-code\` if any code step uses \`code.module\`.** Modules run with full Node access, so they are gated like bash.
 - **Every input that does NOT have a \`connection\` hint.** Connection inputs auto-resolve when exactly one matching connection exists; everything else must be passed via \`-i name=value\` and the description must name it.
 - **Any files/directories the flow writes to** so operators know what will be modified on disk.
 
@@ -384,6 +385,7 @@ one --agent flow execute <key> -i name=value                     # Execute (bare
 one --agent flow execute <group/key> -i name=value               # Execute (namespaced key)
 one --agent flow execute <key> --dry-run --mock                  # Test with mock data
 one --agent flow execute <key> --allow-bash                      # Enable bash steps
+one --agent flow execute <key> --allow-code                      # Enable code.module steps (full Node)
 one --agent flow runs [flowKey]                                  # List past runs
 one --agent flow resume <runId>                                  # Resume failed run
 one --agent flow scaffold [template]                             # Generate a starter template
@@ -430,7 +432,7 @@ If you're editing an existing \`.one/flows/<key>.flow.json\`, migrate it — it 
 
 1. \`mkdir -p .one/flows/<key>/lib\`
 2. Move the file: \`mv .one/flows/<key>.flow.json .one/flows/<key>/flow.json\`
-3. For each non-trivial \`code\` step with inline \`source\`, extract it into \`lib/<step-id>.mjs\` (see translation pattern below) and swap the step config from \`{ "source": "..." }\` to \`{ "module": "lib/<step-id>.mjs" }\`. One-liners can stay inline.
+3. Leave inline \`code.source\` in place unless it needs files, network or timers; it runs in the sandbox and needs no flag. If it does need them, extract it into \`lib/<step-id>.mjs\` (see translation pattern below) and swap the step config to \`{ "module": "lib/<step-id>.mjs" }\`. That gives it full Node access and makes the flow require \`--allow-code\`.
 4. Validate: \`one --agent flow validate <key>\`.
 5. Run it and confirm behavior is unchanged.
 
@@ -812,8 +814,8 @@ Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, n
 
 - Connection keys are **inputs**, not hardcoded
 - Action IDs in examples are placeholders — always use \`actions find\`
-- Inline \`code.source\` steps allow \`require('crypto' | 'buffer' | 'url' | 'path')\` — \`fs\`, \`http\`, \`child_process\` are blocked
-- For anything beyond one-liners, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout
+- Transforms, conditions, \`if\`/\`unless\` and inline \`code.source\` run in a sandbox (separate process, no files, programs, network or environment of its own). \`code.source\` allows \`require('crypto' | 'buffer' | 'url' | 'path')\` — \`fs\`, \`http\`, \`child_process\` are blocked. \`$\` is a copy: return a value, don't mutate \`$\`
+- When a step needs files, network or timers, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout. Requires \`--allow-code\`
 - Bash steps require \`--allow-bash\` flag
 - State is persisted after every step — resume picks up where it left off`);
 
