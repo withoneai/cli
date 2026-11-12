@@ -713,18 +713,12 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
     );
   }
 
-  // Auto-migrate on first encounter with legacy data. Fires when:
-  //   (a) ~/.one/sync/data/<platform>.db exists on disk, AND
-  //   (b) memory has zero records for any of this platform's types.
-  // Otherwise we'd leave users with two sources of truth (the old .db
-  // keeps rowcount, the new memory starts empty, neither agrees with
-  // the other) and no nudge to reconcile.
-  //
-  // --agent mode: silent auto-migrate + log the numbers to stderr.
-  // TTY mode: prompt interactively (default: yes) so nothing surprising
-  // happens without a human beat.
+  // Old project-folder sync data is never imported on its own: a cloned
+  // repo can ship a crafted `.one/sync/data/<platform>.db` or progress
+  // file, and importing it writes into the memory store every project
+  // shares. Point at `one mem migrate` instead.
   if (!options.dryRun) {
-    await maybeAutoMigrateLegacy(platform, toSync.map(p => p.model));
+    await noteLegacySyncData(platform, toSync.map(p => p.model));
   }
 
   // Warn when the shipped built-in has gained capability fields the user's
@@ -985,46 +979,30 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
 }
 
 /**
- * Detect legacy `.one/sync/data/<platform>.db` that memory hasn't
- * absorbed yet, and migrate it automatically. Silent-pass when nothing
- * matches. Logs counts to stderr (agent mode) or prompts (TTY).
+ * Print a one-line hint when this project still holds pre-memory sync data
+ * (`.one/sync/data/<platform>.db` or `.one/sync/state/...` progress files)
+ * that memory doesn't have yet. Never imports anything: that is
+ * `one mem migrate`'s job, run on purpose.
  */
-async function maybeAutoMigrateLegacy(platform: string, models: string[]): Promise<void> {
+async function noteLegacySyncData(platform: string, models: string[]): Promise<void> {
   const dbSize = getDatabaseSize(platform);
-  if (!dbSize || dbSize === '0 B') return;
+  const hasDb = !!dbSize && dbSize !== '0 B';
+  const { listLegacySyncStateEntries } = await import('./state.js');
+  const hasState = listLegacySyncStateEntries(platform).length > 0;
+  if (!hasDb && !hasState) return;
 
-  // Check memory: any records of this platform's types? If yes, the user
-  // has already run at least one memory-primary sync — don't re-migrate,
-  // they can explicitly invoke `mem migrate --cleanup` when ready.
   const { getBackend } = await import('../runtime.js');
   const backend = await getBackend();
-  let memoryHasData = false;
   for (const model of models) {
     const n = await backend.count(`${platform}/${model}`, { status: 'active' }).catch(() => 0);
-    if (n > 0) { memoryHasData = true; break; }
-  }
-  if (memoryHasData) return;
-
-  if (output.isAgentMode()) {
-    process.stderr.write(
-      `  detected legacy .one/sync/data/${platform}.db (${dbSize}) — auto-migrating into memory before sync.\n`,
-    );
-    const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
-    await memMigrateCommand({ platform, yes: true });
-    return;
+    if (n > 0) return;
   }
 
-  // TTY: tell the user, default yes.
-  const shouldMigrate = await p.confirm({
-    message:
-      `Found legacy .one/sync/data/${platform}.db (${dbSize}) with no corresponding memory records. ` +
-      `Migrate into the unified memory store before syncing?`,
-    initialValue: true,
-  });
-  if (p.isCancel(shouldMigrate) || !shouldMigrate) return;
-
-  const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
-  await memMigrateCommand({ platform, yes: true });
+  const what = hasDb ? `.one/sync/data/${platform}.db (${dbSize})` : `old sync progress files for ${platform}`;
+  process.stderr.write(
+    `  Found ${what} from an older CLI. It is not imported automatically. ` +
+      `If this project's data is yours, preview with \`one mem migrate --platform ${platform} --dry-run\`, then run it without --dry-run.\n`,
+  );
 }
 
 // ── sync suggest-searchable ──
