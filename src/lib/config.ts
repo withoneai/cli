@@ -5,6 +5,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { Config, AccessControlSettings, PermissionLevel, WhoAmIResponse } from './types.js';
 import type { OneApi } from './api.js';
+import { intersectAllowlists, isPermissionLevel, stricterLevel } from './access-gate.js';
 
 // Home-rooted paths are resolved LAZILY on every access. Binding them at
 // module-load time would cache `homeDir()` from the initial process env,
@@ -290,24 +291,59 @@ export function setOpenAiApiKey(key: string): void {
   writeConfig(resolved.config, resolved.scope ?? 'global');
 }
 
+let warnedOneRcAccess = false;
+
+/**
+ * The access settings in force: the user's config, narrowed by `.onerc`.
+ *
+ * `.onerc` is read from the working directory, so it can arrive with a cloned
+ * repository or be written by an agent limited to project files. It may
+ * therefore only tighten what the user configured: the stricter permission
+ * level wins, allowlists are intersected, and knowledge-only stays on if
+ * either turns it on. A `.onerc` value that would loosen the config is
+ * ignored with a warning.
+ */
 export function getAccessControlFromAllSources(): AccessControlSettings {
   const rc = readOneRc();
   const fileAc = getAccessControl();
-
-  // .onerc overrides take priority over config file
   const merged: AccessControlSettings = { ...fileAc };
+  const ignored: string[] = [];
 
-  if (rc.ONE_PERMISSIONS) {
-    merged.permissions = rc.ONE_PERMISSIONS as PermissionLevel;
+  const rcLevel = rc.ONE_PERMISSIONS?.trim();
+  if (rcLevel) {
+    const current = fileAc.permissions ?? 'admin';
+    if (isPermissionLevel(rcLevel)) {
+      merged.permissions = stricterLevel(current, rcLevel);
+      if (merged.permissions !== rcLevel) ignored.push(`ONE_PERMISSIONS=${rcLevel}`);
+    } else {
+      ignored.push(`ONE_PERMISSIONS=${rcLevel}`);
+    }
   }
-  if (rc.ONE_CONNECTION_KEYS) {
-    merged.connectionKeys = rc.ONE_CONNECTION_KEYS.split(',').map(s => s.trim()).filter(Boolean);
-  }
-  if (rc.ONE_ACTION_IDS) {
-    merged.actionIds = rc.ONE_ACTION_IDS.split(',').map(s => s.trim()).filter(Boolean);
-  }
-  if (rc.ONE_KNOWLEDGE_AGENT) {
-    merged.knowledgeAgent = rc.ONE_KNOWLEDGE_AGENT === 'true';
+
+  const narrowList = (rcKey: string, current: string[] | undefined): string[] | undefined => {
+    const raw = rc[rcKey];
+    if (!raw) return current;
+    const asked = raw.split(',').map(s => s.trim()).filter(Boolean);
+    if (asked.length === 0) return current;
+    const result = intersectAllowlists(current ?? ['*'], asked);
+    if (asked.some(x => !result.includes(x))) ignored.push(`${rcKey}=${raw}`);
+    return result;
+  };
+  merged.connectionKeys = narrowList('ONE_CONNECTION_KEYS', fileAc.connectionKeys);
+  merged.actionIds = narrowList('ONE_ACTION_IDS', fileAc.actionIds);
+  if (merged.connectionKeys === undefined) delete merged.connectionKeys;
+  if (merged.actionIds === undefined) delete merged.actionIds;
+
+  const rcKnowledge = rc.ONE_KNOWLEDGE_AGENT?.trim();
+  if (rcKnowledge === 'true') merged.knowledgeAgent = true;
+  else if (rcKnowledge && fileAc.knowledgeAgent) ignored.push(`ONE_KNOWLEDGE_AGENT=${rcKnowledge}`);
+
+  if (ignored.length > 0 && !warnedOneRcAccess) {
+    warnedOneRcAccess = true;
+    process.stderr.write(
+      `Ignoring ${ignored.join(', ')} from .onerc: .onerc can only narrow the access settings in your config. ` +
+        'Use `one config` to widen them.\n',
+    );
   }
 
   return merged;
