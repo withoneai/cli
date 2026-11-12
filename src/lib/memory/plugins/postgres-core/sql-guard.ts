@@ -14,6 +14,11 @@
  * ATTACH / DETACH / PRAGMA / CALL). Multi-statement input (semicolons
  * past the end-of-query) is rejected too.
  *
+ * This is a usability check, not the security boundary: keyword matching
+ * can't see SELECT INTO or server functions like pg_read_file. CoreBackend.raw
+ * runs every query in a READ ONLY transaction, and the embedded-postgres
+ * plugin runs it as a role without superuser or file-read rights.
+ *
  * Throws a descriptive Error when the query is not safe to execute.
  */
 

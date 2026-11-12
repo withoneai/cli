@@ -122,9 +122,16 @@ function toRecord(row: RecordRow): MemRecord {
 // ─── Backend ───────────────────────────────────────────────────────────────
 
 export class CoreBackend implements MemBackend {
+  /**
+   * @param rawClient Connection used for `raw()` (user SQL from `one mem sql`
+   *   and `one sync sql`). Plugins whose main connection is a superuser on a
+   *   server that can see the host filesystem pass a connection as a
+   *   restricted role here; see embedded-postgres. Defaults to `client`.
+   */
   constructor(
     private readonly client: PgClient,
     private readonly caps: BackendCapabilities,
+    private readonly rawClient?: () => Promise<PgClient>,
   ) {}
 
   // ── Lifecycle ────────────────────────────────────────────────────────
@@ -937,12 +944,20 @@ export class CoreBackend implements MemBackend {
   //
   // Exposed to users via `one mem sql` and `one sync sql` so they can run
   // joins / aggregates / JSONB paths that the high-level helpers can't.
-  // The guard rejects anything that isn't SELECT / WITH / EXPLAIN before
-  // the query reaches the client.
+  //
+  // The keyword guard only gives a clear message for the obvious cases. The
+  // real limit is Postgres itself: the query runs in a READ ONLY transaction,
+  // which refuses SELECT INTO, large-object writes, nextval() and every other
+  // write, and (where the plugin provides one) on a connection as a role
+  // that can't read server files.
 
   async raw(sql: string, params?: unknown[]): Promise<RawSqlResult> {
     validateReadOnlySql(sql);
-    const res = await this.client.query<Record<string, unknown>>(sql, params ?? []);
+    const client = this.rawClient ? await this.rawClient() : this.client;
+    const res = await client.transaction(async (tx) => {
+      await tx.query('SET TRANSACTION READ ONLY');
+      return tx.query<Record<string, unknown>>(sql, params ?? []);
+    });
     // `columns` is the insertion order of the first row's keys. Good
     // enough for display; pg drivers don't surface a universal metadata
     // shape and we don't want to force one on third-party plugins.
