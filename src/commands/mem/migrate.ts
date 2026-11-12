@@ -10,6 +10,17 @@
  * `resolveEntityIdentity` with the sync writer so both paths derive byte-
  * identical keys; migrate never writes the non-merging `identity_keys[]`.
  *
+ * Same app only: the legacy files sit in the project folder, so a cloned
+ * repo can ship crafted ones. Before each write, any key already held by a
+ * record of a DIFFERENT type is dropped from the row, so the row can never
+ * update (and, with `replace: true`, overwrite) another app's record. If the
+ * row's own source key is held by another type, the row is skipped. Rows
+ * whose identity matches another app's record are still imported, as their
+ * own record, without merging.
+ *
+ * Also imports legacy progress files (`.one/sync/state/...`), which `sync
+ * run` no longer imports on its own.
+ *
  * Does not delete legacy files. Pass --cleanup after verifying the import
  * to remove them.
  */
@@ -26,6 +37,7 @@ import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../
 import { okJson, requireMemoryInit } from './util.js';
 import { getByDotPath } from '../../lib/dot-path.js';
 import { resolveEntityIdentity, normalizeEntityIdentityValue } from '../../lib/memory/sync/mem-writer.js';
+import { importLegacySyncState, legacySyncStatePaths } from '../../lib/memory/sync/state.js';
 
 interface MigrateFlags {
   platform?: string;
@@ -60,6 +72,13 @@ interface MigrateReport {
   skippedUnresolvedId: number;
   /** Rows skipped because the upsert threw (key conflict, schema violation, etc). */
   skippedError: number;
+  /** Rows skipped because their own source key belongs to a record of another type. */
+  skippedOtherType: number;
+  /**
+   * Rows imported without merging because a key they carried (usually the
+   * identity key, e.g. `email:...`) belongs to a record of another type.
+   */
+  keptSeparate: number;
   /** Active count for this type before migrate ran (for doubling detection). */
   activeBefore?: number;
   /** Active count for this type after migrate ran. */
@@ -83,8 +102,9 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
   const backend = await getBackend();
 
   const platforms = flags.platform ? [flags.platform] : listSyncedPlatforms();
-  if (platforms.length === 0) {
-    okJson({ status: 'noop', reason: 'no legacy .one/sync/data/*.db files found' });
+  const syncState = await importLegacySyncState({ platform: flags.platform, dryRun: flags.dryRun });
+  if (platforms.length === 0 && syncState.imported === 0 && syncState.skippedExisting === 0) {
+    okJson({ status: 'noop', reason: 'no legacy .one/sync/data/*.db or sync progress files found' });
     return;
   }
 
@@ -120,7 +140,7 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         const rows = db.prepare(`SELECT * FROM "${model}"`).all() as Array<Record<string, unknown>>;
         const report: MigrateReport = {
           platform, model, rowsSeen: total, inserted: 0, updated: 0, mergedByIdentity: 0,
-          skipped: 0, skippedUnresolvedId: 0, skippedError: 0,
+          skipped: 0, skippedUnresolvedId: 0, skippedError: 0, skippedOtherType: 0, keptSeparate: 0,
         };
         const profile = readProfile(platform, model);
         const builtin = loadBuiltinProfile(platform, model);
@@ -246,10 +266,44 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           // it. Old garbage sourceKeys stay in the row (harmless — they
           // deduplicate via the keys-array UNION in the upsert function).
           let mergeTarget = false;
+          let hitKeys: string[] = [];
           if (identityValueNorm && identityMap.has(identityValueNorm)) {
-            const hit = identityMap.get(identityValueNorm)!;
-            for (const k of hit.keys) keys.push(k);
+            hitKeys = identityMap.get(identityValueNorm)!.keys;
+            for (const k of hitKeys) keys.push(k);
             mergeTarget = true;
+          }
+
+          // Same app only. The upsert matches on ANY overlapping key,
+          // whatever the record's type, so an `email:` identity key would
+          // land this row on another app's contact and `replace: true`
+          // would swap its data. Drop every key another type holds; skip
+          // the row outright if that includes its own source key.
+          let foreign: Set<string>;
+          try {
+            foreign = await keysHeldByOtherTypes(backend, type, keys);
+          } catch (err) {
+            report.skippedError++;
+            report.skipped++;
+            if (!output.isAgentMode()) {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`  skip ${sourceKey}: could not check key ownership (${msg})\n`);
+            }
+            continue;
+          }
+          if (foreign.has(sourceKey)) {
+            report.skippedOtherType++;
+            report.skipped++;
+            if (!output.isAgentMode() && report.skippedOtherType <= 3) {
+              process.stderr.write(`  skip ${sourceKey}: key belongs to a record of another type\n`);
+            }
+            continue;
+          }
+          if (foreign.size > 0) {
+            const kept = keys.filter(k => !foreign.has(k));
+            keys.length = 0;
+            keys.push(...kept);
+            report.keptSeparate++;
+            mergeTarget = mergeTarget && hitKeys.some(k => kept.includes(k));
           }
 
           const data = { ...hydrated };
@@ -307,10 +361,11 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         if (!output.isAgentMode()) {
           const skipDetail =
             report.skipped > 0
-              ? ` skipped (${report.skippedUnresolvedId} unresolved id, ${report.skippedError} errors)`
+              ? ` skipped (${report.skippedUnresolvedId} unresolved id, ${report.skippedOtherType} owned by another type, ${report.skippedError} errors)`
               : ' skipped';
           const mergedSuffix =
-            report.mergedByIdentity > 0 ? `, ${report.mergedByIdentity} merged by identity` : '';
+            (report.mergedByIdentity > 0 ? `, ${report.mergedByIdentity} merged by identity` : '') +
+            (report.keptSeparate > 0 ? `, ${report.keptSeparate} kept separate from another type's record` : '');
           process.stderr.write(
             `  ${platform}/${model}: ${report.inserted} inserted, ${report.updated} updated${mergedSuffix}, ${report.skipped}${skipDetail} (${report.rowsSeen} seen)\n`,
           );
@@ -359,18 +414,19 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
   if (flags.cleanup && fs.existsSync(dataDir)) {
     cleanupFiles = fs.readdirSync(dataDir).map(f => path.join(dataDir, f));
   }
+  if (flags.cleanup) cleanupFiles.push(...legacySyncStatePaths());
   let cleanupDeleted = false;
   if (flags.cleanup) {
     if (!flags.dryRun) {
       const confirm = flags.yes ?? (await p.confirm({
-        message: `Delete ${cleanupFiles.length} legacy .one/sync/data/* file(s) now?`,
+        message: `Delete ${cleanupFiles.length} legacy sync file(s) and folder(s) under .one/sync now?`,
         initialValue: false,
       }));
       if (p.isCancel(confirm) || !confirm) {
         output.note('Leaving legacy files in place. Run with --cleanup --yes to force.', 'one mem migrate');
       } else {
         for (const full of cleanupFiles) {
-          try { fs.unlinkSync(full); } catch { /* ignore */ }
+          try { fs.rmSync(full, { recursive: true, force: true }); } catch { /* ignore */ }
         }
         cleanupDeleted = true;
       }
@@ -421,8 +477,11 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
       skipped: reports.reduce((a, r) => a + r.skipped, 0),
       skippedUnresolvedId: reports.reduce((a, r) => a + r.skippedUnresolvedId, 0),
       skippedError: reports.reduce((a, r) => a + r.skippedError, 0),
+      skippedOtherType: reports.reduce((a, r) => a + r.skippedOtherType, 0),
+      keptSeparate: reports.reduce((a, r) => a + r.keptSeparate, 0),
       seen: reports.reduce((a, r) => a + r.rowsSeen, 0),
     },
+    syncState,
     ...(healed.length > 0 ? { healedProfiles: healed } : {}),
     ...(flags.cleanup
       ? {
@@ -434,6 +493,28 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
         }
       : {}),
   });
+}
+
+/**
+ * Which of `keys` are held by a record whose type is NOT `type` (any status:
+ * the upsert also matches archived rows when no active one overlaps).
+ * Throws when the backend can't answer, so the caller fails closed.
+ */
+export async function keysHeldByOtherTypes(
+  backend: Awaited<ReturnType<typeof getBackend>>,
+  type: string,
+  keys: string[],
+): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+  if (typeof backend.raw !== 'function') {
+    throw new Error('backend has no raw SQL support');
+  }
+  const res = await backend.raw(
+    `SELECT DISTINCT k FROM mem_records r, unnest(r.keys) AS k
+     WHERE r.keys && $1::text[] AND r.type <> $2 AND k = ANY($1::text[])`,
+    [keys, type],
+  );
+  return new Set(res.rows.map(row => String((row as { k: unknown }).k)));
 }
 
 /**

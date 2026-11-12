@@ -687,6 +687,8 @@ one --agent mem migrate --dry-run                     # preview legacy .db → m
 one --agent mem migrate --cleanup -y                  # migrate + delete .db files
 \`\`\`
 
+\`sync run\` never imports old project-folder sync data (\`.one/sync/data/*.db\`, \`.one/sync/state/\`) on its own; it prints a hint instead. A cloned repo can ship those files, so only run \`mem migrate\` when the data in this project is the user's own: show them the \`--dry-run\` output first. Migrate never updates a record of another type: a key another app's record already holds is dropped from the row, and a row whose own source key is held by another type is skipped (\`skippedOtherType\`).
+
 ## Backends
 
 First-party plugins: \`embedded-postgres\` (default — Postgres 18 via pgserve, daemon at \`~/.one/pg/\`), \`postgres\` (Supabase, Neon, self-hosted). Third-party plugins declared in \`memory.plugins\` as npm package specs.
