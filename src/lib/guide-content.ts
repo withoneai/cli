@@ -505,6 +505,7 @@ The first \`one mem\` call on a fresh install auto-initializes:
 - Backend: \`embedded-postgres\` (Postgres 18 via pgserve; downloads ~52MB of binaries on first use, ~2s on later boots)
 - Cluster path: \`~/.one/pg/cluster/\`, daemon PID/port at \`~/.one/pg/.pgserve.json\`
 - Port: \`5434\` by default. If another program already holds it (a database tunnel, another Postgres), the daemon starts on the next free port and records it in \`.pgserve.json\`. A port pinned with \`mem config set embedded-postgres.port <n>\` is never moved — a conflict there is an error naming the port.
+- Login: every connection needs a password. The superuser and read-only role passwords are generated per install and kept in \`~/.one/pg/.pgserve-auth.json\` (readable only by you; don't delete it, the store can't be opened without it). To inspect the store with \`psql\`, use \`host=127.0.0.1 port=<port> user=postgres dbname=one_mem\` with the \`superuser\` password from that file.
 - Self-healing: a running daemon is reused only when the Postgres on its port reports this cluster's data directory. A Postgres left holding the cluster by a dead or stuck pgserve is stopped and a fresh daemon started. \`pgserve.log\` is trimmed to its last 1 MB once it passes 10 MB.
 - Embedding provider: \`openai\` if a key is already resolvable AND pgvector is loadable; else \`none\`
 

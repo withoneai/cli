@@ -4,13 +4,17 @@ import { homeDir } from '../../../home.js';
  * via pgserve (Postgres 18), then talks to it over node-pg. Default
  * backend for new installs.
  *
- * pgserve is normally consumed via its Bun-based SDK, but the SDK
- * statically imports `bun` so it can't be loaded on Node. Instead we
- * spawn `node_modules/.bin/pgserve` as a detached child process and
- * recover the connection details from a small PID/port file we manage
- * ourselves. The child stays running across CLI invocations — every
- * later call finds it via the PID file and reuses it once the Postgres
- * behind that port proves it serves this cluster. See daemon.ts.
+ * pgserve's PostgresManager needs Bun, so it can't be loaded on Node.
+ * Instead we spawn pgserve-launcher.ts under pgserve's bundled Bun as a
+ * detached child process and recover the connection details from a small
+ * PID/port file we manage ourselves. The child stays running across CLI
+ * invocations — every later call finds it via the PID file and reuses it
+ * once the Postgres behind that port proves it serves this cluster. See
+ * daemon.ts.
+ *
+ * Every login needs a password. The superuser and read-only role passwords
+ * are generated per install and kept in ~/.one/pg/.pgserve-auth.json, which
+ * only this account can read.
  *
  * pgvector caveat: pgserve advertises pgvector but its bundled binaries
  * don't actually include the extension's `.so` / `.control` files, so on
@@ -33,7 +37,7 @@ import type {
 import { SCHEMA_VERSION } from '../../schema.js';
 import { CoreBackend } from '../postgres-core/index.js';
 import type { PgClient, PgQueryResult } from '../postgres-core/index.js';
-import { ensureRunning, nodeDaemonDeps } from './daemon.js';
+import { ensureRunning, ensureSecrets, nodeDaemonDeps } from './daemon.js';
 import type { PgClientCtor } from './daemon.js';
 
 interface EmbeddedPostgresConfig extends ParsedBackendConfig {
@@ -45,8 +49,6 @@ interface EmbeddedPostgresConfig extends ParsedBackendConfig {
   port: number;
   /** Set from the user's config; a taken explicit port errors instead of moving. */
   portExplicit: boolean;
-  user: string;
-  password: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   startupTimeoutMs: number;
 }
@@ -73,11 +75,6 @@ const DEFAULTS: EmbeddedPostgresConfig = {
   host: '127.0.0.1',
   port: 5434,
   portExplicit: false,
-  // pgserve auto-provisions databases; the bundled superuser is `postgres`
-  // with no password by default. We don't expose the password to the user
-  // since the daemon only listens on 127.0.0.1.
-  user: 'postgres',
-  password: '',
   logLevel: 'warn',
   startupTimeoutMs: 30000,
 };
@@ -92,8 +89,6 @@ function parseConfig(raw: unknown): EmbeddedPostgresConfig {
     host: r.host ?? DEFAULTS.host,
     port: r.port ?? DEFAULTS.port,
     portExplicit: r.port !== undefined,
-    user: r.user ?? DEFAULTS.user,
-    password: r.password ?? DEFAULTS.password,
     logLevel: r.logLevel ?? DEFAULTS.logLevel,
     startupTimeoutMs: r.startupTimeoutMs ?? DEFAULTS.startupTimeoutMs,
   };
@@ -185,12 +180,15 @@ export const READER_ROLE = 'one_mem_reader';
 const READER_LOCK_ID = 7_342_901_118;
 
 /**
- * Create the reader role if needed and grant it SELECT on every table in
- * the store's schema that it can't read yet. Idempotent and cheap when
- * nothing is missing, so it runs once per process before the first raw query
- * (sync tables can appear after the schema was set up).
+ * Create the reader role if needed, set its password, and grant it SELECT on
+ * every table in the store's schema that it can't read yet. Idempotent and
+ * cheap when nothing is missing, so it runs once per process before the first
+ * raw query (sync tables can appear after the schema was set up). Setting the
+ * password every time also covers a role created before it had one.
  */
-export const READER_SETUP_SQL = `
+export function readerSetupSql(password: string): string {
+  if (!/^[0-9a-f]+$/.test(password)) throw new Error('Reader role password must be hex.');
+  return `
 DO $setup$
 DECLARE
   s text := current_schema();
@@ -199,6 +197,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${READER_ROLE}') THEN
     CREATE ROLE ${READER_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
   END IF;
+  ALTER ROLE ${READER_ROLE} PASSWORD '${password}';
   IF NOT has_schema_privilege('${READER_ROLE}', s, 'USAGE') THEN
     EXECUTE format('GRANT USAGE ON SCHEMA %I TO ${READER_ROLE}', s);
   END IF;
@@ -213,6 +212,7 @@ BEGIN
   END LOOP;
 END
 $setup$`;
+}
 
 class LazyEmbeddedPostgresBackend implements MemBackend {
   private backend: CoreBackend | null = null;
@@ -238,24 +238,21 @@ class LazyEmbeddedPostgresBackend implements MemBackend {
     // The daemon check connects to whatever answers on the port, so it
     // needs pg loaded first. It returns the port the verified daemon uses,
     // which can differ from the configured default when that was taken.
+    const secrets = ensureSecrets(this.config.dataDir);
     this.config.port = await ensureRunning(
       this.config,
-      nodeDaemonDeps(this.config, pgExports.Client, {
-        user: this.config.user,
-        password: this.config.password,
-        database: this.config.database,
-      }),
+      nodeDaemonDeps(this.config, pgExports.Client, secrets),
     );
 
-    // pgserve auto-provisions: connecting to a non-existent database
-    // creates it on the fly. pgvector availability is detected once
-    // here — see probePgvector + the vectorSearch downgrade below.
+    // The launcher creates the database before it reports ready.
+    // pgvector availability is detected once here — see probePgvector +
+    // the vectorSearch downgrade below.
     const pool = new PoolCtor({
       host: this.config.host,
       port: this.config.port,
       database: this.config.database,
-      user: this.config.user,
-      password: this.config.password,
+      user: 'postgres',
+      password: secrets.superuser,
     });
     const client = wrapClient(pool);
 
@@ -271,14 +268,14 @@ class LazyEmbeddedPostgresBackend implements MemBackend {
       readerClient ??= (async () => {
         await client.transaction(async (tx) => {
           await tx.query(`SELECT pg_advisory_xact_lock(${READER_LOCK_ID}::bigint)`);
-          await tx.query(READER_SETUP_SQL);
+          await tx.query(readerSetupSql(secrets.reader));
         });
         const reader = wrapClient(new PoolCtor({
           host: this.config.host,
           port: this.config.port,
           database: this.config.database,
           user: READER_ROLE,
-          password: '',
+          password: secrets.reader,
         }));
         this.readerPool = reader;
         return reader;

@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { pglitePlugin } from '../pglite/index.js';
 import { CoreBackend } from './backend.js';
-import { READER_SETUP_SQL, READER_ROLE } from '../embedded-postgres/index.js';
+import { readerSetupSql, READER_ROLE } from '../embedded-postgres/index.js';
 import type { MemBackend } from '../../backend.js';
 import type { PgClient } from './client.js';
 
@@ -74,8 +74,8 @@ describe('embedded-postgres reader role', () => {
     // The plugin's main (superuser) client, reached past `private`.
     const core = (db as unknown as { backend: { client: PgClient } }).backend;
     const c = core.client;
-    await c.query(READER_SETUP_SQL);
-    await c.query(READER_SETUP_SQL); // idempotent
+    await c.query(readerSetupSql('ab12'));
+    await c.query(readerSetupSql('ab12')); // idempotent
     const role = await c.query<{ rolsuper: boolean; rolcanlogin: boolean }>(
       `SELECT rolsuper, rolcanlogin FROM pg_roles WHERE rolname = $1`, [READER_ROLE],
     );
