@@ -332,9 +332,15 @@ export async function writePageToMemory(
     // non-merging `identity_keys[]` — the record is stored separately and
     // `mem find-by-key` still links the two. If the source key itself is
     // held by another type (merged by an older CLI), skip the write.
+    //
+    // The same goes for another record of THIS type: two upstream records
+    // with different ids are two entities even when they share the
+    // identity value (calendar events from one organizer, contacts that
+    // share a team inbox). Merging them used to keep only the last one's
+    // data under both source keys.
     let foreign: Set<string>;
     try {
-      foreign = await keysHeldByOtherTypes(await getBackend(), type, keys);
+      foreign = await mergeKeysHeldByOtherRecords(await getBackend(), type, sourceKey, keys);
     } catch {
       // Can't tell who owns the merge keys: write without them rather than
       // risk landing on someone else's record. The source key is
@@ -414,6 +420,39 @@ export async function writePageToMemory(
     }
   }
   return report;
+}
+
+/**
+ * Which of `keys` belong to a record that is not the one `sourceKey` names:
+ * a record of another type, or a record of the same type that holds a
+ * different source key of that type. Matches records at any status, like
+ * the upsert. A same-type record without any source key (written by hand
+ * or by an older import) can still be merged into. Throws when the backend
+ * can't answer.
+ */
+export async function mergeKeysHeldByOtherRecords(
+  backend: Awaited<ReturnType<typeof getBackend>>,
+  type: string,
+  sourceKey: string,
+  keys: string[],
+): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+  if (typeof backend.raw !== 'function') {
+    throw new Error('backend has no raw SQL support');
+  }
+  const res = await backend.raw(
+    `SELECT DISTINCT k FROM mem_records r, unnest(r.keys) AS k
+     WHERE r.keys && $1::text[] AND k = ANY($1::text[])
+       AND (
+         r.type <> $2
+         OR (
+           NOT ($3 = ANY(r.keys))
+           AND EXISTS (SELECT 1 FROM unnest(r.keys) AS o WHERE left(o, length($2) + 1) = $2 || ':')
+         )
+       )`,
+    [keys, type, sourceKey],
+  );
+  return new Set(res.rows.map(row => String((row as { k: unknown }).k)));
 }
 
 /**

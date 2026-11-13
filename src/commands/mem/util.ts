@@ -120,7 +120,9 @@ export function semanticSearchUpgradeHint(opts: { vectorSearchAvailable?: boolea
       capability: 'semantic_search',
       available: true,
       currentMode: 'fts_only',
-      how: 'Install pgvector for the bundled Postgres: `brew install pgvector` (or point at a remote Postgres with pgvector via `one mem config set backend postgres`)',
+      how: cfg.backend === 'postgres'
+        ? 'Install the pgvector extension on your Postgres server (on Supabase or Neon, enable `vector`), then run any `one mem` command to add the embedding column'
+        : 'Install pgvector for the bundled Postgres: `brew install pgvector` (or point at a remote Postgres with pgvector via `one mem config set backend postgres`)',
       benefit: 'Ranks memories by meaning, not just keyword overlap — finds relevant records even when the query and the data use different words.',
     };
   }

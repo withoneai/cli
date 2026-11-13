@@ -175,17 +175,32 @@ export class CoreBackend implements MemBackend {
     // `mem_records` every other statement here uses, and it's a catalog
     // lookup rather than a view over several joins.
     try {
-      const probe = await this.client.query<{ version: string | null; has_sentinel: boolean }>(
+      // The embedding column is only added when the store has pgvector, so
+      // a store stamped while it ran FTS-only lacks it. When pgvector shows
+      // up later (installed on the server, or `brew install pgvector`), the
+      // stamp alone would skip the vector DDL and every embedding query
+      // would fail on a missing column, so it is checked too.
+      const probe = await this.client.query<{ version: string | null; has_sentinel: boolean; has_embedding: boolean }>(
         `SELECT (SELECT value FROM mem_meta WHERE key = 'version') AS version,
                 EXISTS (
                   SELECT 1 FROM pg_attribute
                    WHERE attrelid = to_regclass('mem_records')
                      AND attname = 'identity_keys'
                      AND NOT attisdropped
-                ) AS has_sentinel`,
+                ) AS has_sentinel,
+                EXISTS (
+                  SELECT 1 FROM pg_attribute
+                   WHERE attrelid = to_regclass('mem_records')
+                     AND attname = 'embedding'
+                     AND NOT attisdropped
+                ) AS has_embedding`,
       );
       const probed = probe.rows[0];
-      if (probed?.version === SCHEMA_VERSION && probed.has_sentinel) return;
+      if (
+        probed?.version === SCHEMA_VERSION &&
+        probed.has_sentinel &&
+        (!caps.vectorSearch || probed.has_embedding)
+      ) return;
     } catch {
       // mem_meta doesn't exist yet (fresh DB) — fall through to full setup.
     }
