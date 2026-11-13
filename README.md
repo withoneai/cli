@@ -243,7 +243,7 @@ one connection delete live::gmail::default::abc123
 one connection rm live::gmail::default::abc123      # alias
 ```
 
-Shows the connection details and asks for confirmation before deleting. Use `--force` to skip the confirmation prompt.
+Shows the connection details and asks for confirmation before deleting. Use `--force` to skip the confirmation prompt. In agent mode (`--agent` or `ONE_AGENT=1`) there is no prompt, so `--force` is required; without it the command returns `confirmation_required` and deletes nothing.
 
 | Option | What it does |
 |--------|-------------|
@@ -327,6 +327,7 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--dry-run` | Show the request without executing it |
 | `--mock` | Return example response without making an API call |
 | `--skip-validation` | Skip input validation against the action schema |
+| `--confirm-write` | Required in agent mode for an action that writes (POST, PUT, PATCH, DELETE). Without it the command returns `confirmation_required` and sends nothing. It marks the write for the user's approval prompt and doesn't check anything itself, so an agent should pass it only for a change the user asked for |
 | `--output <path>` | Save response to a file (for genuine binary downloads — PDFs, images). Text responses (text/plain, HTML, CSV, XML) render inline automatically. |
 | `--no-cache` | Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached) |
 

@@ -124,13 +124,13 @@ describe('execute _preflight contract (agent mode)', () => {
   }
 
   it('reports cache:miss on the first execute and cache:hit on the second', async () => {
-    await actionsExecuteCommand('plat', ACTION_ID, 'plat::key', { skipValidation: true });
+    await actionsExecuteCommand('plat', ACTION_ID, 'plat::key', { skipValidation: true, confirmWrite: true });
     const first = lastJson();
     assert.deepEqual(first._preflight, { cache: 'miss' });
     assert.equal(harness.counts.knowledge, 1);
 
     lines = [];
-    await actionsExecuteCommand('plat', ACTION_ID, 'plat::key', { skipValidation: true });
+    await actionsExecuteCommand('plat', ACTION_ID, 'plat::key', { skipValidation: true, confirmWrite: true });
     const second = lastJson();
     assert.deepEqual(second._preflight, { cache: 'hit' });
     // No extra /knowledge round trip on the warm execute.
@@ -148,7 +148,7 @@ describe('execute _preflight contract (agent mode)', () => {
     // The preflight loop runs segments sequentially, so segment 1 warms the
     // cache and segment 2 hits it — one call exercises both states.
     process.argv = [
-      'node', 'one', 'actions', 'execute', '--parallel', '--skip-validation',
+      'node', 'one', 'actions', 'execute', '--parallel', '--skip-validation', '--confirm-write',
       'plat', ACTION_ID, 'plat::key1', '-d', '{}',
       '--', 'plat', ACTION_ID, 'plat::key2', '-d', '{}',
     ];
