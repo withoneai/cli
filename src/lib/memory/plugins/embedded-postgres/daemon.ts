@@ -10,12 +10,21 @@
  * tunnel on 5434 was taken for the memory store, pgserve's cluster workers
  * crash-looped on EADDRINUSE into a 44 GB log, and an orphaned Postgres then
  * held the cluster lock for weeks.
+ *
+ * The daemon is pgserve-launcher.ts, which runs pgserve's Postgres with a
+ * per-install superuser password and no router in front of it. Older CLI
+ * versions ran pgserve's own server, whose router let any local account in
+ * as superuser with no password; a daemon left over from them is stopped and
+ * replaced, and its cluster's password is changed on the first start.
  */
+
+import crypto from 'node:crypto';
 
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 
 const requireFromHere = createRequire(import.meta.url);
@@ -37,11 +46,12 @@ export interface DaemonDeps {
   /**
    * Ask whatever listens on `port` which data directory it serves: this
    * cluster ('ours'), anything else or no usable answer ('other'), or
-   * nothing listening ('down'). `via` selects the credentials — pgserve's
-   * router, or the cluster's Postgres directly.
+   * nothing listening ('down'). `via` selects what to log in to: the store's
+   * database on a running daemon, or whatever Postgres holds the cluster
+   * (possibly one an older CLI started with pgserve's default password).
    */
-  probe(port: number, via: 'router' | 'postmaster'): Promise<ProbeResult>;
-  /** Start pgserve detached with `args`, stdout and stderr to `logFd`. */
+  probe(port: number, via: 'daemon' | 'postmaster'): Promise<ProbeResult>;
+  /** Start the launcher detached with `args`, stdout and stderr to `logFd`. */
   spawnPgserve(args: string[], logFd: number): SpawnedDaemon;
   /** Parent PID and command line of a running process; null when unknown. */
   processInfo(pid: number): ProcessInfo | null;
@@ -51,6 +61,8 @@ export interface DaemonDeps {
 
 export interface DaemonConfig {
   dataDir: string;
+  /** The store's database; the launcher creates it before reporting ready. */
+  database: string;
   host: string;
   port: number;
   /** True when the user set the port, so we must not silently pick another. */
@@ -60,8 +72,6 @@ export interface DaemonConfig {
   startupTimeoutMs: number;
 }
 
-/** pgserve puts its internal Postgres at the router port + 1000. */
-const PG_PORT_OFFSET = 1000;
 /** How far past a taken default port to look for a free one. */
 const PORT_SEARCH_SPAN = 20;
 const LOG_MAX_BYTES = 10 * 1024 * 1024;
@@ -77,6 +87,11 @@ interface DaemonRecord {
   port: number;
   dataDir: string;
   startedAt: string;
+  /**
+   * 'password' for a pgserve-launcher daemon. Missing for a daemon an older
+   * CLI started: pgserve's router, which needs no password.
+   */
+  auth?: 'password';
 }
 
 function pidFilePath(dataDir: string): string {
@@ -94,6 +109,72 @@ function readPidFile(dataDir: string): DaemonRecord | null {
 function writePidFile(dataDir: string, rec: DaemonRecord): void {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(pidFilePath(dataDir), JSON.stringify(rec, null, 2), { mode: 0o600 });
+}
+
+// ─── credentials ────────────────────────────────────────────────────────────
+
+export interface StoreSecrets {
+  /** Password of the cluster superuser `postgres`. */
+  superuser: string;
+  /** Password of the read-only role that raw SQL runs as. */
+  reader: string;
+}
+
+function secretsPath(dataDir: string): string {
+  return path.join(dataDir, '.pgserve-auth.json');
+}
+
+/** The launcher writes its PID here once the store is ready to use. */
+function readyPath(dataDir: string): string {
+  return path.join(dataDir, '.pgserve-ready');
+}
+
+function readyPid(dataDir: string): number | null {
+  try {
+    const { pid } = JSON.parse(fs.readFileSync(readyPath(dataDir), 'utf8')) as { pid?: unknown };
+    return typeof pid === 'number' ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Marks that the cluster's superuser password is the one in the secrets file. */
+function authMarkerPath(dataDir: string): string {
+  return path.join(dataDir, '.pgserve-auth-applied');
+}
+
+const isSecret = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{32,}$/.test(v);
+
+/**
+ * The store's passwords, generated on first use and kept in a file only this
+ * account can read. The data directory is narrowed to this account too.
+ */
+export function ensureSecrets(dataDir: string): StoreSecrets {
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(dataDir, 0o700);
+  const file = secretsPath(dataDir);
+  for (;;) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<StoreSecrets>;
+      if (isSecret(parsed.superuser) && isSecret(parsed.reader)) {
+        return { superuser: parsed.superuser, reader: parsed.reader };
+      }
+      throw new Error(`${file} is not a valid embedded-postgres secrets file. Restore it from a backup; deleting it locks the CLI out of the store.`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    const fresh: StoreSecrets = {
+      superuser: crypto.randomBytes(24).toString('hex'),
+      reader: crypto.randomBytes(24).toString('hex'),
+    };
+    try {
+      fs.writeFileSync(file, JSON.stringify(fresh, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+      return fresh;
+    } catch (err) {
+      // Another invocation wrote it first; read theirs.
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
 }
 
 function isPidAlive(pid: number): boolean {
@@ -128,29 +209,22 @@ function canBind(host: string, port: number): Promise<boolean> {
   });
 }
 
-async function portPairFree(host: string, port: number): Promise<boolean> {
-  return port + PG_PORT_OFFSET <= 65535
-    && await canBind(host, port)
-    && await canBind('127.0.0.1', port + PG_PORT_OFFSET);
-}
-
 /**
- * The port pgserve should listen on. The preferred port wins when both it
- * and its internal Postgres port are free. A taken default moves to the next
- * free pair; a taken port the user configured is an error, since they may
- * have picked it deliberately.
+ * The port Postgres should listen on. The preferred port wins when it is
+ * free. A taken default moves to the next free port; a taken port the user
+ * configured is an error, since they may have picked it deliberately.
  */
 export async function choosePort(host: string, preferred: number, explicit: boolean): Promise<number> {
-  if (await portPairFree(host, preferred)) return preferred;
+  if (await canBind(host, preferred)) return preferred;
   const hint = 'set a different "memory.embedded-postgres.port" in ~/.one/config.json';
   if (explicit) {
     throw new Error(
-      `Port ${preferred} (or ${preferred + PG_PORT_OFFSET}, its internal Postgres port) on ${host} is already in use ` +
+      `Port ${preferred} on ${host} is already in use ` +
       `by another program, so the embedded Postgres can't start there. Free it, or ${hint}.`,
     );
   }
   for (let port = preferred + 1; port <= preferred + PORT_SEARCH_SPAN; port++) {
-    if (await portPairFree(host, port)) return port;
+    if (await canBind(host, port)) return port;
   }
   throw new Error(
     `Ports ${preferred}-${preferred + PORT_SEARCH_SPAN} on ${host} are all already in use, ` +
@@ -255,12 +329,15 @@ function readPostmasterPid(clusterDir: string): { pid: number; port: number } | 
   }
 }
 
-/** The pgserve process that started this Postgres, if it is still running. */
+/** A pgserve server (older CLIs) or launcher (this one) process. */
+const DAEMON_COMMAND = /pgserve[\\/]bin[\\/]postgres-server\.js|pgserve-launcher\.[cm]?[jt]s/;
+
+/** The daemon process that started this Postgres, if it is still running. */
 function pgserveOwner(postmasterPid: number, deps: DaemonDeps): number | null {
   const ppid = deps.processInfo(postmasterPid)?.ppid;
   if (!ppid || ppid <= 1) return null;
   const command = deps.processInfo(ppid)?.command ?? '';
-  return /pgserve[\\/]bin[\\/]postgres-server\.js/.test(command) ? ppid : null;
+  return DAEMON_COMMAND.test(command) ? ppid : null;
 }
 
 /**
@@ -299,20 +376,35 @@ async function stopStaleCluster(clusterDir: string, deps: DaemonDeps, timeoutMs:
 
 async function findHealthyDaemon(dataDir: string, deps: DaemonDeps): Promise<number | null> {
   const rec = readPidFile(dataDir);
-  if (!rec || !isPidAlive(rec.pid)) return null;
-  return (await deps.probe(rec.port, 'router')) === 'ours' ? rec.port : null;
+  // A daemon without `auth` is an older CLI's pgserve router, which lets
+  // anyone in without a password. Its trust auth would also pass the probe,
+  // so it is never reused; stopLegacyDaemon replaces it.
+  if (!rec || rec.auth !== 'password' || !isPidAlive(rec.pid)) return null;
+  return (await deps.probe(rec.port, 'daemon')) === 'ours' ? rec.port : null;
 }
 
-function pgserveArgs(cfg: DaemonConfig, clusterDir: string, port: number): string[] {
+/**
+ * Stop the pgserve router an older CLI recorded in the pidfile. Its Postgres
+ * is stopped along with it; stopStaleCluster handles one left behind.
+ */
+async function stopLegacyDaemon(dataDir: string, deps: DaemonDeps, timeoutMs: number): Promise<void> {
+  const rec = readPidFile(dataDir);
+  if (!rec || rec.auth === 'password' || !isPidAlive(rec.pid)) return;
+  // The PID may have been reused since; only stop a pgserve process.
+  if (!/pgserve/.test(deps.processInfo(rec.pid)?.command ?? '')) return;
+  signal(rec.pid, 'SIGTERM');
+  if (!(await waitForExit(rec.pid, timeoutMs))) signal(rec.pid, 'SIGKILL');
+}
+
+function launcherArgs(cfg: DaemonConfig, clusterDir: string, port: number): string[] {
   const args = [
     '--data', clusterDir,
     '--port', String(port),
-    '--host', cfg.host,
+    '--database', cfg.database,
+    '--secrets', secretsPath(cfg.dataDir),
+    '--marker', authMarkerPath(cfg.dataDir),
+    '--ready', readyPath(cfg.dataDir),
     '--log', cfg.logLevel,
-    '--no-stats',
-    // Single process. In cluster mode a worker that can't bind the port is
-    // re-forked immediately, forever, each crash logging a full stack trace.
-    '--no-cluster',
   ];
   if (cfg.pgvector) args.push('--pgvector');
   return args;
@@ -333,7 +425,7 @@ async function waitUntilServing(
   for (;;) {
     const exit = child.exitStatus();
     if (exit) throw new Error(`pgserve exited (${exit}) before it was ready.${details()}`);
-    if ((await deps.probe(port, 'router')) === 'ours') return;
+    if (readyPid(cfg.dataDir) === child.pid && (await deps.probe(port, 'daemon')) === 'ours') return;
     if (Date.now() >= deadline) {
       throw new Error(
         `pgserve did not start serving on ${cfg.host}:${port} within ${Math.round(cfg.startupTimeoutMs / 1000)}s.${details()}`,
@@ -353,7 +445,7 @@ export async function ensureRunning(cfg: DaemonConfig, deps: DaemonDeps): Promis
 
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   const stopTimeoutMs = deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS;
-  return withStartupLock(cfg.dataDir, cfg.startupTimeoutMs + 3 * stopTimeoutMs, async () => {
+  return withStartupLock(cfg.dataDir, cfg.startupTimeoutMs + 4 * stopTimeoutMs, async () => {
     // Another invocation may have finished starting one while we waited.
     const raced = await findHealthyDaemon(cfg.dataDir, deps);
     if (raced !== null) return raced;
@@ -363,16 +455,19 @@ export async function ensureRunning(cfg: DaemonConfig, deps: DaemonDeps): Promis
     // subdirectory so the log/PID files can sit alongside it.
     const clusterDir = path.join(cfg.dataDir, 'cluster');
     fs.mkdirSync(clusterDir, { recursive: true });
+    ensureSecrets(cfg.dataDir);
+    await stopLegacyDaemon(cfg.dataDir, deps, stopTimeoutMs);
     await stopStaleCluster(clusterDir, deps, stopTimeoutMs);
 
     const port = await choosePort(cfg.host, cfg.port, cfg.portExplicit);
     const logPath = path.join(cfg.dataDir, 'pgserve.log');
     trimLog(logPath);
     const log = { path: logPath, offset: fileSize(logPath) };
+    fs.rmSync(readyPath(cfg.dataDir), { force: true });
     const fd = fs.openSync(logPath, 'a');
     let child: SpawnedDaemon;
     try {
-      child = deps.spawnPgserve(pgserveArgs(cfg, clusterDir, port), fd);
+      child = deps.spawnPgserve(launcherArgs(cfg, clusterDir, port), fd);
     } finally {
       fs.closeSync(fd); // the child holds its own copy
     }
@@ -383,6 +478,7 @@ export async function ensureRunning(cfg: DaemonConfig, deps: DaemonDeps): Promis
       port,
       dataDir: cfg.dataDir,
       startedAt: new Date().toISOString(),
+      auth: 'password',
     });
     return port;
   });
@@ -438,29 +534,41 @@ async function probeDataDirectory(
   }
 }
 
-function resolvePgserveBin(): string {
-  // Resolve via createRequire so the binary follows the package on
-  // global vs local installs. `bin/pgserve-wrapper.cjs` is the
-  // platform-portable entry that bootstraps the bundled Bun runtime +
-  // Postgres binaries.
-  const pkg = requireFromHere.resolve('pgserve/package.json');
-  return path.resolve(path.dirname(pkg), 'bin/pgserve-wrapper.cjs');
+/** pgserve's bundled Bun runtime, which the launcher needs for PostgresManager. */
+function resolveBun(): string {
+  // Resolve from pgserve's own location so it follows global vs local
+  // installs. The `bun` package installs its platform binary as bin/bun.exe
+  // on every OS.
+  const pgserveRequire = createRequire(requireFromHere.resolve('pgserve/package.json'));
+  const bun = path.join(path.dirname(pgserveRequire.resolve('bun/package.json')), 'bin', 'bun.exe');
+  if (!fs.existsSync(bun)) {
+    throw new Error(`pgserve's Bun runtime is missing (${bun}). Reinstall the CLI: npm i -g @withone/cli`);
+  }
+  return bun;
 }
 
-function spawnPgserve(args: string[], logFd: number, cwd: string): SpawnedDaemon {
-  const child = spawn(process.execPath, [resolvePgserveBin(), ...args], {
+/** pgserve-launcher, built next to this module (dist) or alongside it in src. */
+function resolveLauncher(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [path.join(here, 'pgserve-launcher.js'), path.join(here, 'pgserve-launcher.ts')];
+  const found = candidates.find((p) => fs.existsSync(p));
+  if (!found) throw new Error(`pgserve-launcher not found next to ${here}. Reinstall the CLI: npm i -g @withone/cli`);
+  return found;
+}
+
+function spawnLauncher(args: string[], logFd: number, cwd: string): SpawnedDaemon {
+  const child = spawn(resolveBun(), [resolveLauncher(), ...args], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    // pgserve resolves the bundled bun binary relative to its own package
-    // location, not cwd, so cwd doesn't matter — but pin it for clarity.
     cwd,
+    windowsHide: true,
   });
   let status: string | null = null;
   child.once('error', (err) => { status = `failed to start: ${err.message}`; });
   child.once('exit', (code, sig) => { status = sig ? `signal ${sig}` : `code ${code}`; });
   child.unref();
   if (typeof child.pid !== 'number') {
-    throw new Error('Failed to spawn pgserve — no PID returned.');
+    throw new Error('Failed to start the embedded Postgres: no PID returned.');
   }
   return { pid: child.pid, exitStatus: () => status };
 }
@@ -473,21 +581,22 @@ function processInfo(pid: number): ProcessInfo | null {
 }
 
 /**
- * The dependencies ensureRunning uses outside tests. `router` credentials
- * are the ones the backend connects with; pgserve's bundled superuser
- * (`postgres`/`postgres`) reaches the cluster's Postgres directly.
+ * The dependencies ensureRunning uses outside tests. A running daemon is
+ * probed through the store's database with the superuser password. The
+ * Postgres holding the cluster may instead be one an older CLI started,
+ * which still has pgserve's default password, so that probe tries both.
  */
-export function nodeDaemonDeps(cfg: DaemonConfig, Client: PgClientCtor, router: Credentials): DaemonDeps {
+export function nodeDaemonDeps(cfg: DaemonConfig, Client: PgClientCtor, secrets: StoreSecrets): DaemonDeps {
   const clusterDir = path.join(cfg.dataDir, 'cluster');
-  const direct: Credentials = { user: 'postgres', password: 'postgres', database: 'postgres' };
+  const login = (port: number, host: string, password: string, database: string) =>
+    probeDataDirectory(Client, { host, port, user: 'postgres', password, database }, clusterDir);
   return {
-    probe: (port, via) =>
-      probeDataDirectory(
-        Client,
-        via === 'router' ? { host: cfg.host, port, ...router } : { host: '127.0.0.1', port, ...direct },
-        clusterDir,
-      ),
-    spawnPgserve: (args, logFd) => spawnPgserve(args, logFd, cfg.dataDir),
+    probe: async (port, via) => {
+      if (via === 'daemon') return login(port, cfg.host, secrets.superuser, cfg.database);
+      const first = await login(port, '127.0.0.1', secrets.superuser, 'postgres');
+      return first === 'other' ? login(port, '127.0.0.1', 'postgres', 'postgres') : first;
+    },
+    spawnPgserve: (args, logFd) => spawnLauncher(args, logFd, cfg.dataDir),
     processInfo,
   };
 }

@@ -380,7 +380,7 @@ Note: execution responses are never cached — the action always runs live. Only
 
 ### `one mem` — unified memory store
 
-One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled `embedded-postgres` plugin, with a `postgres` plugin for remote/self-hosted) that backs both user-authored notes and synced platform data. **Zero-config** — the first `one mem` call on a fresh machine auto-initializes the cluster at `~/.one/pg/cluster/` and writes a daemon PID file so subsequent CLI invocations reuse it. The daemon listens on port 5434, moving to the next free port if another program already holds it; pin a port with `one mem config set embedded-postgres.port <n>`.
+One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled `embedded-postgres` plugin, with a `postgres` plugin for remote/self-hosted) that backs both user-authored notes and synced platform data. **Zero-config** — the first `one mem` call on a fresh machine auto-initializes the cluster at `~/.one/pg/cluster/` and writes a daemon PID file so subsequent CLI invocations reuse it. The daemon listens on port 5434, moving to the next free port if another program already holds it; pin a port with `one mem config set embedded-postgres.port <n>`. Every connection to it needs a password: one is generated per install and kept in `~/.one/pg/.pgserve-auth.json`, readable only by you.
 
 ```bash
 # User memories — works immediately on a new install

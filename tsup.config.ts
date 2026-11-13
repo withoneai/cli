@@ -1,7 +1,13 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/node-check.ts'],
+  entry: {
+    index: 'src/index.ts',
+    'node-check': 'src/node-check.ts',
+    // Run as its own process under pgserve's Bun runtime; daemon.ts finds it
+    // next to the bundle.
+    'pgserve-launcher': 'src/lib/memory/plugins/embedded-postgres/pgserve-launcher.ts',
+  },
   format: ['esm'],
   target: 'node22',
   clean: true,

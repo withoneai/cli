@@ -22,6 +22,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { withTempHome, assertHomeIsSandboxed } from '../../../../test-support/home.js';
 import {
   ensureRunning,
+  ensureSecrets,
   choosePort,
   trimLog,
   type DaemonConfig,
@@ -56,13 +57,12 @@ function canBind(port: number): Promise<boolean> {
   });
 }
 
-/** A port P where both P and P+1000 (pgserve's internal Postgres port) are free. */
 async function freePort(): Promise<number> {
   for (let i = 0; i < 200; i++) {
     const p = 20000 + Math.floor(Math.random() * 20000);
-    if (await canBind(p) && await canBind(p + 1000)) return p;
+    if (await canBind(p)) return p;
   }
-  throw new Error('no free port pair found');
+  throw new Error('no free port found');
 }
 
 /** A real, long-lived process to stand in for postgres or pgserve. */
@@ -79,6 +79,7 @@ function alive(pid: number): boolean {
 function config(home: { oneDir: string }, port: number, portExplicit = false): DaemonConfig {
   return {
     dataDir: path.join(home.oneDir, 'pg'),
+    database: 'one_mem',
     host: HOST,
     port,
     portExplicit,
@@ -88,15 +89,19 @@ function config(home: { oneDir: string }, port: number, portExplicit = false): D
   };
 }
 
-function writePidFile(cfg: DaemonConfig, pid: number, port: number): void {
+/** A pidfile as this CLI writes it, or (`legacy`) as older ones did. */
+function writePidFile(cfg: DaemonConfig, pid: number, port: number, legacy = false): void {
   fs.mkdirSync(cfg.dataDir, { recursive: true });
   fs.writeFileSync(
     path.join(cfg.dataDir, '.pgserve.json'),
-    JSON.stringify({ pid, port, dataDir: cfg.dataDir, startedAt: new Date().toISOString() }),
+    JSON.stringify({
+      pid, port, dataDir: cfg.dataDir, startedAt: new Date().toISOString(),
+      ...(legacy ? {} : { auth: 'password' }),
+    }),
   );
 }
 
-function readPidFile(cfg: DaemonConfig): { pid: number; port: number } | null {
+function readPidFile(cfg: DaemonConfig): { pid: number; port: number; auth?: string } | null {
   try { return JSON.parse(fs.readFileSync(path.join(cfg.dataDir, '.pgserve.json'), 'utf8')); } catch { return null; }
 }
 
@@ -111,8 +116,8 @@ function writePostmasterPid(cfg: DaemonConfig, pid: number, port: number): void 
 }
 
 /**
- * Fake pgserve: "spawning" starts a real listener on the requested port and
- * marks that port as serving this cluster. The default probe reports 'ours'
+ * Fake launcher: "spawning" starts a real listener on the requested port,
+ * marks that port as serving this cluster and writes the ready file. The default probe reports 'ours'
  * for those ports, 'other' for any other listener, and 'down' otherwise.
  */
 function fakeDeps(overrides: Partial<DaemonDeps> = {}, opts: { readyAfterMs?: number } = {}) {
@@ -126,7 +131,13 @@ function fakeDeps(overrides: Partial<DaemonDeps> = {}, opts: { readyAfterMs?: nu
     spawnPgserve(args: string[]) {
       spawned.push(args);
       const port = Number(args[args.indexOf('--port') + 1]);
-      const start = () => { void listen(port).then(() => ours.add(port)); };
+      const ready = args[args.indexOf('--ready') + 1];
+      const start = () => {
+        void listen(port).then(() => {
+          ours.add(port);
+          fs.writeFileSync(ready, JSON.stringify({ pid: process.pid }));
+        });
+      };
       if (opts.readyAfterMs) setTimeout(start, opts.readyAfterMs);
       else start();
       return { pid: process.pid, exitStatus: () => null };
@@ -178,12 +189,6 @@ describe('choosePort', () => {
     assert.ok(await canBind(chosen), `chosen port ${chosen} should be free`);
   });
 
-  it('skips a port whose internal Postgres port (+1000) is taken', async () => {
-    const p = await freePort();
-    await listen(p + 1000);
-    assert.notEqual(await choosePort(HOST, p, false), p);
-  });
-
   it('refuses an explicitly configured port that another program holds', async () => {
     const p = await freePort();
     await listen(p);
@@ -224,6 +229,43 @@ describe('trimLog', () => {
   });
 });
 
+// ─── ensureSecrets ──────────────────────────────────────────────────────────
+
+describe('ensureSecrets', () => {
+  it('creates owner-only passwords once and returns the same ones after', () => {
+    assertHomeIsSandboxed();
+    const dir = path.join(home.oneDir, 'pg');
+    const first = ensureSecrets(dir);
+    assert.match(first.superuser, /^[0-9a-f]{48}$/);
+    assert.match(first.reader, /^[0-9a-f]{48}$/);
+    assert.notEqual(first.superuser, first.reader);
+    assert.deepEqual(ensureSecrets(dir), first);
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.join(dir, '.pgserve-auth.json')).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+    }
+  });
+
+  it('narrows an existing data directory to the owner', { skip: process.platform === 'win32' }, () => {
+    assertHomeIsSandboxed();
+    const dir = path.join(home.oneDir, 'pg');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    fs.chmodSync(dir, 0o755);
+    ensureSecrets(dir);
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  });
+
+  it('refuses a damaged secrets file instead of replacing it', () => {
+    // A new password would not match the cluster's, locking the CLI out.
+    assertHomeIsSandboxed();
+    const dir = path.join(home.oneDir, 'pg');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '.pgserve-auth.json'), '{"superuser":"short"}');
+    assert.throws(() => ensureSecrets(dir), /not a valid embedded-postgres secrets file/);
+    assert.equal(fs.readFileSync(path.join(dir, '.pgserve-auth.json'), 'utf8'), '{"superuser":"short"}');
+  });
+});
+
 // ─── ensureRunning ──────────────────────────────────────────────────────────
 
 describe('ensureRunning', () => {
@@ -257,12 +299,71 @@ describe('ensureRunning', () => {
     assert.equal(readPidFile(cfg)?.port, port);
   });
 
-  it('starts pgserve in single-process mode', async () => {
+  it('starts the password-protected launcher, not pgserve\'s router', async () => {
     assertHomeIsSandboxed();
     const cfg = config(home, await freePort());
     const { deps, spawned } = fakeDeps();
     await ensureRunning(cfg, deps);
-    assert.ok(spawned[0].includes('--no-cluster'), `args: ${spawned[0].join(' ')}`);
+    const args = spawned[0];
+    const arg = (flag: string) => args[args.indexOf(flag) + 1];
+    assert.equal(arg('--secrets'), path.join(cfg.dataDir, '.pgserve-auth.json'));
+    assert.equal(arg('--database'), 'one_mem');
+    assert.ok(!args.includes('--host'), `args: ${args.join(' ')}`);
+    assert.ok(fs.existsSync(arg('--secrets')), 'secrets were created before the launcher started');
+    assert.equal(readPidFile(cfg)?.auth, 'password');
+  });
+
+  it('waits for the launcher to report ready, not just for Postgres to answer', async () => {
+    // During the password switch Postgres answers, then restarts; the
+    // launcher writes the ready file only once the store is usable.
+    assertHomeIsSandboxed();
+    const cfg = config(home, await freePort());
+    const { deps, ours } = fakeDeps({
+      spawnPgserve(args) {
+        const port = Number(args[args.indexOf('--port') + 1]);
+        const ready = args[args.indexOf('--ready') + 1];
+        void listen(port).then(() => ours.add(port));
+        setTimeout(() => fs.writeFileSync(ready, JSON.stringify({ pid: process.pid })), 600);
+        return { pid: process.pid, exitStatus: () => null };
+      },
+    });
+    const started = Date.now();
+    await ensureRunning(cfg, deps);
+    assert.ok(Date.now() - started >= 550, `returned after ${Date.now() - started}ms`);
+  });
+
+  it('replaces a daemon from an older CLI instead of reusing it', async () => {
+    // Older CLIs ran pgserve's router, which lets any local account in with
+    // no password. Its trust auth passes the probe, so the pidfile decides.
+    assertHomeIsSandboxed();
+    const p = await freePort();
+    const cfg = config(home, p);
+    const router = sleeper();
+    const { deps, ours, spawned } = fakeDeps({
+      processInfo: (pid) => (pid === router.pid ? { ppid: 1, command: 'node /x/node_modules/pgserve/bin/pgserve-wrapper.cjs --no-cluster' } : null),
+    });
+    const legacyPort = await freePort();
+    await listen(legacyPort);
+    ours.add(legacyPort);
+    writePidFile(cfg, router.pid!, legacyPort, true);
+
+    await ensureRunning(cfg, deps);
+
+    assert.equal(spawned.length, 1);
+    assert.equal(alive(router.pid!), false, 'the old pgserve router was stopped');
+    assert.equal(readPidFile(cfg)?.auth, 'password');
+  });
+
+  it('leaves a pidfile PID alone when it is no longer a pgserve process', async () => {
+    assertHomeIsSandboxed();
+    const cfg = config(home, await freePort());
+    const unrelated = sleeper();
+    const { deps } = fakeDeps({ processInfo: () => ({ ppid: 1, command: 'vim notes.txt' }) });
+    writePidFile(cfg, unrelated.pid!, 5434, true);
+
+    await ensureRunning(cfg, deps);
+
+    assert.equal(alive(unrelated.pid!), true);
   });
 
   it('fails fast with the log tail when pgserve exits before it is ready', async () => {
