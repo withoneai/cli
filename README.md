@@ -498,7 +498,7 @@ Receive webhooks from platforms and forward them to any connected platform via p
 one relay platforms                        # List relay-capable platforms + event type counts
 one relay event-types <platform>           # List supported event types for a platform
 one relay create --connection-key <key> --create-webhook --event-filters '["event.type"]'
-one relay activate <id> --actions '<json>' # Attach passthrough forwarding actions
+one relay activate <id> --actions '<json>' # Attach passthrough forwarding actions (agent mode: add --confirm-write for actions that write)
 one relay list                             # List existing relay endpoints
 one relay events --platform <p>            # Inspect received events
 one relay deliveries --endpoint-id <id>    # Check delivery status
@@ -617,6 +617,7 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 | `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `--allow-code` | Allow `code.module` steps, which run a `.mjs` file with full Node access (disabled by default for security) |
+| `--confirm-write` | Required in agent mode when any step writes (POST, PUT, PATCH, DELETE, or an action or sub-flow picked at run time). Without it the command returns `confirmation_required` with the writes listed and runs nothing. Also on `flow resume` |
 | `-v, --verbose` | Show full request/response for each step |
 | `--output-file <path>` | Stream the full result to a file instead of stdout — for large results that would otherwise be truncated or exceed the JSON string-size limit. stdout (and `--agent` output) then carries an `outputFile` pointer instead of inline `steps`. |
 

@@ -212,3 +212,47 @@ export async function checkRelayActions(
     }
   }
 }
+
+// ── Writes an agent is about to set off ───────────────────────────────
+
+/** A write found before it runs, reported back to the agent. */
+export interface PlannedWrite {
+  /** Where it is: a flow step id or a relay action index. */
+  where: string;
+  actionId?: string;
+  method?: string;
+  /** Why it counts, when not just its method. */
+  reason?: string;
+}
+
+/** True for a value filled in at run time (`$.input.x`, `{{...}}`), so unknown before the run. */
+export function isDynamicValue(value: unknown): boolean {
+  return typeof value === 'string' && (value.trim().startsWith('$') || value.includes('{{'));
+}
+
+/**
+ * The writes among a relay's actions. They run later, on One's servers, when
+ * webhook events arrive, so setting them up is the moment to ask. A
+ * `passthrough` action counts when its method (or a method-override header)
+ * writes; a `url` or `agent` action always counts, since it sends event data
+ * out of One.
+ */
+export async function relayWritesOf(
+  actions: unknown,
+  methodOf: (actionId: string) => Promise<string>,
+): Promise<PlannedWrite[]> {
+  if (!Array.isArray(actions)) return [];
+  const writes: PlannedWrite[] = [];
+  for (const [i, raw] of actions.entries()) {
+    const action = (raw ?? {}) as Record<string, unknown>;
+    if (action.type === 'passthrough') {
+      const actionId = String(action.actionId ?? '');
+      const headers = action.headers && typeof action.headers === 'object' ? (action.headers as Record<string, string>) : undefined;
+      const method = writeMethodOf(await methodOf(actionId), headers);
+      if (method) writes.push({ where: `actions[${i}]`, actionId, method });
+      continue;
+    }
+    writes.push({ where: `actions[${i}]`, reason: `a "${String(action.type)}" action sends event data out of One` });
+  }
+  return writes;
+}

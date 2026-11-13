@@ -1,7 +1,7 @@
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
-import { checkManagementAccess, checkRelayActions, isConnectionAllowed } from '../lib/access-gate.js';
+import { checkManagementAccess, checkRelayActions, isConnectionAllowed, relayWritesOf, WRITE_CONFIRMATION_HINT } from '../lib/access-gate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import type { AccessControlSettings } from '../lib/types.js';
 import { printTable } from '../lib/table.js';
@@ -57,6 +57,25 @@ async function allowedEvent(api: OneApi, settings: AccessControlSettings, id: st
 
 function actionMethod(api: OneApi): (actionId: string) => Promise<string> {
   return async actionId => (await resolveActionDetails(api, actionId)).details.method;
+}
+
+/**
+ * In agent mode, relay actions that write or send event data out of One are
+ * set up only with --confirm-write. They run later, on One's servers, with
+ * nobody watching, so this is the last moment to ask.
+ */
+async function confirmRelayWrites(api: OneApi, id: string, actions: unknown, confirmWrite?: boolean): Promise<void> {
+  if (!output.isAgentMode() || confirmWrite) return;
+  const writes = await relayWritesOf(actions, actionMethod(api));
+  if (writes.length === 0) return;
+  output.json({
+    status: 'confirmation_required',
+    error: `${writes.length} relay action(s) write or send event data out of One and need --confirm-write in agent mode. Nothing was changed.`,
+    id,
+    writes,
+    _hint: WRITE_CONFIRMATION_HINT,
+  });
+  process.exit(1);
 }
 
 /** Runs a check that may throw, printing its message as a CLI error. */
@@ -242,6 +261,7 @@ export async function relayUpdateCommand(
     eventFilters?: string;
     tags?: string;
     actions?: string;
+    confirmWrite?: boolean;
   }
 ): Promise<void> {
   const { apiKey, settings } = getConfig();
@@ -263,6 +283,7 @@ export async function relayUpdateCommand(
     // endpoint on, since they are what will run.
     const effective = body.actions ?? (options.active === true ? existing.actions : undefined);
     await checkRelayActions(settings, effective, actionMethod(api));
+    await confirmRelayWrites(api, id, effective, options.confirmWrite);
 
     const result = await api.updateRelayEndpoint(id, body);
 
@@ -309,7 +330,7 @@ export async function relayDeleteCommand(id: string): Promise<void> {
 
 export async function relayActivateCommand(
   id: string,
-  options: { actions: string; webhookSecret?: string }
+  options: { actions: string; webhookSecret?: string; confirmWrite?: boolean }
 ): Promise<void> {
   const { apiKey, settings } = getConfig();
   guard(() => checkManagementAccess(settings, 'write', 'Activating a relay endpoint'));
@@ -321,6 +342,7 @@ export async function relayActivateCommand(
     const actions = parseJsonArg(options.actions, '--actions');
     await allowedEndpoint(api, settings, id);
     await checkRelayActions(settings, actions, actionMethod(api));
+    await confirmRelayWrites(api, id, actions, options.confirmWrite);
     const body: Record<string, unknown> = { actions };
     if (options.webhookSecret) body.webhookSecret = options.webhookSecret;
 

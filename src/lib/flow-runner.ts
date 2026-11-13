@@ -12,6 +12,7 @@ import type {
 } from './flow-types.js';
 import { executeFlow } from './flow-engine.js';
 import { getNestedStepsKeys } from './flow-schema.js';
+import { isDynamicValue, writeMethodOf, type PlannedWrite } from './access-gate.js';
 import type { FlowStep, FlowStepType } from './flow-types.js';
 
 const FLOWS_DIR = '.one/flows';
@@ -452,6 +453,48 @@ export function collectStepTypes(flow: Flow): FlowStepType[] {
 /** True if any step (recursively) is a bash step. */
 export function flowRequiresBash(flow: Flow): boolean {
   return walkSteps(flow.steps, step => step.type === 'bash');
+}
+
+/**
+ * The writes a flow would run, found before it starts: action and paginate
+ * steps whose action writes, and sub-flows, followed into their own files. A
+ * step whose action id or sub-flow key is filled in at run time can't be
+ * judged here, so it counts as a write. `methodOf` reads an action's method.
+ */
+export async function flowWritesOf(
+  flow: Flow,
+  methodOf: (actionId: string) => Promise<string>,
+  load: (key: string) => Flow = key => loadFlowWithMeta(key).flow,
+  seen: Set<string> = new Set(),
+): Promise<PlannedWrite[]> {
+  const prefix = seen.size > 0 ? `${flow.key}/` : '';
+  seen.add(flow.key);
+  const steps: FlowStep[] = [];
+  walkSteps(flow.steps, step => { steps.push(step); });
+  const writes: PlannedWrite[] = [];
+  const where = (step: FlowStep) => `${prefix}${step.id}`;
+  for (const step of steps) {
+    const action = step.type === 'action' ? step.action : step.type === 'paginate' ? step.paginate?.action : undefined;
+    if (action) {
+      if (isDynamicValue(action.actionId) || isDynamicValue(JSON.stringify(action.headers ?? {}))) {
+        writes.push({ where: where(step), actionId: String(action.actionId), reason: 'its action is chosen at run time' });
+        continue;
+      }
+      const method = writeMethodOf(await methodOf(action.actionId), action.headers as Record<string, string> | undefined);
+      if (method) writes.push({ where: where(step), actionId: action.actionId, method });
+      continue;
+    }
+    if (step.type === 'flow' && step.flow) {
+      const key = step.flow.key;
+      if (isDynamicValue(key)) {
+        writes.push({ where: where(step), reason: 'its sub-flow is chosen at run time' });
+        continue;
+      }
+      if (seen.has(key)) continue;
+      writes.push(...(await flowWritesOf(load(key), methodOf, load, seen)));
+    }
+  }
+  return writes;
 }
 
 /** True if any code step (recursively) uses an external module file. */
