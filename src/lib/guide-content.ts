@@ -1006,7 +1006,7 @@ Deleting the mirror (\`.one/sync/data/<platform>.db\`) is no longer necessary.
 
 Two ways to tag a record with a cross-platform identifier (e.g. email), depending on whether the record IS an entity or INVOLVES many:
 
-**\`identityKey\` (singular)** — "this record IS this entity". The value goes into the record's \`keys[]\`, which the store uses to MERGE records for the same entity across platforms (Attio + HubSpot for the same person collapse into one):
+**\`identityKey\` (singular)** — "this record IS this entity". The value goes into the record's \`keys[]\`, which merges records of the SAME type (re-syncs of one record, re-migrates). Sync never updates a record of another type: when the key already belongs to one (Attio + HubSpot for the same person, or a note you tagged with the email), the incoming record is stored as its own record and the key goes into its non-merging \`identity_keys[]\` instead, so \`mem find-by-key\` returns both. The sync result reports these as \`memKeptSeparate\`. Records an older CLI already merged across types stay as they are, and sync skips them (\`memSkippedOtherType\`):
 
 \`\`\`json
 {"platform": "hubspot", "model": "contacts", "identityKey": "properties.email"}
@@ -1144,7 +1144,7 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | limitLocation | no | "query" (default) or "body" for POST endpoints |
 | enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
 | transform | no | Shell command to transform records (stdin: JSON array, stdout: JSON array) |
-| identityKey | no | "This record IS this entity" — dot-path to a cross-platform id (e.g. email) → \`keys[]\` (drives entity merge) |
+| identityKey | no | "This record IS this entity" — dot-path to a cross-platform id (e.g. email) → \`keys[]\` (merges within the same type; linked to other types via \`find-by-key\`) |
 | identityKeys | no | "This record INVOLVES these people" — \`[{prefix, path}]\` for N participants (#128) → non-merging \`identity_keys[]\`; query with \`mem find-by-key\` |
 | exclude | no | Dot-path fields to strip before storing (e.g. \`["messages[].body"]\`) |
 | onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
