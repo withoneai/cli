@@ -5,11 +5,33 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Protected environment: only `v*` tags may deploy to it, and Paul or Moe
+    # must approve each run (admins can bypass). The job that can mint the
+    # npm OIDC token never starts without that approval.
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Publish only reviewed code: the release must point at a commit that
+      # is already on main, and its tag must match package.json, so a
+      # release cut from a side branch or a stray tag can't reach npm.
+      - name: Check release is on main and matches package.json
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release commit $GITHUB_SHA is not on main."
+            exit 1
+          fi
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$pkg_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version v$pkg_version."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           # Node 22 (Active LTS). Node 20 is deprecated on GitHub Actions
@@ -30,5 +52,7 @@ jobs:
           fi
       - name: Build
         run: npm run build
+      - name: Test
+        run: npm test
       - name: Publish
         run: npm publish --access public
