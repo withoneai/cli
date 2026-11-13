@@ -159,3 +159,128 @@ describe('sync mem-writer — never updates a record of another type (PICA-1583)
     assert.equal(erin.data.phone, undefined);
   });
 });
+
+/**
+ * Issue #194: a singular identityKey on a value that several upstream
+ * records share (calendar events from one organizer) merged them into one
+ * record, keeping only the last one's data under every source key.
+ */
+describe('sync mem-writer — never merges two upstream records of the same type (#194)', () => {
+  let tmpHome: string;
+  let homeSnapshot: ReturnType<typeof snapshotHomeEnv>;
+
+  const events: SyncProfile = {
+    platform: 'google-calendar',
+    model: 'events',
+    connectionKey: 'live::google-calendar::default::abc',
+    actionId: 'conn_mod_def::xxx::yyy',
+    resultsPath: 'items',
+    idField: 'id',
+    pagination: { type: 'cursor' },
+    identityKey: 'organizer.email',
+  };
+  const attioCompanies: SyncProfile = {
+    platform: 'attio',
+    model: 'attioCompanies',
+    connectionKey: 'live::attio::default::abc',
+    actionId: 'conn_mod_def::xxx::zzz',
+    resultsPath: 'data',
+    idField: 'id',
+    pagination: { type: 'cursor' },
+    identityKey: 'domain',
+  };
+
+  const rows = async (where: string) => {
+    const backend = await getBackend();
+    const res = await backend.raw!(
+      `SELECT type, data, keys, identity_keys FROM mem_records WHERE ${where} ORDER BY created_at`,
+    );
+    return res.rows as Array<{ type: string; data: Record<string, unknown>; keys: string[]; identity_keys: string[] | null }>;
+  };
+
+  before(async () => {
+    homeSnapshot = snapshotHomeEnv();
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-writer-same-type-'));
+    setHomeTo(tmpHome);
+    fs.mkdirSync(path.join(tmpHome, '.one'), { mode: 0o700 });
+    writeConfig({ apiKey: 'sk_test_dummy', installedAgents: [], createdAt: new Date().toISOString() });
+    registerBackend(pglitePlugin);
+    updateMemoryConfig({ ...DEFAULT_MEMORY_CONFIG, backend: 'pglite', pglite: { dbPath: path.join(tmpHome, 'mem.pglite') } });
+    resetBackendSingleton();
+    const backend = await getBackend();
+    // A company record the user curates, cross-referenced to Attio by domain.
+    await backend.upsertByKeys({
+      type: 'company',
+      data: { name: 'Acme', attio_id: 'rec_acme', tier: 'gold' },
+      keys: ['company:acme', 'domain:acme.com'],
+    });
+    // A same-type record with no source key (written by hand): still mergeable.
+    await backend.upsertByKeys({
+      type: 'google-calendar/events',
+      data: { summary: 'hand-written placeholder' },
+      keys: ['email:carol@acme.com'],
+    });
+  });
+
+  after(async () => {
+    const backend = await getBackend();
+    await backend.close();
+    resetBackendSingleton();
+    restoreHomeEnv(homeSnapshot);
+    try { fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* ignore */ }
+  });
+
+  it('keeps each event as its own record when they share an organizer', async () => {
+    const report = await writePageToMemory(events, [
+      { id: 'ev1', summary: 'one', organizer: { email: 'bob@acme.com' } },
+      { id: 'ev2', summary: 'two', organizer: { email: 'bob@acme.com' } },
+      { id: 'ev3', summary: 'three', organizer: { email: 'bob@acme.com' } },
+    ]);
+    const evs = await rows(`type = 'google-calendar/events' AND data ? 'id'`);
+    assert.deepEqual(evs.map(r => r.data.summary), ['one', 'two', 'three'], 'every event keeps its own data');
+    assert.deepEqual(evs[0].keys.sort(), ['email:bob@acme.com', 'google-calendar/events:ev1']);
+    for (const [i, r] of evs.slice(1).entries()) {
+      assert.deepEqual(r.keys, [`google-calendar/events:ev${i + 2}`]);
+      assert.deepEqual(r.identity_keys, ['email:bob@acme.com'], 'linked by the shared value');
+    }
+    assert.equal(report.inserted, 3);
+    assert.equal(report.keptSeparate, 2);
+
+    const backend = await getBackend();
+    const linked = await backend.findByKeys(['email:bob@acme.com']);
+    assert.equal(linked.length, 3, 'find-by-key returns all three');
+  });
+
+  it('re-syncs each event in place', async () => {
+    const report = await writePageToMemory(events, [
+      { id: 'ev2', summary: 'two v2', organizer: { email: 'bob@acme.com' } },
+      { id: 'ev1', summary: 'one v2', organizer: { email: 'bob@acme.com' } },
+    ]);
+    assert.equal(report.updated, 2);
+    assert.equal(report.inserted, 0);
+    const evs = await rows(`type = 'google-calendar/events' AND data ? 'id'`);
+    assert.deepEqual(evs.map(r => r.data.summary), ['one v2', 'two v2', 'three']);
+  });
+
+  it('still merges into a same-type record that has no source key', async () => {
+    const report = await writePageToMemory(events, [
+      { id: 'ev9', summary: 'nine', organizer: { email: 'carol@acme.com' } },
+    ]);
+    assert.equal(report.updated, 1);
+    const [r] = await rows(`type = 'google-calendar/events' AND 'email:carol@acme.com' = ANY(keys)`);
+    assert.equal(r.data.summary, 'nine');
+    assert.ok(r.keys.includes('google-calendar/events:ev9'));
+  });
+
+  it('leaves a curated company alone when Attio syncs the same domain', async () => {
+    const report = await writePageToMemory(attioCompanies, [
+      { id: 'rec_acme', domain: 'acme.com', name: 'Acme Inc (Attio)' },
+    ]);
+    const [company] = await rows(`type = 'company'`);
+    assert.deepEqual(company.data, { name: 'Acme', attio_id: 'rec_acme', tier: 'gold' }, 'attio_id and every other field survive');
+    const [attio] = await rows(`type = 'attio/attioCompanies'`);
+    assert.deepEqual(attio.keys, ['attio/attioCompanies:rec_acme']);
+    assert.deepEqual(attio.identity_keys, ['domain:acme.com']);
+    assert.equal(report.keptSeparate, 1);
+  });
+});
