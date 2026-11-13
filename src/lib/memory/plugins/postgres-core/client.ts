@@ -52,3 +52,27 @@ export function hotColumnIndexName(type: string, jsonPath: string): string {
   const name = `idx_records_${slug(type)}_${slug(jsonPath)}`;
   return name.slice(0, 63);
 }
+
+/**
+ * Can this database use pgvector? True when the extension is already
+ * installed, or when it is available on the server and this login can
+ * create it. False otherwise: the store then runs FTS-only and the schema
+ * skips the embedding column, instead of failing on `CREATE EXTENSION
+ * vector` or on queries that touch a column that was never added.
+ */
+export async function probePgvector(client: PgClient): Promise<boolean> {
+  try {
+    const installed = await client.query<{ ok: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS ok`,
+    );
+    if (installed.rows[0]?.ok) return true;
+  } catch {
+    // Fall through to the create attempt.
+  }
+  try {
+    await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+    return true;
+  } catch {
+    return false;
+  }
+}

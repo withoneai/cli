@@ -12,7 +12,7 @@ import type {
   ParsedBackendConfig,
 } from '../../backend.js';
 import { SCHEMA_VERSION } from '../../schema.js';
-import { CoreBackend } from '../postgres-core/index.js';
+import { CoreBackend, probePgvector } from '../postgres-core/index.js';
 import type { PgClient, PgQueryResult } from '../postgres-core/index.js';
 
 interface PostgresConfig extends ParsedBackendConfig {
@@ -98,6 +98,9 @@ function wrapClient(pool: PgPool): PgClient {
 class LazyPostgresBackend implements MemBackend {
   private backend: CoreBackend | null = null;
   private config: PostgresConfig;
+  // Narrowed once connected: vectorSearch is only on when the server has
+  // pgvector (installed, or available and creatable by this login).
+  private resolvedCaps: BackendCapabilities = CAPABILITIES;
 
   constructor(config: PostgresConfig) { this.config = config; }
 
@@ -112,11 +115,16 @@ class LazyPostgresBackend implements MemBackend {
     const PoolCtor = (pg as unknown as { Pool: new (opts: Record<string, unknown>) => PgPool; default?: { Pool: new (opts: Record<string, unknown>) => PgPool } }).Pool
                    ?? (pg as unknown as { default: { Pool: new (opts: Record<string, unknown>) => PgPool } }).default.Pool;
     const pool = new PoolCtor({ connectionString: this.config.connectionString });
-    this.backend = new CoreBackend(wrapClient(pool), CAPABILITIES);
+    const client = wrapClient(pool);
+    const hasVector = await probePgvector(client);
+    this.resolvedCaps = hasVector
+      ? CAPABILITIES
+      : { ...CAPABILITIES, vectorSearch: false, maxVectorDims: null };
+    this.backend = new CoreBackend(client, this.resolvedCaps);
     return this.backend;
   }
 
-  capabilities(): BackendCapabilities { return CAPABILITIES; }
+  capabilities(): BackendCapabilities { return this.resolvedCaps; }
 
   async init(): Promise<void> { await this.ensure(); }
   async close(): Promise<void> { if (this.backend) await this.backend.close(); this.backend = null; }

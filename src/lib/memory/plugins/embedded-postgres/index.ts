@@ -35,7 +35,7 @@ import type {
   ParsedBackendConfig,
 } from '../../backend.js';
 import { SCHEMA_VERSION } from '../../schema.js';
-import { CoreBackend } from '../postgres-core/index.js';
+import { CoreBackend, probePgvector } from '../postgres-core/index.js';
 import type { PgClient, PgQueryResult } from '../postgres-core/index.js';
 import { ensureRunning, ensureSecrets, nodeDaemonDeps } from './daemon.js';
 import type { PgClientCtor } from './daemon.js';
@@ -159,14 +159,6 @@ function wrapClient(pool: PgPool): PgClient {
  * when present, FTS-only when absent. Idempotent: `CREATE EXTENSION IF
  * NOT EXISTS` is a no-op when already loaded.
  */
-async function probePgvector(client: PgClient): Promise<boolean> {
-  try {
-    await client.query('CREATE EXTENSION IF NOT EXISTS vector');
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Role that `one mem sql` / `one sync sql` queries run as. The store's own
