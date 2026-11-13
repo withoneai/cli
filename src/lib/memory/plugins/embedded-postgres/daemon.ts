@@ -534,16 +534,58 @@ async function probeDataDirectory(
   }
 }
 
+export interface CommandResult {
+  status: number | null;
+  output: string;
+}
+
+export type RunCommand = (cmd: string, args: string[], cwd?: string) => CommandResult;
+
+const runCommand: RunCommand = (cmd, args, cwd) => {
+  const res = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout: 120_000, windowsHide: true });
+  return {
+    status: res.status,
+    output: [res.stdout, res.stderr, res.error?.message].filter(Boolean).join('\n').trim(),
+  };
+};
+
+/**
+ * Make sure the bundled Bun binary runs. The `bun` package ships a
+ * placeholder and swaps in the real binary from its postinstall script.
+ * npm 12 blocks dependency install scripts by default, so on a fresh
+ * `npm i -g @withone/cli` the placeholder is all there is and Bun won't run.
+ * Run that script ourselves once, as pgserve's own wrapper does.
+ */
+export function ensureBunRuns(bun: string, bunPkgDir: string, run: RunCommand = runCommand): void {
+  const probe = run(bun, ['--version']);
+  if (probe.status === 0) return;
+  // The placeholder is a shell script without a shebang: run directly it
+  // fails with ENOEXEC, and through a shell it prints the postinstall error.
+  if (!/postinstall script was not run|ENOEXEC/i.test(probe.output)) {
+    throw new Error(`pgserve's Bun runtime (${bun}) failed to run: ${probe.output || `exit ${probe.status}`}`);
+  }
+  const install = run(process.execPath, [path.join(bunPkgDir, 'install.js')], bunPkgDir);
+  const again = run(bun, ['--version']);
+  if (again.status === 0) return;
+  throw new Error(
+    `pgserve's Bun runtime (${bun}) is missing its binary, and installing it failed: ` +
+    `${install.output || again.output || `exit ${again.status}`}\n` +
+    `Fix it by hand: cd ${JSON.stringify(bunPkgDir)} && node install.js`,
+  );
+}
+
 /** pgserve's bundled Bun runtime, which the launcher needs for PostgresManager. */
 function resolveBun(): string {
   // Resolve from pgserve's own location so it follows global vs local
   // installs. The `bun` package installs its platform binary as bin/bun.exe
   // on every OS.
   const pgserveRequire = createRequire(requireFromHere.resolve('pgserve/package.json'));
-  const bun = path.join(path.dirname(pgserveRequire.resolve('bun/package.json')), 'bin', 'bun.exe');
+  const bunPkgDir = path.dirname(pgserveRequire.resolve('bun/package.json'));
+  const bun = path.join(bunPkgDir, 'bin', 'bun.exe');
   if (!fs.existsSync(bun)) {
     throw new Error(`pgserve's Bun runtime is missing (${bun}). Reinstall the CLI: npm i -g @withone/cli`);
   }
+  ensureBunRuns(bun, bunPkgDir);
   return bun;
 }
 

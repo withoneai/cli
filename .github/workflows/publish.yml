@@ -39,10 +39,6 @@ jobs:
           # ^22.22.2 || ^24.15.0 || >=26), which broke the publish job.
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org/'
-      # Latest npm for OIDC trusted publishing (the id-token: write flow
-      # below). Compatible now that the job runs on node 22.
-      - name: Install latest npm
-        run: npm install -g npm@latest
       - name: Install dependencies
         run: |
           if [ -f package-lock.json ]; then
@@ -54,5 +50,11 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
+      # Latest npm for OIDC trusted publishing (the id-token: write flow
+      # below). Installed only now: npm 12 blocks dependency install scripts
+      # (better-sqlite3's native build among them), so installing and testing
+      # with it fails where CI, on the runner's npm, passes.
+      - name: Install latest npm
+        run: npm install -g npm@latest
       - name: Publish
         run: npm publish --access public

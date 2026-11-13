@@ -62,3 +62,37 @@ jobs:
       # workflow builds on the release event, where a failure is far more
       # expensive to recover from.
       - run: npm run build
+
+  # Install the packed CLI the way users do, with the newest npm, and start
+  # the memory store. npm 12 blocks dependency install scripts by default,
+  # which left bun as a placeholder and broke the store in a build whose
+  # tests all passed under the runner's npm.
+  install-smoke:
+    name: install smoke (npm latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Install with npm latest
+        run: npx -y npm@latest install --prefix "$RUNNER_TEMP/inst" "$RUNNER_TEMP"/withone-cli-*.tgz
+      - name: Start the memory store and refuse a passwordless login
+        env:
+          ONE_HOME: ${{ runner.temp }}/home
+        run: |
+          set -euo pipefail
+          mkdir -p "$ONE_HOME/.one"
+          echo '{"apiKey":"sk_test_ci_smoke","installedAgents":[]}' > "$ONE_HOME/.one/config.json"
+          one="node $RUNNER_TEMP/inst/node_modules/@withone/cli/bin/cli.js"
+          $one mem add note '{"title":"smoke"}'
+          $one mem list note | grep -q '"smoke"'
+          port=$(node -p "require('$ONE_HOME/.one/pg/.pgserve.json').port")
+          if PGPASSWORD= psql -w "host=127.0.0.1 port=$port user=postgres dbname=postgres sslmode=disable" -c 'select 1'; then
+            echo "::error::The memory store accepted a login with no password."
+            exit 1
+          fi

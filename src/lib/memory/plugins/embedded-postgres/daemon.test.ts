@@ -23,6 +23,7 @@ import { withTempHome, assertHomeIsSandboxed } from '../../../../test-support/ho
 import {
   ensureRunning,
   ensureSecrets,
+  ensureBunRuns,
   choosePort,
   trimLog,
   type DaemonConfig,
@@ -226,6 +227,56 @@ describe('trimLog', () => {
     fs.writeFileSync(log, 'small\n');
     trimLog(log, 100_000, 10_000);
     assert.equal(fs.readFileSync(log, 'utf8'), 'small\n');
+  });
+});
+
+// ─── ensureBunRuns ──────────────────────────────────────────────────────────
+
+describe('ensureBunRuns', () => {
+  const PLACEHOLDER = { status: 1, output: "Error: Bun's postinstall script was not run." };
+
+  it('leaves a working Bun alone', () => {
+    const calls: string[][] = [];
+    ensureBunRuns('/b/bin/bun.exe', '/b', (cmd, args) => { calls.push([cmd, ...args]); return { status: 0, output: '1.3.13' }; });
+    assert.deepEqual(calls, [['/b/bin/bun.exe', '--version']]);
+  });
+
+  it("runs Bun's install script when npm blocked it, then uses Bun", () => {
+    // npm 12 blocks dependency install scripts, leaving bun's placeholder.
+    let installed = false;
+    const calls: string[] = [];
+    ensureBunRuns('/b/bin/bun.exe', '/b', (cmd, args, cwd) => {
+      calls.push(`${path.basename(cmd)} ${args.map((a) => path.basename(a)).join(' ')}${cwd ? ` @${cwd}` : ''}`);
+      if (args[0]?.endsWith('install.js')) { installed = true; return { status: 0, output: '' }; }
+      return installed ? { status: 0, output: '1.3.13' } : PLACEHOLDER;
+    });
+    assert.deepEqual(calls, ['bun.exe --version', `${path.basename(process.execPath)} install.js @/b`, 'bun.exe --version']);
+  });
+
+  it('treats the placeholder failing to execute (ENOEXEC) the same way', () => {
+    let installed = false;
+    ensureBunRuns('/b/bin/bun.exe', '/b', (_cmd, args) => {
+      if (args[0]?.endsWith('install.js')) { installed = true; return { status: 0, output: '' }; }
+      return installed ? { status: 0, output: '1.3.13' } : { status: null, output: 'spawnSync /b/bin/bun.exe ENOEXEC' };
+    });
+    assert.equal(installed, true);
+  });
+
+  it('says how to fix it when the install script does not help', () => {
+    assert.throws(
+      () => ensureBunRuns('/b/bin/bun.exe', '/b', (_cmd, args) =>
+        args[0]?.endsWith('install.js') ? { status: 1, output: 'network down' } : PLACEHOLDER),
+      (err: Error) => /network down/.test(err.message) && /node install\.js/.test(err.message),
+    );
+  });
+
+  it('does not run the install script for other failures', () => {
+    const calls: string[][] = [];
+    assert.throws(
+      () => ensureBunRuns('/b/bin/bun.exe', '/b', (cmd, args) => { calls.push([cmd, ...args]); return { status: 132, output: 'Illegal instruction' }; }),
+      /Illegal instruction/,
+    );
+    assert.equal(calls.length, 1);
   });
 });
 
