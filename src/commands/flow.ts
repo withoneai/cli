@@ -4,7 +4,9 @@ import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
-import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash, flowUsesCodeModules, walkSteps } from '../lib/flow-runner.js';
+import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash, flowUsesCodeModules, walkSteps, flowWritesOf } from '../lib/flow-runner.js';
+import { resolveActionDetails } from '../lib/action-details.js';
+import { WRITE_CONFIRMATION_HINT } from '../lib/access-gate.js';
 import type { DryResolvedStep, DryResolvedRef } from '../lib/flow-engine.js';
 import type { Flow, FlowEvent, StepResult } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
@@ -236,9 +238,42 @@ export async function flowCreateCommand(
   output.outro(`Validate: ${pc.cyan(`one flow validate ${flow!.key}`)}\nExecute:  ${pc.cyan(`one flow execute ${flow!.key}`)}`);
 }
 
+/**
+ * In agent mode a flow that writes runs only with --confirm-write, the same
+ * rule as `actions execute`. The writes are listed before any step runs; the
+ * API client then refuses any write the listing could not see.
+ */
+async function confirmFlowWrites(
+  flow: Flow,
+  api: OneApi,
+  options: { confirmWrite?: boolean; dryRun?: boolean; stopAfter?: string },
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  if (!output.isAgentMode() || options.confirmWrite) return;
+  // A plain dry run sends nothing; with --stop-after it runs earlier steps for real.
+  if (options.dryRun && !options.stopAfter) return;
+  api.requireWriteConfirmation = true;
+  let writes;
+  try {
+    writes = await flowWritesOf(flow, async id => (await resolveActionDetails(api, id)).details.method);
+  } catch {
+    return; // an action or sub-flow that can't be read fails in the run itself; the client still refuses writes
+  }
+  if (writes.length === 0) return;
+  output.json({
+    status: 'confirmation_required',
+    error: `Workflow "${flow.key}" has ${writes.length} step(s) that write and need --confirm-write in agent mode. Nothing was run.`,
+    flowKey: flow.key,
+    ...extra,
+    writes,
+    _hint: WRITE_CONFIRMATION_HINT,
+  });
+  process.exit(1);
+}
+
 export async function flowExecuteCommand(
   keyOrPath: string,
-  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; allowCode?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string },
+  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; allowCode?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string; confirmWrite?: boolean },
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -319,6 +354,8 @@ export async function flowExecuteCommand(
       output.error(msg);
     }
   }
+
+  await confirmFlowWrites(flow, api, options);
 
   const inputs = parseInputs(options.input || []);
   const resolvedInputs = await autoResolveConnectionInputs(flow, inputs, api);
@@ -577,7 +614,7 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
 
 export async function flowResumeCommand(
   runId: string,
-  options: { allowBash?: boolean; allowCode?: boolean } = {},
+  options: { allowBash?: boolean; allowCode?: boolean; confirmWrite?: boolean } = {},
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -625,6 +662,8 @@ export async function flowResumeCommand(
     }
     output.error(msg);
   }
+
+  await confirmFlowWrites(flow, api, options, { runId });
 
   const runner = FlowRunner.fromRunState(state!);
 

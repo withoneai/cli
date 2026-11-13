@@ -94,11 +94,13 @@ describe('execute _preflight contract (agent mode)', () => {
     lines = [];
     originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: any, ...rest: any[]) => {
-      const s = typeof chunk === 'string' ? chunk : String(chunk);
-      // Capture (and swallow) agent-mode JSON; forward everything else so the
-      // test reporter, which shares this stdout, still prints normally.
-      if (s.trim().startsWith('{')) { lines.push(s); return true; }
-      return (originalWrite as any)(chunk, ...rest);
+      // The command's output is strings; the test runner's own messages are
+      // Buffers. Keep the JSON lines, drop the command's human output (in a
+      // child test process it lands between the runner's messages and breaks
+      // them), and pass the runner's Buffers through untouched.
+      if (typeof chunk !== 'string') return (originalWrite as any)(chunk, ...rest);
+      if (chunk.trim().startsWith('{')) lines.push(chunk);
+      return true;
     }) as typeof process.stdout.write;
 
     // Any process.exit during a success path is a bug — surface it as a throw.

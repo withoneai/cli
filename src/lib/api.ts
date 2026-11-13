@@ -1,5 +1,5 @@
 import { callerHeaders } from './caller.js';
-import { checkPassthroughAccess, IDENTITY_HEADERS } from './access-gate.js';
+import { checkPassthroughAccess, IDENTITY_HEADERS, AccessDeniedError, writeMethodOf, WRITE_CONFIRMATION_HINT } from './access-gate.js';
 import { getAccessControlFromAllSources } from './config.js';
 import { createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
@@ -95,6 +95,12 @@ export class OneApi {
    * Read from config and `.onerc` at call time unless a caller supplies them.
    */
   private accessSettings?: AccessControlSettings;
+  /**
+   * Set by commands that run writes an agent did not spell out one by one
+   * (flows): when true, a request that writes is refused unless the user
+   * confirmed writes with --confirm-write. See WRITE_CONFIRMATION_HINT.
+   */
+  requireWriteConfirmation = false;
 
   constructor(private apiKey: string, apiBase?: string, accessSettings?: AccessControlSettings) {
     this.accessSettings = accessSettings;
@@ -432,6 +438,15 @@ export class OneApi {
       method,
       headers: args.headers,
     });
+
+    if (this.requireWriteConfirmation && !args.dryRun) {
+      const writeMethod = writeMethodOf(method, args.headers);
+      if (writeMethod) {
+        throw new AccessDeniedError(
+          `${writeMethod} action "${action.title ?? action._id}" needs --confirm-write in agent mode. ${WRITE_CONFIRMATION_HINT}`
+        );
+      }
+    }
 
     const requestHeaders: Record<string, string> = {
       'Content-Type': contentType,

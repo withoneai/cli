@@ -105,9 +105,13 @@ describe('agent-mode writes need an explicit flag', () => {
     lines = [];
     write = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: any, ...rest: any[]) => {
-      const s = typeof chunk === 'string' ? chunk : String(chunk);
-      if (s.trim().startsWith('{')) { lines.push(s); return true; }
-      return (write as any)(chunk, ...rest);
+      // The command's output is strings; the test runner's own messages are
+      // Buffers. Keep the JSON lines, drop the command's human output (in a
+      // child test process it lands between the runner's messages and breaks
+      // them), and pass the runner's Buffers through untouched.
+      if (typeof chunk !== 'string') return (write as any)(chunk, ...rest);
+      if (chunk.trim().startsWith('{')) lines.push(chunk);
+      return true;
     }) as typeof process.stdout.write;
     exit = process.exit;
     process.exit = ((code?: number) => { throw new Exit(code); }) as typeof process.exit;
