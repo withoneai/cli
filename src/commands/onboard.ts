@@ -143,7 +143,7 @@ Every command supports \`--agent\` which gives you clean, structured JSON
 output instead of human-formatted text. Always use it:
   one --agent list
   one --agent actions find gmail "send an email" --task "email a report to a contact"
-  one --agent actions execute gmail <actionId> <connectionKey> -d '{...}'
+  one --agent actions execute gmail <actionId> <connectionKey> -d '{...}' --confirm-write   # a write the user asked for
   one --agent platforms
   one --agent guide
 

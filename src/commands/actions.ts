@@ -4,6 +4,7 @@ import { OneApi, ApiError, isActionAllowed, isMethodAllowed } from '../lib/api.j
 import * as output from '../lib/output.js';
 import type { PermissionLevel, ActionDetails, FindIntent } from '../lib/types.js';
 import { validateActionInput } from '../lib/validate.js';
+import { writeMethodOf, WRITE_CONFIRMATION_HINT } from '../lib/access-gate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import {
   find,
@@ -201,6 +202,7 @@ export async function actionsExecuteCommand(
     skipValidation?: boolean;
     output?: string;
     cache?: boolean;
+    confirmWrite?: boolean;
   }
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
@@ -313,6 +315,18 @@ export async function actionsExecuteCommand(
       return;
     }
 
+    // In agent mode a write runs only with --confirm-write (see WRITE_CONFIRMATION_HINT).
+    const writeMethod = writeMethodOf(actionDetails.method, headers);
+    if (output.isAgentMode() && writeMethod && !options.dryRun && !options.confirmWrite) {
+      output.json({
+        status: 'confirmation_required',
+        error: `${writeMethod} actions need --confirm-write in agent mode.`,
+        request: { platform, actionId, title: actionDetails.title, method: writeMethod, connectionKey },
+        _hint: WRITE_CONFIRMATION_HINT,
+      });
+      process.exit(1);
+    }
+
     const execSpinner = output.createSpinner();
     execSpinner.start(options.dryRun ? 'Building request...' : 'Executing action...');
 
@@ -407,6 +421,7 @@ interface GlobalParallelFlags {
   skipValidation: boolean;
   maxConcurrency: number;
   useCache: boolean;
+  confirmWrite: boolean;
 }
 
 interface SegmentResult {
@@ -442,12 +457,13 @@ function parseParallelSegments(): { segments: ParsedSegment[]; flags: GlobalPara
   const raw = argv.slice(execIdx + 1);
 
   // Strip global flags and collect their values
-  const flags: GlobalParallelFlags = { dryRun: false, mock: false, skipValidation: false, maxConcurrency: 5, useCache: true };
+  const flags: GlobalParallelFlags = { dryRun: false, mock: false, skipValidation: false, maxConcurrency: 5, useCache: true, confirmWrite: false };
   const cleaned: string[] = [];
   for (let i = 0; i < raw.length; i++) {
     const t = raw[i];
     if (t === '--parallel' || t === '--agent') continue;
     if (t === '--dry-run') { flags.dryRun = true; continue; }
+    if (t === '--confirm-write') { flags.confirmWrite = true; continue; }
     if (t === '--mock') { flags.mock = true; continue; }
     if (t === '--skip-validation') { flags.skipValidation = true; continue; }
     if (t === '--no-cache') { flags.useCache = false; continue; }
@@ -633,6 +649,29 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
     }
     console.log();
     output.error(`Validation failed for ${errors.length} segment(s). Fix errors above before executing.`);
+  }
+
+  // In agent mode, writes in a batch run only with --confirm-write.
+  if (output.isAgentMode() && !flags.dryRun && !flags.mock && !flags.confirmWrite) {
+    const writes = prepared
+      .map(a => ({ a, method: writeMethodOf(a.actionDetails.method, a.headers) }))
+      .filter((w): w is { a: PreparedAction; method: string } => w.method !== null);
+    if (writes.length > 0) {
+      output.json({
+        status: 'confirmation_required',
+        error: `${writes.length} segment(s) write and need --confirm-write in agent mode. Nothing was run.`,
+        writes: writes.map(({ a, method }) => ({
+          segment: a.index + 1,
+          platform: a.segment.platform,
+          actionId: a.segment.actionId,
+          title: a.actionDetails.title,
+          method,
+          connectionKey: a.segment.connectionKey,
+        })),
+        _hint: WRITE_CONFIRMATION_HINT,
+      });
+      process.exit(1);
+    }
   }
 
   // ── Phase 3: execute ──

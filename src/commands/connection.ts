@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
-import { checkManagementAccess } from '../lib/access-gate.js';
+import { checkManagementAccess, DELETE_CONFIRMATION_HINT } from '../lib/access-gate.js';
 import { OneApi, TimeoutError, PERMISSION_METHODS } from '../lib/api.js';
 import {
   resolveAllowedActions,
@@ -381,8 +381,19 @@ export async function connectionDeleteCommand(
   const connection = match;
   spinner.stop(`Found ${connection.platform} (${connection.state})`);
 
-  // Confirmation prompt (skip in agent mode or with --force)
-  if (!output.isAgentMode() && !options?.force) {
+  // In agent mode a delete runs only with --force (see DELETE_CONFIRMATION_HINT).
+  if (output.isAgentMode() && !options?.force) {
+    output.json({
+      status: 'confirmation_required',
+      error: 'Deleting a connection needs --force in agent mode.',
+      connection: { platform: connection.platform, key: connection.key, state: connection.state },
+      _hint: DELETE_CONFIRMATION_HINT,
+    });
+    process.exit(1);
+  }
+
+  // Confirmation prompt (skip with --force)
+  if (!options?.force) {
     console.log();
     console.log(`  ${getStatusIndicator(connection.state)} ${connection.platform}  ${pc.dim(connection.key)}`);
     console.log();
