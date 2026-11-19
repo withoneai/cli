@@ -580,6 +580,7 @@ Environment variables: ONE_SECRET (their One API key) and ${connEnv} (the key of
 \`\`\`typescript
 const response = await fetch("${base}/passthrough${path}", {
 method: "${method}",
+redirect: "error",
 headers: {
 "x-one-secret": process.env.ONE_SECRET,
 "x-one-connection-key": process.env.${connEnv},

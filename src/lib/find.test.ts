@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 
 import {
   EXECUTE_GUIDE,
@@ -268,6 +269,7 @@ describe('misplaced intent', () => {
     assert.ok(pick.knowledge.includes(LARGE), 'the whole document, not a digest');
     assert.ok(pick.knowledge.includes('URL:    https://api.withone.ai/v1/passthrough/v1/custom'));
     assert.ok(pick.knowledge.includes('This is a custom action'));
+    assert.match(pick.knowledge, /redirect: "error"/);
     assert.deepEqual(result.answers[0].alsoSelected.map((a) => a.actionId), ['b']);
     assert.match(result.guide ?? '', /INTEGRATION CODE GUIDE/);
   });
@@ -344,6 +346,52 @@ describe('actions load', () => {
     const result = await load(['x'], {}, unplaced, settings({ connectionKeys: ['k'], knowledgeAgent: true }));
 
     assert.match((result.loaded[0] as DocumentedAction).knowledge, /ONE_PLATFORM_CONNECTION_KEY/);
+    assert.match((result.loaded[0] as DocumentedAction).knowledge, /redirect: "error"/);
+  });
+
+  it('generated fetch code refuses a foreign redirect without sending credentials', async () => {
+    let sourceRequests = 0;
+    let targetRequests = 0;
+    let sourceHeaders: http.IncomingHttpHeaders | undefined;
+    const target = http.createServer((_req, res) => { targetRequests++; res.end('{}'); });
+    await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve));
+    const targetAddress = target.address();
+    assert.ok(targetAddress && typeof targetAddress !== 'string');
+    const source = http.createServer((req, res) => {
+      sourceRequests++;
+      sourceHeaders = req.headers;
+      res.writeHead(307, { Location: `http://127.0.0.1:${targetAddress.port}/capture` });
+      res.end();
+    });
+    try {
+      await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+      const sourceAddress = source.address();
+      assert.ok(sourceAddress && typeof sourceAddress !== 'string');
+      const unplaced: FindDeps = {
+        ...deps([]),
+        getActionDetails: async (id: string): Promise<ActionDetails> => ({ _id: id, title: 'X', method: 'GET', path: '/x', knowledge: '# X' }),
+      };
+      const result = await load(['x'], {}, unplaced, settings({
+        knowledgeAgent: true,
+        apiBase: `http://127.0.0.1:${sourceAddress.port}/v1`,
+      }));
+      const guide = (result.loaded[0] as DocumentedAction).knowledge;
+      const snippet = guide.match(/```typescript\n([\s\S]*?)\n```/)?.[1];
+      assert.ok(snippet);
+      const run = new Function('fetch', 'process', `return (async () => { ${snippet} return response; })()`);
+      await assert.rejects(run(fetch, { env: { ONE_SECRET: 'dummy-secret', ONE_PLATFORM_CONNECTION_KEY: 'dummy-connection' } }));
+      assert.equal(sourceRequests, 1);
+      assert.equal(sourceHeaders?.['x-one-secret'], 'dummy-secret');
+      assert.equal(sourceHeaders?.['x-one-connection-key'], 'dummy-connection');
+      assert.equal(targetRequests, 0);
+    } finally {
+      source.closeAllConnections();
+      target.closeAllConnections();
+      await Promise.all([
+        new Promise<void>(resolve => source.close(() => resolve())),
+        new Promise<void>(resolve => target.close(() => resolve())),
+      ]);
+    }
   });
 
   it('serves the first document it actually returns, however large, even after a refused entry', async () => {
