@@ -142,7 +142,7 @@ Request specific sections:
 - Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+. Older Node trusts the compromised eMudhra CA certificates, so every command exits 1 there with \`"code": "NODE_UPGRADE_REQUIRED"\` and an \`upgrade\` field holding the command for the user's setup. Don't retry: show the user that command and ask them to update Node.js
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
-- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`, plus a \`level\`: full, read-write, read-only, custom, none) — what One enforces for this key, narrowed by \`one config\`. Read it before planning so you don't propose an action that will be refused. \`accessSource: "local"\` means One did not report it, so it is unverified
+- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`, plus a \`level\`: full, read-write, read-only, write-only, custom, none) — what One enforces for this key, narrowed by \`one config\`. In an organization, \`viewerAccessLevel\` is the person's own level (their share or App Controls) and \`effectiveLevel\` what a call can really do under both. Read them before planning so you don't propose an action that will be refused. \`accessSource: "local"\` means One did not report it, so it is unverified
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 - Building an app whose users connect their own tools? \`one skills add connect\` (run inside the app) installs the One Connect skill from the \`@withone/connect\` version the app uses, into \`.agents/skills/one-connect\` and \`.claude/skills/one-connect\`. \`one --agent skills list\` shows what is installed; any \`one\` command in the project refreshes it after an SDK upgrade
 `;
@@ -159,13 +159,15 @@ Always follow this sequence. Never execute without reading the action's document
 one --agent connection list
 \`\`\`
 
-Returns platforms, status, connection keys, tags, and an \`access\` field per connection: what One enforces for this key (the consent page's choices, or the dashboard's), narrowed by \`one config\`. \`access.level\` names it as the consent page does (full, read-write, read-only, custom, none):
+Returns platforms, status, connection keys, tags, and an \`access\` field per connection: what One enforces for this key (the consent page's choices, or the dashboard's), narrowed by \`one config\`. \`access.level\` names it as the consent page does (full, read-write, read-only, write-only, custom, none):
 
 | \`access\` | Meaning |
 |----------|---------|
 | \`{"policy": "full"}\` | Every action on the connection |
-| \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
+| \`{"policy": "methods", "methods": ["GET"], "access": ["read"]}\` | Only actions at the levels in \`access\` will execute. One judges an action by what it does (\`read\`, \`write\`, \`delete\`), not its HTTP method, so a POST search runs under \`read\` |
 | \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly: \`actions load <actionId>\` reads their docs, no find needed |
+
+In an organization, an admin may share an app with you at a lower level, or cap it with App Controls. Then the connection also carries \`viewerAccessLevel\` (\`none\`, \`read\`, \`write\`, \`read_write\`, \`full\`, \`custom\`): the most you may run through it. One holds every call to both it and \`access\`, and \`effectiveLevel\` names what that leaves, in \`access.level\`'s words. Plan by \`effectiveLevel\`. An older API sends neither.
 
 \`accessSource\` is \`server\` when One reported it, \`local\` when it could not (then it is unverified). Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read the docs and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
 

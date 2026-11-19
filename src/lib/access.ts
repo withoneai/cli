@@ -17,10 +17,12 @@ import { PERMISSION_METHODS } from './api.js';
 import { resolveActionDetails } from './action-details.js';
 import type {
   AccessLevel,
+  ActionLevel,
   ConnectionAccess,
   KeyAccessDocument,
   PermissionLevel,
   ResolvedAllowedAction,
+  ViewerAccessLevel,
 } from './types.js';
 
 /**
@@ -84,7 +86,7 @@ export function computeConnectionAccess(
 
   const methods = PERMISSION_METHODS[permissions];
   if (methods !== null) {
-    return { policy: 'methods', methods };
+    return methodsAccess(methods);
   }
 
   return { policy: 'full' };
@@ -189,34 +191,109 @@ export function envelopeToAccess(
     };
   }
   if (envelope.methods !== null) {
-    return { access: { policy: 'methods', methods: envelope.methods.map(m => m.toUpperCase()) }, unresolved: [] };
+    return { access: methodsAccess(envelope.methods.map(m => m.toUpperCase())), unresolved: [] };
   }
   return { access: { policy: 'full' }, unresolved: [] };
 }
 
-const READ_WRITE = ['GET', 'PATCH', 'POST', 'PUT'];
+const ACTION_LEVELS: ActionLevel[] = ['read', 'write', 'delete'];
 
-/** The consent page's name for an access: Full access, Read & write, Read only, Custom, No access. */
+/** The level One reads a method as; HEAD and the like stand for none. */
+function levelOfMethod(method: string): ActionLevel | null {
+  switch (method.toUpperCase()) {
+    case 'GET':
+      return 'read';
+    case 'POST':
+    case 'PUT':
+    case 'PATCH':
+      return 'write';
+    case 'DELETE':
+      return 'delete';
+    default:
+      return null;
+  }
+}
+
+/** A method-scoped access, with the levels its methods stand for. */
+function methodsAccess(methods: string[]): ConnectionAccess {
+  const levels = new Set(methods.map(levelOfMethod));
+  return { policy: 'methods', methods, access: ACTION_LEVELS.filter(l => levels.has(l)) };
+}
+
+/** The name for a set of levels; a set no name covers is custom. */
+function levelOfSet(levels: Set<ActionLevel>): AccessLevel {
+  const key = ACTION_LEVELS.filter(l => levels.has(l)).join(',');
+  switch (key) {
+    case '':
+      return 'none';
+    case 'read':
+      return 'read-only';
+    case 'write':
+      return 'write-only';
+    case 'read,write':
+      return 'read-write';
+    case 'read,write,delete':
+      return 'full';
+    default:
+      return 'custom';
+  }
+}
+
+/** The consent page's name for an access, judged by level as One judges it. */
 export function accessLevel(access: ConnectionAccess): AccessLevel {
   switch (access.policy) {
     case 'full':
       return 'full';
-    case 'methods': {
-      const set = [...new Set(access.methods.map(m => m.toUpperCase()))].sort();
-      if (set.length === 0) return 'none';
-      if (set.length === 1 && set[0] === 'GET') return 'read-only';
-      if (set.join(',') === READ_WRITE.join(',')) return 'read-write';
-      return 'custom';
-    }
+    case 'methods':
+      return levelOfSet(new Set(access.methods.map(levelOfMethod).filter((l): l is ActionLevel => l !== null)));
     case 'actions':
       return access.actions.length === 0 ? 'none' : 'custom';
   }
+}
+
+const VIEWER_LEVELS: Record<ViewerAccessLevel, ActionLevel[] | null> = {
+  none: [],
+  read: ['read'],
+  write: ['write'],
+  read_write: ['read', 'write'],
+  full: ['read', 'write', 'delete'],
+  custom: null,
+};
+
+/**
+ * What a call through the connection may really do: the key's access held to
+ * the person's own level, as One holds it. An action list, or a custom share,
+ * names actions a level cannot, so either stays custom unless the other is none.
+ */
+export function heldLevel(access: ConnectionAccess, viewer: ViewerAccessLevel | undefined): AccessLevel {
+  const own = accessLevel(access);
+  if (!viewer || viewer === 'full' || own === 'none') return own;
+  const allowed = VIEWER_LEVELS[viewer];
+  if (allowed?.length === 0) return 'none';
+  if (allowed === null || access.policy === 'actions') return 'custom';
+  const keyLevels = access.policy === 'full' ? ACTION_LEVELS : access.access;
+  return levelOfSet(new Set(keyLevels.filter(l => allowed.includes(l))));
+}
+
+const VIEWER_LABELS: Record<ViewerAccessLevel, string> = {
+  none: 'No access',
+  read: 'Read only',
+  write: 'Write only',
+  read_write: 'Read & write',
+  full: 'Full access',
+  custom: 'Custom',
+};
+
+/** The dashboard's name for a person's own level on a connection. */
+export function viewerLevelLabel(level: ViewerAccessLevel): string {
+  return VIEWER_LABELS[level];
 }
 
 const LEVEL_LABELS: Record<AccessLevel, string> = {
   full: 'Full access',
   'read-write': 'Read & write',
   'read-only': 'Read only',
+  'write-only': 'Write only',
   custom: 'Custom',
   none: 'No access',
 };
@@ -236,7 +313,7 @@ export function formatAccess(access: ConnectionAccess, maxActions = 2): string {
     case 'full':
       return LEVEL_LABELS.full;
     case 'methods':
-      return access.methods.join(', ');
+      return access.access.map(l => l[0].toUpperCase() + l.slice(1)).join(', ');
     case 'actions': {
       if (access.actions.length === 0) return 'none';
       const shown = access.actions.slice(0, maxActions).map(a => `${a.title} (${a.method})`);

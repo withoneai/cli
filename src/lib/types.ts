@@ -75,13 +75,25 @@ export interface GrantedAction {
  * `one list` answers "what can I do here" without a search. Same shape as the
  * MCP server's `ConnectionAccess` (`policy` discriminant):
  * - `full`: every action on the connection.
- * - `methods`: only actions whose HTTP method is in the set.
+ * - `methods`: only actions at the levels the methods stand for, in `access`
+ *   (GET is `read`, POST/PUT/PATCH `write`, DELETE `delete`). One judges an
+ *   action by its level, not its HTTP method, so a POST search runs under `read`.
  * - `actions`: only these specific actions.
  */
 export type ConnectionAccess =
   | { policy: 'full' }
-  | { policy: 'methods'; methods: string[] }
+  | { policy: 'methods'; methods: string[]; access: ActionLevel[] }
   | { policy: 'actions'; actions: GrantedAction[] };
+
+/** What an action does, as One classifies it and judges a grant by. */
+export type ActionLevel = 'read' | 'write' | 'delete';
+
+/**
+ * The most a person may run through a connection, as their share or their
+ * organization's App Controls hold them (`viewerAccessLevel` on
+ * `GET /v1/connections`). A call is held to both this and the key's access.
+ */
+export type ViewerAccessLevel = 'none' | 'read' | 'write' | 'read_write' | 'full' | 'custom';
 
 /**
  * One rule of the key's server-side access, as `GET /v1/access/me` answers it.
@@ -106,7 +118,7 @@ export interface KeyAccessDocument {
 }
 
 /** The access level a person picks on the consent page, for display. */
-export type AccessLevel = 'full' | 'read-write' | 'read-only' | 'custom' | 'none';
+export type AccessLevel = 'full' | 'read-write' | 'read-only' | 'write-only' | 'custom' | 'none';
 
 /**
  * An allowlisted action id resolved to its metadata, including the platform it

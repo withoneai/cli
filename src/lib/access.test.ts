@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { computeConnectionAccess, formatAccess, resolveAllowedActions } from './access.js';
-import type { ActionDetails, ResolvedAllowedAction } from './types.js';
+import { computeConnectionAccess, envelopeToAccess, formatAccess, heldLevel, resolveAllowedActions } from './access.js';
+import type { ActionDetails, ConnectionAccess, ResolvedAllowedAction } from './types.js';
+
+/** A method-scoped access, as `one list` builds it. */
+const methods = (list: string[]): ConnectionAccess =>
+  envelopeToAccess({ reachable: true, methods: list, actionIds: null }, []).access;
 import { setHomeTo, snapshotHomeEnv, restoreHomeEnv, type HomeEnvSnapshot } from '../test-support/home.js';
 
 const granted: ResolvedAllowedAction[] = [
@@ -24,11 +28,11 @@ describe('computeConnectionAccess', () => {
   it('reports the method set for a non-admin permission level', () => {
     assert.deepEqual(
       computeConnectionAccess('gmail', 'read', ['*'], []),
-      { policy: 'methods', methods: ['GET'] }
+      { policy: 'methods', methods: ['GET'], access: ['read'] }
     );
     assert.deepEqual(
       computeConnectionAccess('gmail', 'write', ['*'], []),
-      { policy: 'methods', methods: ['GET', 'POST', 'PUT', 'PATCH'] }
+      { policy: 'methods', methods: ['GET', 'POST', 'PUT', 'PATCH'], access: ['read', 'write'] }
     );
   });
 
@@ -52,11 +56,18 @@ describe('computeConnectionAccess', () => {
 describe('formatAccess', () => {
   it('renders each policy for the table', () => {
     assert.equal(formatAccess({ policy: 'full' }), 'Full access');
-    assert.equal(formatAccess({ policy: 'methods', methods: ['GET'] }), 'Read only');
-    assert.equal(formatAccess({ policy: 'methods', methods: ['GET', 'POST', 'PUT', 'PATCH'] }), 'Read & write');
-    assert.equal(formatAccess({ policy: 'methods', methods: ['GET', 'POST'] }), 'GET, POST');
-    assert.equal(formatAccess({ policy: 'methods', methods: [] }), 'No access');
+    assert.equal(formatAccess(methods(['GET'])), 'Read only');
+    assert.equal(formatAccess(methods(['GET', 'POST', 'PUT', 'PATCH'])), 'Read & write');
+    assert.equal(formatAccess(methods([])), 'No access');
     assert.equal(formatAccess({ policy: 'actions', actions: [] }), 'No access');
+  });
+
+  it('names methods by the levels they stand for, as One judges them', () => {
+    assert.equal(formatAccess(methods(['GET', 'POST'])), 'Read & write');
+    assert.equal(formatAccess(methods(['POST'])), 'Write only');
+    assert.equal(formatAccess(methods(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])), 'Full access');
+    assert.equal(formatAccess(methods(['GET', 'DELETE'])), 'Read, Delete');
+    assert.equal(formatAccess(methods(['HEAD'])), 'No access');
   });
 
   it('truncates long action lists', () => {
@@ -65,6 +76,37 @@ describe('formatAccess', () => {
       formatAccess({ policy: 'actions', actions }),
       'Send Email (POST), List Messages (GET) +1 more'
     );
+  });
+});
+
+describe('heldLevel', () => {
+  const full: ConnectionAccess = { policy: 'full' };
+  const send: ConnectionAccess = { policy: 'actions', actions: [{ actionId: 'a1', title: 'Send Email', method: 'POST' }] };
+
+  it('is the key\'s level when nothing holds the person, or an older API sent no level', () => {
+    assert.equal(heldLevel(full, undefined), 'full');
+    assert.equal(heldLevel(full, 'full'), 'full');
+    assert.equal(heldLevel(methods(['GET']), 'full'), 'read-only');
+  });
+
+  it('holds a full key to a lower share', () => {
+    assert.equal(heldLevel(full, 'read'), 'read-only');
+    assert.equal(heldLevel(full, 'read_write'), 'read-write');
+    assert.equal(heldLevel(full, 'write'), 'write-only');
+    assert.equal(heldLevel(full, 'none'), 'none');
+  });
+
+  it('is the lower of the key and the share', () => {
+    assert.equal(heldLevel(methods(['GET']), 'read_write'), 'read-only');
+    assert.equal(heldLevel(methods(['GET', 'POST', 'PUT', 'PATCH']), 'read'), 'read-only');
+    assert.equal(heldLevel(methods(['POST']), 'read'), 'none');
+  });
+
+  it('stays custom where a level cannot name the actions', () => {
+    assert.equal(heldLevel(full, 'custom'), 'custom');
+    assert.equal(heldLevel(send, 'read'), 'custom');
+    assert.equal(heldLevel(send, 'none'), 'none');
+    assert.equal(heldLevel(methods([]), 'custom'), 'none');
   });
 });
 
