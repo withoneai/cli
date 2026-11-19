@@ -8,15 +8,16 @@ Nothing about a flow's runtime requirements is guessable from its name. Before `
 
 1. **Recommended:** `one --agent flow list` — the JSON output includes `requiresBash`, `usesCodeModules`, `inputs` (with `autoResolvable`), `stepTypes`, and the flow's `description`. Fastest path to knowing what you need.
 2. Read the flow's `description` field from the JSON. Authors are required (see "Author conventions" below) to state `--allow-bash` requirements and non-auto-resolving inputs there.
-3. `one --agent flow execute <key> --dry-run` to resolve every step's interpolations and see what they evaluate to — without side effects (see "Debugging a flow" below).
+3. `one --agent flow execute <key> --dry-run` to resolve every step's interpolations and see what they evaluate to, without running any step (see "Debugging a flow" below). A dry run still needs every required input and the same `--allow-bash`/`--allow-code` flags as a real run, and it records a run under `.one/flows/.runs/`.
 
-If you skip this, you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* — the CLI pre-flights and fails fast, but the error is entirely avoidable by reading first.
+If you skip this, you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* (or the same for `code.module` steps and `--allow-code`) — the CLI pre-flights and fails fast, but the error is entirely avoidable by reading first.
 
 ## Author conventions — write flows that are safe to execute blind
 
 The `description` field is the contract with future executors. It MUST state:
 
 - **`--allow-bash` if any step is type `bash`.** e.g. *"Fetches recent Gmail and summarizes with Claude Haiku. Requires `--allow-bash`."*
+- **`--allow-code` if any code step uses `code.module`.** Modules run with full Node access, so they are gated like bash.
 - **Every input that does NOT have a `connection` hint.** Connection inputs auto-resolve when exactly one matching connection exists; everything else must be passed via `-i name=value`.
 - **Any files/directories the flow writes to.**
 
@@ -27,7 +28,9 @@ If a flow's description doesn't tell you how to run it, treat that as a bug in t
 - **Folder layout (REQUIRED for new flows):** `.one/flows/<key>/flow.json`, with an optional `lib/` subfolder for `.mjs` code modules. Like a skill — the folder groups the spec with its helper code, so the whole flow is shareable. **Always create new flows here.**
 - **Legacy single-file layout (DEPRECATED):** `.one/flows/<key>.flow.json`. Still loads and runs for backward compatibility, but do not create new flows in this layout. When touching an existing single-file flow, migrate it: move `<key>.flow.json` to `<key>/flow.json`. Move a `code.source` block into a `<key>/lib/*.mjs` module only if it needs files, network or timers: modules run with full Node access and make the flow require `--allow-code`.
 
-`one flow create` always writes the folder layout.
+`one flow create` writes the folder layout (`.one/flows/<key>/flow.json` plus an empty `lib/`), unless `-o <path>` is given or a legacy `<key>.flow.json` already exists, which is then updated in place.
+
+**Groups:** `.one/flows/<group>/<key>/flow.json`, referenced as `group/key` or by the bare key. Only one level of grouping is found by `flow list` and key lookup. A bare key that exists in several groups resolves to the first match without an error, so use `group/key` when keys repeat.
 
 ## Building a Workflow
 
@@ -62,9 +65,11 @@ You MUST read the docs of every action in the workflow — they tell you the exa
 
 ```bash
 one --agent flow create <key> --definition '<json>'
+one --agent flow create <key> --definition @flow.json     # from a file
+cat flow.json | one --agent flow create <key>             # from stdin
 ```
 
-Or write directly to `.one/flows/<key>/flow.json` (folder layout) or the legacy `.one/flows/<key>.flow.json`.
+A positional `<key>` overrides the definition's `key`. Or write directly to `.one/flows/<key>/flow.json`.
 
 ### Code modules (`lib/` folder)
 
@@ -97,11 +102,11 @@ The module runs as a child `node` process: the flow context `$` is piped to stdi
 
 #### Sandbox for inline JavaScript
 
-Every piece of JavaScript written inside `flow.json` runs in a sandbox: `transform.expression`, `condition.expression`, `while.condition`, step-level `if`/`unless`, and `code.source`. A flow file can come from anywhere (a cloned repo, a shared folder, another agent), so this code cannot start programs, read or write files, or see the CLI's own environment.
+Every piece of JavaScript written inside `flow.json` runs in a sandbox: `transform.expression`, `condition.expression`, `while.condition`, step-level `if`/`unless`, and `code.source`. A flow file can come from anywhere (a cloned repo, a shared folder, another agent), so this code cannot start programs or read or write files.
 
-- It runs in a separate `node` process started with Node's permission model (`--permission`), an empty environment, and `eval`/`new Function` turned off.
+- It runs in a separate `node` process started with Node's permission model (`--permission`), an empty environment, and `eval`/`new Function` turned off. The process has no environment of its own, but `$.env` (part of the flow context) still carries the CLI's environment variables, so flow code can read them.
 - `process`, `require` (outside `code.source`), `fetch`, `WebSocket`, `setTimeout`/`setInterval`, `__dirname` and `__filename` are not defined.
-- Inside `code.source`, `await require(name)` loads only these built-ins: `node:buffer`, `node:crypto`, `node:url`, `node:path`. Everything else (`fs`, `http`, `https`, `net`, `child_process`, `process`, `os`, `cluster`, `dgram`, `tls`, `vm`, `worker_threads`) throws `Module "<name>" is blocked in code steps`.
+- Inside `code.source`, `require` is async: `const crypto = await require('crypto')`. It loads only these built-ins: `buffer`, `crypto`, `url`, `path` (with or without `node:`). `fs`, `http`, `https`, `net`, `child_process`, `process`, `os`, `cluster`, `dgram`, `tls`, `vm` and `worker_threads` throw `Module "<name>" is blocked in code steps`; any other name throws `Module "<name>" not available. Allowed: buffer, crypto, url, path`.
 - `$` is a copy of the flow context. Read from it and `return` a result; changing `$` inside a step does not change what later steps see.
 - Values cross into and out of the sandbox by structured clone: `Date`, `Map`, `Set`, `RegExp`, typed arrays and `undefined` survive; functions and symbols cannot be returned and fail the step.
 - Each evaluation has a 30-second limit for synchronous work and 60 seconds overall. A step that runs longer fails with `timed out`.
@@ -110,7 +115,9 @@ These steps need no flag. If you need files, network calls or timers, use a `cod
 
 When an inline `code.source` step throws at runtime, the error message reports the user-relative line and column plus the offending line of source — e.g. `Code step "blowup" failed at line 3:34\n  const c = $.steps.mk.output.data.score;\n  Cannot read properties of null (reading 'score')`. No need to bisect the step manually.
 
-Whatever JSON a module writes to stdout becomes both `$.steps.<id>.output` and `$.steps.<id>.response` (aliases). Downstream steps can reference either.
+Whatever JSON a module writes to stdout becomes both `$.steps.<id>.output` and `$.steps.<id>.response` (aliases). Downstream steps can reference either. Empty stdout gives `undefined`.
+
+Module rules: the path is relative to the flow folder, may not contain `..`, and must end in `.mjs`. The module runs with the flow folder as its working directory. The `$` it reads from stdin has no `env` (the process itself inherits the CLI's environment).
 
 ### Migrating a legacy single-file flow
 
@@ -145,7 +152,9 @@ Two rules: (1) prepend the stdin-read line, (2) replace `return X` with `process
 one --agent flow validate <key>
 ```
 
-`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source`, `transform.expression`, **and external `code.module` `.mjs` files**, and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
+`flow validate` checks the structure (every step has `id`, `name` and `type`; step ids are unique across the whole flow, nested steps included; the key matches `^[a-z0-9][a-z0-9-]*[a-z0-9]$`; numeric fields such as `maxIterations`, `maxConcurrency`, `maxPages` and `timeout` are positive; exactly one of `connection`/`connectionKey` and of `source`/`module`; `requires` entries start with `$.`; no `||`/`&&` in selector fields; `outputSchema` and `fileRead.schema` shapes). It does not check expression syntax in transforms or conditions, pipe names, or whether a sub-flow exists. `--skip-validation` on `flow execute` only skips the action-input checks, not these.
+
+It also parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source`, `transform.expression`, **and external `code.module` `.mjs` files**, and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
 
 ### Step 6: Execute
 
@@ -185,10 +194,12 @@ one --agent flow execute <key> -i connectionKey=xxx -i param=value
 | `required` | Whether input must be provided (default: true) |
 | `default` | Default value if not provided |
 | `description` | Human-readable description |
-| `connection` | `{ "platform": "gmail" }` — enables auto-resolution |
+| `connection` | `{ "platform": "gmail" }` — enables auto-resolution (only `platform` and `tag` keys are allowed) |
 | `enum` | Array of allowed values; rejected if input doesn't match (post-coercion) |
 
-Connection inputs with a `connection` field auto-resolve if the user has exactly one connection for that platform.
+Connection inputs with a `connection` field auto-resolve if the user has exactly one connection for that platform. This happens only for a top-level `flow execute`, not for sub-flow inputs or on `flow resume`.
+
+`-i name=value` values are parsed as JSON when they can be, otherwise kept as strings: `-i n=5` is a number, `-i tags='["a","b"]'` an array, `-i name=Jane` a string.
 
 **Validation, coercion, and enums.** At flow start the engine validates every declared input:
 
@@ -240,10 +251,12 @@ Handlebars interpolations support pipe-based escaping so user-controlled values 
 
 ```json
 {
-  "command": "curl -d {{$.input.payload | json}} https://example.com/{{$.input.slug | url}}",
+  "command": "curl -d {{$.input.payload | shell}} https://example.com/{{$.input.slug | url}}",
   "env": { "GREETING": { "shell": "$.input.name" } }
 }
 ```
+
+In bash commands use `| shell` (it JSON-encodes objects, then single-quotes the result). `| json` inserts raw JSON text, which the shell would mangle; use it for embedding values inside JSON text.
 
 Available pipes:
 
@@ -252,10 +265,10 @@ Available pipes:
 | `json` | `JSON.stringify` (handles quotes, newlines, unicode) | `{{$.x \| json}}` → `"O'Brien & Co."` |
 | `shell` | POSIX-shell-quote (apostrophes use the `'\''` close-reopen trick) | `{{$.x \| shell}}` → `'O'\''Brien & Co.'` |
 | `url` | `encodeURIComponent` | `{{$.x \| url}}` → `O'Brien%20%26%20Co.` |
-| `md` | Escape markdown structural characters (` ` ` * _ { } [ ] ( ) # + - ! \| `) | `{{x \| md}}` |
-| `html` | Entity-escape `& < > " '` | `{{x \| html}}` → `&lt;b&gt;` |
+| `md` | Escape markdown structural characters and backslash (` ` ` * _ { } [ ] ( ) # + - ! \| \\ `) | `{{$.x \| md}}` |
+| `html` | Entity-escape `& < > " '` | `{{$.x \| html}}` → `&lt;b&gt;` |
 
-Pipes can be applied to numbers, booleans, objects, and `null`/`undefined` (which become empty string for shell/url/md/html, `null` for json). An unknown pipe name throws a clear error at flow execution time. Pipes cannot be combined with the legacy `q` prefix — use the pipe form (`{{$.x | shell}}` instead of `{{q $.x}}`).
+Only `$.`-rooted selectors are interpolated; `{{x | md}}` stays literal text. Pipes can be applied to numbers, booleans, objects, and `null`/`undefined` (which become an empty string for url/md/html, `''` (an empty quoted argument) for shell, and `null` for json). An unknown pipe name throws a clear error at flow execution time. Pipes cannot be combined with the legacy `q` prefix — use the pipe form (`{{$.x | shell}}` instead of `{{q $.x}}`).
 
 ### Selectors vs expressions
 
@@ -277,11 +290,14 @@ The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expres
 
 ## Step Types
 
+Every step needs `id`, `name` and `type`, plus the config object for its type. Common optional fields on any step: `if` / `unless` (JS conditions), `onError`, `timeoutMs` (the step fails with `status: "timeout"` and `errorCode: "TIMEOUT"`; the underlying API call or command is not cancelled), `requires` and `outputSchema` (below).
+
 ### `action` — Execute a One API action
 
 ```json
 {
   "id": "findCustomer",
+  "name": "Find customer",
   "type": "action",
   "action": {
     "platform": "stripe",
@@ -304,6 +320,7 @@ The validator rejects an action that sets both forms (or neither) at `flow valid
 ```json
 {
   "id": "extractNames",
+  "name": "Extract names",
   "type": "transform",
   "transform": { "expression": "$.steps.findCustomer.response.data.map(c => c.name)" }
 }
@@ -314,6 +331,7 @@ The validator rejects an action that sets both forms (or neither) at `flow valid
 ```json
 {
   "id": "processData",
+  "name": "Tier customers",
   "type": "code",
   "code": {
     "source": "const customers = $.steps.list.response.data;\nreturn customers.map(c => ({...c, tier: c.spend > 1000 ? 'gold' : 'silver'}));"
@@ -326,20 +344,24 @@ The validator rejects an action that sets both forms (or neither) at `flow valid
 ```json
 {
   "id": "checkFound",
+  "name": "Check customer found",
   "type": "condition",
   "condition": {
     "expression": "$.steps.find.response.data.length > 0",
-    "then": [{ "id": "sendEmail", "type": "action", "action": {...} }],
-    "else": [{ "id": "logNotFound", "type": "transform", "transform": { "expression": "'Not found'" } }]
+    "then": [{ "id": "sendEmail", "name": "Send email", "type": "action", "action": {...} }],
+    "else": [{ "id": "logNotFound", "name": "Log miss", "type": "transform", "transform": { "expression": "'Not found'" } }]
   }
 }
 ```
+
+Output: `{ conditionResult, stepsExecuted }`.
 
 ### `loop` — Iterate over an array
 
 ```json
 {
   "id": "processOrders",
+  "name": "Process each order",
   "type": "loop",
   "loop": {
     "over": "$.steps.listOrders.response.orders",
@@ -349,6 +371,8 @@ The validator rejects an action that sets both forms (or neither) at `flow valid
   }
 }
 ```
+
+Fields: `over` (selector to an array), `as` (the item is `$.loop.<as>`, and also `$.loop.item`; the index is `$.loop.i`, or `$.loop.<indexAs>` with `indexAs`), `maxIterations` (default 1000; extra items are skipped), `maxConcurrency` (default 1, sequential). The loop's `output` is the array of items it iterated, not the step results; `response` is `{ items, iterations: [{ <stepId>: result }, ...] }`. After the loop, `$.steps.<inner>` holds the last iteration's result. A nested loop replaces `$.loop`, so the outer loop's variables aren't visible inside it.
 
 ### `parallel` — Run steps concurrently
 
@@ -391,20 +415,22 @@ Use when fetching from 2+ independent data sources before combining results. Eac
 }
 ```
 
-After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`. Each substep also carries its own result metadata — `$.steps.<id>.status` (`"success"` | `"failed"` | `"timeout"` | `"skipped"`), `.error`, `.errorCode` (e.g. `"TIMEOUT"`), `.durationMs` — so a downstream gate can tell a timed-out substep (retry-able) from one that genuinely returned nothing: `$.steps.fetchEvents.status === 'timeout'`. These substep references resolve at runtime (the engine stores each child in the context) and `flow validate` recognizes them — referencing a parallel/`loop`/`while`/`condition` child from a later step is not a forward-reference error.
+`maxConcurrency` defaults to 5. The parallel step's own `output` is the array of substep results. After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`. Each substep also carries its own result metadata — `$.steps.<id>.status` (`"success"` | `"failed"` | `"timeout"` | `"skipped"`), `.error`, `.errorCode` (e.g. `"TIMEOUT"`), `.durationMs` — so a downstream gate can tell a timed-out substep (retry-able) from one that genuinely returned nothing: `$.steps.fetchEvents.status === 'timeout'`. These substep references resolve at runtime (the engine stores each child in the context) and `flow validate` recognizes them — referencing a parallel/`loop`/`while`/`condition` child from a later step is not a forward-reference error.
 
 ### `file-read` / `file-write` — Filesystem access
 
 ```json
-{ "id": "read", "type": "file-read", "fileRead": { "path": "./data/config.json", "parseJson": true } }
-{ "id": "write", "type": "file-write", "fileWrite": { "path": "./output/results.json", "content": "$.steps.transform.output" } }
+{ "id": "read", "name": "Read config", "type": "file-read", "fileRead": { "path": "./data/config.json", "parseJson": true } }
+{ "id": "write", "name": "Save results", "type": "file-write", "fileWrite": { "path": "./output/results.json", "content": "$.steps.transform.output" } }
 ```
+
+Paths resolve against the directory the CLI runs in, not the flow folder. `file-write` creates parent directories, writes non-string content as pretty JSON, takes `"append": true` to append, and outputs `{ path, bytesWritten }`.
 
 **Validate a read config (`fileRead.schema`).** With `parseJson: true` you can add an optional `schema` that is **enforced at runtime** — a mismatch throws (`errorCode: "SCHEMA_VALIDATION"`) and is handled by the step's `onError`, so a bad config file fails fast with a clear message instead of producing garbage downstream. (This is distinct from `step.outputSchema`, which is documentation/wiring only and never checked at runtime.)
 
 ```json
 {
-  "id": "read", "type": "file-read",
+  "id": "read", "name": "Read config", "type": "file-read",
   "fileRead": {
     "path": "./data/config.json", "parseJson": true,
     "schema": {
@@ -420,50 +446,61 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 }
 ```
 
-Field rules (a richer field-rule format inspired by `outputSchema`): a value is a bare type string (`"string"`, optional) or `{ type, required, enum, items, minItems, maxItems, length, properties }`. Types: `string`/`number`/`boolean`/`object`/`array`/`null`/`unknown` (`unknown` passes anything). **Array constraints (`items`/`minItems`/`maxItems`/`length`) require `type: "array"`, and `properties` requires `type: "object"`** — `flow validate` rejects them otherwise (so they can't silently no-op). All violations are reported in one error; paths are dotted/indexed (`owner.email`, `tags[3]`); a non-object root reports `expected an object at the root but got <type>`. `flow validate` checks the schema's shape (and that `parseJson:true` is set). With `onError: { strategy: "continue" }` the step lands as `{ status: "failed", errorCode: "SCHEMA_VALIDATION" }` so downstream steps can branch on it; `retry`/`fallback` and `retryOn:["SCHEMA_VALIDATION"]` work too.
+Field rules (a richer field-rule format inspired by `outputSchema`): a value is a bare type string (`"string"`, optional) or `{ type, required, enum, items, minItems, maxItems, length, properties }`. Types: `string`/`number`/`boolean`/`object`/`array`/`null`/`unknown` (`unknown` passes anything). **Array constraints (`items`/`minItems`/`maxItems`/`length`) require `type: "array"`, and `properties` requires `type: "object"`** — `flow validate` rejects them otherwise (so they can't silently no-op). All violations are reported in one error; paths are dotted/indexed (`owner.email`, `tags[3]`); a non-object root reports `expected an object at the root but got <type>`. `flow validate` checks the schema's shape (and that `parseJson:true` is set). With `onError: { strategy: "continue" }` the step lands as `{ status: "failed", errorCode: "SCHEMA_VALIDATION" }` so downstream steps can branch on it; `retry` and `retryOn:["SCHEMA_VALIDATION"]` work too.
 
 ### `while` — Condition-driven loop (do-while)
 
 ```json
 {
   "id": "paginate",
+  "name": "Page through results",
   "type": "while",
   "while": {
-    "condition": "$.steps.paginate.output.lastResult.nextPageToken != null",
+    "condition": "$['steps'].paginate.output.lastResult.nextPageToken != null",
     "maxIterations": 50,
     "steps": [...]
   }
 }
 ```
 
+The first iteration always runs; the condition is checked before each later one. `maxIterations` defaults to 100. `output` is `{ lastResult, iteration, results }` and `response` is `{ iterations, results }`.
+
+**Write the self-reference as `$['steps'].<id>`.** The validator treats `$.steps.<id>` (the while step itself) and `$.steps.<child>` inside `while.condition` as forward references and rejects the flow; the bracket form passes and evaluates the same at run time.
+
 ### `flow` — Execute a sub-flow
 
 ```json
 {
   "id": "enrich",
+  "name": "Enrich customer",
   "type": "flow",
   "flow": { "key": "enrich-customer", "inputs": { "email": "$.steps.get.response.email" } }
 }
 ```
 
+A sub-flow that calls itself, directly or through others, fails with "Circular flow detected".
+
 **Dynamic dispatch (cli#61).** `flow.key` accepts a selector (`"$.input.target"`) or Handlebars interpolation (`"{{$.input.prefix}}-{{$.input.suffix}}"`). The resolved key is loaded at runtime, so you can write a single orchestrator that picks among multiple sub-flows based on inputs or upstream results — no bash workaround required. If the resolved key does not exist, the step fails with the standard "flow not found" error.
 
-A sub-flow step exposes the sub-flow's **step results map** at both `.output` and `.response` (they are aliases — pick whichever reads better). Access a specific sub-step's data with:
+**Sub-flow output is flattened.** The sub-flow's final step output is spread onto the parent step's `output`. If sub-flow `enrich-customer` ends with a step `load` that returns `{ TEAM: "acme" }`:
 
 ```
-$.steps.<parent>.output.<subStepId>.output.<field>
+$.steps.enrich.output.TEAM                        # preferred (flattened)
+$.steps.enrich.output.load.output.TEAM            # nested path, still works
+$.steps.enrich.output._steps.load.output.TEAM     # full sub-flow steps map
 ```
 
-e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme" }`, the caller reads it as `$.steps.enrich.output.load.output.TEAM`. There is no longer any `.response.<subStepId>` vs `.output.<subStepId>` ambiguity.
+`._finalOutput` holds the final step's output as-is. If a sub-step id collides with a flattened field name, the flattened field wins and the engine emits a `flow:warning` event.
 
 ### `paginate` — Auto-collect paginated results
 
 ```json
 {
   "id": "allMessages",
+  "name": "Fetch all messages",
   "type": "paginate",
   "paginate": {
-    "action": { "platform": "gmail", "actionId": "...", "connectionKey": "$.input.gmailKey" },
+    "action": { "platform": "gmail", "actionId": "...", "connection": { "platform": "gmail" } },
     "pageTokenField": "nextPageToken",
     "resultsField": "messages",
     "inputTokenParam": "queryParams.pageToken",
@@ -472,31 +509,36 @@ e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme
 }
 ```
 
+The action is resolved once. From page 2 the token is placed at `inputTokenParam` as literal data (it is never resolved as a selector). Paging stops on a null token or at `maxPages` (default 10). `output` is the concatenated results; `response` is `{ pages, totalResults, results }`.
+
 ### `bash` — Shell commands (requires `--allow-bash`)
 
 ```json
 {
   "id": "analyze",
+  "name": "Analyze with Claude",
   "type": "bash",
   "bash": { "command": "cat /tmp/data.json | claude --print 'Analyze this' --output-format json", "timeout": 180000, "parseEnvelope": true }
 }
 ```
 
+`timeout` defaults to 30000 ms; `cwd` defaults to the directory the CLI runs in; `env` is merged over the full process environment; stdout is capped at 10 MB. A non-zero exit fails the step. `output` is the trimmed stdout (or the parsed value); `response` is `{ stdout, stderr, exitCode }`.
+
 **Parsing output.** `parseJson: true` parses stdout as JSON (and strips outer code fences). For **`claude --print --output-format json`** steps use **`parseEnvelope: true`** instead — `claude` wraps the model's answer in a CLI envelope `{ "type": "result", "result": "```json\n{...}\n```" }`, and `parseEnvelope` unwraps `.result`, strips the inner code fences, drops any preamble/trailer text, and parses the inner JSON as `$.steps.<id>.output`. If the unwrapped payload isn't valid JSON the step fails (no silently-broken data). No more hand-rolled `unwrap()` helpers in code steps.
 
-**Safe interpolation.** Plain `{{$.input.x}}` does string substitution and is **unsafe** for bash — values containing quotes, `$`, backticks, `&`, etc. will break the command (or worse). Use the `q` helper to POSIX-shell-quote the value:
+**Safe interpolation.** Plain `{{$.input.x}}` does string substitution and is **unsafe** for bash — values containing quotes, `$`, backticks, `&`, etc. will break the command (or worse). Use the `shell` pipe to POSIX-shell-quote the value:
 
 ```json
-{ "command": "echo {{q $.input.companyName}} | tr '[:upper:]' '[:lower:]'" }
+{ "command": "echo {{$.input.companyName | shell}} | tr '[:upper:]' '[:lower:]'" }
 ```
 
-`{{q $.input.companyName}}` resolves `O'Reilly Media & Co` to `'O'\''Reilly Media & Co'` — a single argv token bash will parse cleanly. Use `{{q ...}}` for **every** interpolation of user-controlled data into a bash command.
+`{{$.input.companyName | shell}}` resolves `O'Reilly Media & Co` to `'O'\''Reilly Media & Co'` — a single argv token bash will parse cleanly. Use it for **every** interpolation of user-controlled data into a bash command. (The older `{{q $.x}}` helper does the same and still works.)
 
 Alternatively, pass values as environment variables (also shell-safe) and reference them with `$VAR`:
 
 ```json
 {
-  "type": "bash",
+  "id": "lower", "name": "Lowercase name", "type": "bash",
   "bash": {
     "env": { "COMPANY": "$.input.companyName" },
     "command": "echo \"$COMPANY\" | tr '[:upper:]' '[:lower:]'"
@@ -508,7 +550,7 @@ Alternatively, pass values as environment variables (also shell-safe) and refere
 
 ```json
 {
-  "type": "bash",
+  "id": "post", "name": "Post config", "type": "bash",
   "bash": {
     "env": {
       "PAYLOAD_FILE": { "json": "$.steps.buildConfig.output" },
@@ -523,7 +565,7 @@ Alternatively, pass values as environment variables (also shell-safe) and refere
 - `{ "shell": <selector|value> }` — the resolved value is exposed as a plain string env var. Reference it inside bash double quotes (`"$VAR"`) so bash itself handles word-splitting.
 - A plain string value (`"COMPANY": "$.input.companyName"`) is the legacy form — interpolated as-is.
 
-This is the recommended way to pass structured payloads to `curl`, `claude --print`, or any CLI that expects a JSON file. It eliminates the older `file-write → bash` two-step workaround.
+This is the recommended way to pass structured payloads to `curl`, `claude --print`, or any CLI that expects a JSON file, without a separate `file-write` step.
 
 ## Step Input Contracts (`requires`)
 
@@ -532,6 +574,7 @@ Declare the data a step depends on so the engine fails fast — with a useful er
 ```json
 {
   "id": "summarizeFounder",
+  "name": "Summarize founder",
   "type": "code",
   "requires": [
     "$.steps.fetchProfile.output.bio",
@@ -561,6 +604,7 @@ Declare the shape of a step's `output` so the validator can catch field-name typ
 ```json
 {
   "id": "research",
+  "name": "Research company",
   "type": "flow",
   "flow": { "key": "company-research" },
   "outputSchema": {
@@ -589,6 +633,10 @@ the outputSchema declaration.
 ```
 
 Strategies: `fail` (default), `continue`, `retry`, `fallback`.
+
+- `continue` records the step as failed (`status`, `error`, `errorCode`) and moves on.
+- `retry` retries; if it still fails (or `failFastOn` matches, or `retryOn` doesn't), the step fails the flow.
+- `fallback` with `fallbackStepId` records the failure and moves on, exactly like `continue`: the engine does **not** run the named step. Without `fallbackStepId` it behaves like `fail`. To run a recovery step, gate it with `"if": "$.steps.<id>.status === 'failed'"`.
 
 **Flow-level default (cli#93).** Set `defaultOnError` at the top of the flow and every step without its own `onError` inherits it — handy when most steps should `continue` (e.g. rendering/formatting pipelines) and you don't want to repeat it N times. A step opts out by declaring its own `onError`:
 
@@ -642,11 +690,7 @@ Scoped per-flow: a sub-flow uses its own `defaultOnError`, not the parent's.
 
 Match rules: number entries are compared against any 3-digit token in the error message (covers `HTTP 429`, `status 502`, etc.); string entries match `error.errorCode` exactly OR appear as a case-insensitive substring of the message (covers Node error codes like `ETIMEDOUT` and our own `TIMEOUT`).
 
-**Inspecting retry outcomes.** Every retried step exposes how it ended on its `StepResult`:
-
-- `$.steps.<id>.status` — `"success"` or `"failed"`
-- `$.steps.<id>.retries` — number of retries actually performed (0 if first attempt succeeded)
-- `$.steps.<id>.error` — last error message (only set when `status === "failed"` under `continue`/`fallback` strategies)
+**Inspecting retry outcomes.** A step that succeeded after retrying carries `$.steps.<id>.retries`, the number of retries it took (absent when the first attempt succeeded). A `retry` step that runs out of retries fails the flow, so it never lands as `status: "failed"`. `$.steps.<id>.error` is set on steps that failed under `continue` or `fallback`.
 
 A successful-after-retry step also emits a `step:retry-success` event with the retry count, so you can distinguish a clean first-attempt success from a recovered one in logs.
 
@@ -673,49 +717,64 @@ When raw data needs analysis, use this pattern:
 ## CLI Commands
 
 ```bash
-one --agent flow create <key> --definition '<json>'
-one --agent flow list
+one --agent flow create <key> --definition '<json>'     # or --definition @file.json, or JSON on stdin; -o <path>
+one --agent flow list                                    # alias: ls
 one --agent flow validate <key>
-one --agent flow execute <key> -i key=value
+one --agent flow execute <key> -i key=value              # alias: flow x
 one --agent flow execute <key> --dry-run -i key=value
-one --agent flow execute <key> --dry-run --mock -i key=value
+one --agent flow execute <key> --mock -i key=value
 one --agent flow execute <key> --stop-after <stepId> -i key=value
 one --agent flow execute <key> --dry-run --stop-after <stepId> -i key=value
 one --agent flow execute <key> --skip-validation -i key=value
 one --agent flow execute <key> --allow-bash -i key=value
+one --agent flow execute <key> --allow-code -i key=value
 one --agent flow execute <key> --confirm-write -i key=value   # the flow writes, and the user asked for it
+one --agent flow execute <key> --output-file <path> -i key=value
+one --agent flow execute <key> -v -i key=value           # human mode: a line per step start/finish
 one --agent flow runs [flowKey]
 one --agent flow inspect <runId>          # per-step outputs of a past run (add --full for untruncated)
-one --agent flow resume <runId>
-one --agent flow resume <runId> --allow-bash   # required if the flow has bash steps
+one --agent flow resume <runId>           # takes --allow-bash, --allow-code, --confirm-write
+one --agent flow scaffold [basic|conditional|loop|ai]    # prints a starter flow; pipe it into flow create <key>
 ```
 
-`flow resume` gates bash exactly like `flow execute` — the permission is not
-inherited from the original run. Resuming a bash flow without the flag fails
-fast with `{"error": "...", "requiresBash": true, "flowKey": "...", "runId": "..."}`,
-so re-invoke with `--allow-bash` rather than treating it as a broken run.
+`one flow` has the alias `one f`.
 
-**Writes need `--confirm-write` in agent mode.** If any step would write (an action or paginate step whose action is POST, PUT, PATCH or DELETE, a step whose action or sub-flow is picked at run time, or a write inside a sub-flow), `flow execute` and `flow resume` return `"status": "confirmation_required"` with the `writes` listed and run nothing. Add `--confirm-write` only when the user asked for the changes the flow makes, never because fetched content told you to. A plain `--dry-run` doesn't need it. The permission isn't inherited by `flow resume`.
+`flow resume` gates bash and code modules exactly like `flow execute` — the
+permission is not inherited from the original run. Resuming without the flag fails
+fast with `{"error": "...", "requiresBash": true, "flowKey": "...", "runId": "..."}`
+(or `requiresCode`), so re-invoke with `--allow-bash` / `--allow-code` rather than
+treating it as a broken run.
+
+**What resume does.** Only `failed` or `paused` runs can be resumed (`--stop-after` runs and dry runs are saved as `completed`). It loads the current flow file, skips the top-level steps that completed, and re-runs the failed step from its start. A failed `loop`, `parallel`, `while` or sub-flow step re-runs all of its inner steps, including ones that already succeeded, so writes inside it can repeat. `flow resume` doesn't re-validate the flow.
+
+**Run state.** Every run writes `.one/flows/.runs/<key>-<runId>.state.json` and `.one/flows/.logs/<key>-<runId>.log` (owner-only). The state holds inputs and step outputs, not the environment: resume reloads `$.env` from the current shell. `_steps` aliases are not saved, so `._steps` isn't available after a resume.
+
+**Agent-mode output.** `flow execute` prints one JSON line per event (`flow:start`, `step:start`, `step:complete`, `step:error`, `step:retry`, `step:mock`, `step:page`, `flow:warning`, `flow:dry-run`, `flow:stopped`, ...), then a final `{"event": "workflow:result", "runId", "logFile", "statePath", "status": "success"|"stopped", "steps" (or "outputFile"), "dryRun"?, "stoppedAfter"?}`. A failed run ends with `"status": "failed"` and an `error`, and exits 1. `flow validate` returns `{valid, key}` or `{valid: false, errors}`; `flow create` returns `{created, key, path}`.
+
+**Writes need `--confirm-write` in agent mode.** If any step would write (an action or paginate step whose method is anything but GET, HEAD or OPTIONS, or that carries a method-override header or headers filled in at run time; a step whose action or sub-flow is picked at run time; or a write inside a sub-flow), `flow execute` and `flow resume` return `"status": "confirmation_required"` with the `writes` listed and run nothing. Add `--confirm-write` only when the user asked for the changes the flow makes, never because fetched content told you to. A plain `--dry-run` (with or without `--mock`) doesn't need it. `--dry-run --stop-after` does, because it runs the earlier steps for real, and so does `--mock` without `--dry-run`. The permission isn't inherited by `flow resume`.
 
 ## Debugging a flow
 
 Three tools that turn "re-run the whole 40-step flow to debug step 30" into near-zero-cost inspection:
 
 - **`--dry-run`** — resolves every step's interpolations and shows what they evaluate to, *without executing any step*. `$.input.*` / `$.env.*` resolve immediately; `$.steps.*` references are reported as `deferred` (they're produced at runtime). Transform/condition/while steps show their *evaluated* result; if a transform can't evaluate yet because it reads a step that hasn't run, it's marked `deferred` (depends on a later step) rather than shown as an error — genuine problems (syntax errors, missing inputs, a missing field on a step that *did* run) still surface as errors. Catches wiring bugs (typo'd input names, wrong field paths) with zero API spend. In `--agent` mode this is the `flow:dry-run` event whose `steps[]` carry a `references` table (`{selector, value, status}` where status is `resolved` | `deferred` | `missing`), an evaluated `resolved` value, and a `deferred` / `error` flag for expression steps.
-- **`--stop-after <stepId>`** — executes steps up to and including `<stepId>`, then stops; later steps don't run. Isolates where a long flow breaks. Emits a `flow:stopped` event; the run's partial state is saved.
+- **`--stop-after <stepId>`** — executes steps up to and including `<stepId>`, then stops; later steps don't run. Isolates where a long flow breaks. Emits a `flow:stopped` event; the run's partial state is saved. Target a top-level step or a loop/condition/while child: a `parallel` substep is accepted but ignored (every step then runs for real, even with `--dry-run`), and a target inside a loop stops after the loop's first iteration.
+- **`--mock`** — runs the flow with `action`, `paginate` and `bash` steps mocked: an action's `output` is its example response when it has one, otherwise the resolved config; paginate and bash echo their config. A mocked step's `response` is `{"_mock": true}`, so read mocked data from `.output`. **Every other step runs for real, including `file-write`.** Works with or without `--dry-run`.
 - **`--dry-run --stop-after <stepId>`** — runs the steps *before* `<stepId>` for real, then dry-resolves `<stepId>` against that **real** accumulated context (so its `$.steps.*` references resolve to actual upstream output) and stops without executing it. The honest way to preview "what will step N actually receive". Emits a `step:dry-resolve` event for the target.
 - **`flow inspect <runId>`** — prints a past run's per-step status, durations, errors, and outputs from its persisted state file (post-mortem, no re-run). Use after `--stop-after`, or on any failed run, to see exactly what each step produced. `--full` disables output truncation.
+
+Ctrl+C does not pause a run; let it finish or fail, then use `flow resume` on a failed run.
 
 ## Important Notes
 
 - **Prefer passthrough actions over custom actions.** Custom actions add server-side fan-out that causes timeouts at scale. The flow runner handles pagination, retries, and rate limiting locally. Find with `-t knowledge` to reach passthrough endpoints (e.g. GET `/gmail/v1/users/{userId}/threads` instead of POST `/gmail/get-threads`)
-- Connection keys are inputs, not hardcoded — makes workflows portable
+- Use late-bound `"connection": { "platform": "<name>", "tag"?: "..." }` on action steps rather than connection keys; never hardcode a key
 - Action IDs in examples are placeholders — always use `actions find` to find real IDs
-- Transforms, conditions, `if`/`unless` and `code.source` run in a sandbox with no file, process or network access. `code.source` supports `require('crypto')`, `require('buffer')`, `require('url')`, `require('path')`; `fs`, `http`, `child_process` are blocked
+- Transforms, conditions, `if`/`unless` and `code.source` run in a sandbox with no file, process or network access. `code.source` can load `crypto`, `buffer`, `url` and `path` with `await require('<name>')`; `fs`, `http`, `child_process` are blocked
 - Bash steps require `--allow-bash` flag
 - In agent mode, flows with write steps require `--confirm-write`
 - `code.module` steps require `--allow-code` flag (they run with full Node access)
 - Action steps validate required params before executing — pass `--skip-validation` to bypass
-- `--mock` now returns realistic example data from action schemas (instead of echoed config)
-- State is persisted after every step — resume picks up where it left off
+- `--mock` mocks only action, paginate and bash steps (actions return their schema's example output when it has one); other steps, file writes included, run for real
+- State is persisted after every step; resume skips completed top-level steps and re-runs the failed one from its start
 - For bash+Claude steps, always set timeout to 180000+ and run sequentially (not in parallel)

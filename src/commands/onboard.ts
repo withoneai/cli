@@ -159,9 +159,10 @@ Use \`one flow create\` to build JSON workflows that chain actions across
 platforms with conditions, loops, parallel execution, and transforms.
 
 ### Webhook Relay:
-Use \`one relay create\` to receive webhooks from platforms (Stripe, GitHub,
-Airtable, Attio, Google Calendar) and forward event data to any connected
-platform using passthrough actions with Handlebars templates.
+Use \`one relay create\` to receive webhooks from 100+ platforms (Stripe,
+GitHub, Airtable, Attio, Google Calendar, ...; \`one --agent relay platforms\`
+lists them) and forward event data to any connected platform using
+passthrough actions with Handlebars templates.
 
 ### IMPORTANT: Learn before you use
 Before using flows or relay, you MUST read the corresponding skill
