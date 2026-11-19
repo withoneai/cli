@@ -22,6 +22,7 @@ import type {
   FoundActions,
   KeyAccessDocument,
   AccessControlSettings,
+  ViewerAccessLevel,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -194,6 +195,30 @@ export class OneApi {
     } while (page <= totalPages);
 
     return allConnections;
+  }
+
+  /**
+   * The person's own level on each connection key (`GET /v1/connections`, the
+   * route that carries `viewerAccessLevel`). Empty from an older backend that
+   * sends none.
+   */
+  async listViewerLevels(): Promise<Map<string, ViewerAccessLevel>> {
+    const levels = new Map<string, ViewerAccessLevel>();
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const response = await this.request<{ rows?: { key: string; viewerAccessLevel?: ViewerAccessLevel }[]; pages?: number }>(
+        `/connections?page=${page}&limit=100`
+      );
+      for (const row of response.rows || []) {
+        if (row.viewerAccessLevel) levels.set(row.key, row.viewerAccessLevel);
+      }
+      totalPages = response.pages || 1;
+      page++;
+    } while (page <= totalPages);
+
+    return levels;
   }
 
   async deleteConnection(id: string): Promise<void> {

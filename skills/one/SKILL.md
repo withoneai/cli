@@ -47,14 +47,16 @@ Always follow this sequence when the user wants to do something on a connected p
 one --agent connection list
 ```
 
-Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for finding actions), and an `access` field per connection telling you what you may run there. `access` is what One enforces for this key (the choices made on the consent page, or later in the dashboard), narrowed by any limits set with `one config`; `access.level` names it the way the consent page does: `full`, `read-write`, `read-only`, `custom` or `none`. When telling the user their access, use those words (Full access, Read & write, Read only, Custom, No access).
+Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for finding actions), and an `access` field per connection telling you what you may run there. `access` is what One enforces for this key (the choices made on the consent page, or later in the dashboard), narrowed by any limits set with `one config`; `access.level` names it the way the consent page does: `full`, `read-write`, `read-only`, `write-only`, `custom` or `none`. When telling the user their access, use those words (Full access, Read & write, Read only, Write only, Custom, No access).
+
+In an organization, a connection may also carry `viewerAccessLevel`: the most the user may run through it, set by their share or the organization's App Controls (`none`, `read`, `write`, `read_write`, `full`, `custom`). One holds every call to both it and `access`, and `effectiveLevel` names what that leaves. Plan by `effectiveLevel`; when it is below `access.level`, tell the user their share or App Controls limit it, not the key.
 
 **Read `access` before you plan a workflow** — it saves you from discovering a restriction as a 403 halfway through:
 
 | `access` | What it means |
 |----------|---------------|
 | `{"policy": "full"}` | Every action on this connection is available |
-| `{"policy": "methods", "methods": ["GET"]}` | Only actions with these HTTP methods will execute — don't propose writes |
+| `{"policy": "methods", "methods": ["GET"], "access": ["read"]}` | Only actions at the levels in `access` will execute — here reads, so don't propose writes. One judges an action by what it does, not its HTTP method: a POST search is a `read` |
 | `{"policy": "actions", "actions": [...]}` | Only these exact actions may run. Each has `actionId`, `title`, `method` — **use them directly**: `actions load <actionId>` reads their docs, no find needed |
 
 `accessSource` is `"server"` when One reported the key's access, or `"local"` when it could not (the `accessHint` says so) — then `access` reflects only this CLI's settings and One may allow less: tell the user it is unverified rather than calling it full access.

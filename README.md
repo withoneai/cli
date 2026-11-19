@@ -208,7 +208,7 @@ You need the connection key (rightmost column) when executing actions.
 | Policy | Means | `level` |
 |--------|-------|---------|
 | `{"policy": "full"}` | Every action on the connection | `full` (Full access) |
-| `{"policy": "methods", "methods": ["GET"]}` | Only actions with those methods | `read-only`, `read-write` (GET, POST, PUT, PATCH), or `custom` |
+| `{"policy": "methods", "methods": ["GET"], "access": ["read"]}` | Only actions at the levels in `access` (GET is `read`, POST/PUT/PATCH `write`, DELETE `delete`); One judges an action by its level, not its method | `read-only`, `write-only`, `read-write`, `full` (all three levels), or `custom` |
 | `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | `custom`, or `none` when empty |
 
 A connection the key does not reach is not listed. When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
@@ -223,12 +223,16 @@ A connection the key does not reach is not listed. When the policy is `actions`,
       "platform": "gmail",
       "state": "operational",
       "key": "live::gmail::default::abc123",
-      "access": { "policy": "methods", "methods": ["GET"], "level": "read-only" }
+      "access": { "policy": "full", "level": "full" },
+      "viewerAccessLevel": "read",
+      "effectiveLevel": "read-only"
     }
   ],
   "accessSource": "server"
 }
 ```
+
+**Your own level.** In an organization, an admin may share an app with you at a lower level, or cap it with App Controls. The CLI reads that level from `GET /v1/connections` and reports it as `viewerAccessLevel` (`none`, `read`, `write`, `read_write`, `full`, `custom`). One holds every call to both it and `access`; `effectiveLevel` names what the two leave together. The human table adds a "Your level" column, in the dashboard's words, when any connection holds you below Full access. An older API sends no level, and the listing stays as it was.
 
 `accessSource` is `"server"` when One reported the key's access and `"local"` when it could not (an older API); then `access` shows only the CLI's own settings, the human table labels the column "Access (CLI settings only)", and `accessHint` says One may allow less. `knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists action ids that could not be looked up.
 
