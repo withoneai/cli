@@ -1429,7 +1429,7 @@ function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('test <platform/model>')
-    .description('Validate a sync profile with a single-page fetch (no DB writes)')
+    .description('Validate a sync profile with a single-page fetch (writes no records; may save auto-discovered fields to the profile)')
     .option('--show-searchable', 'Also preview the text that would be embedded / FTS-indexed, per memory.searchable', false)
     .action(async (platformModel: string, options: { showSearchable?: boolean }) => {
       await syncTestCommand(platformModel, { showSearchable: options.showSearchable });
@@ -1447,11 +1447,11 @@ function registerSyncSubcommands(sync: Command): void {
     .command('run <platform>')
     .description('Run sync for a platform (syncs all configured models, or specify --models)')
     .option('--models <models>', 'Comma-separated list of models to sync')
-    .option('--since <duration>', 'Sync records since duration (e.g. 90d, 30d, 7d) or date')
+    .option('--since <duration>', 'Sync records since a duration (<n>d, <n>h, <n>m = months) or a date; only for profiles with a dateFilter')
     .option('--force', 'Ignore existing sync state and start fresh')
     .option('--max-pages <n>', 'Maximum number of pages to fetch')
-    .option('--dry-run', 'Fetch first page only, show results without persisting')
-    .option('--full-refresh', 'Fetch ALL records and delete local rows no longer in the source (handles deletions)')
+    .option('--dry-run', 'Fetch the first page and report its record count, without persisting')
+    .option('--full-refresh', 'Fetch ALL records and archive memory rows no longer in the source (handles deletions)')
     .option('--re-enrich', 'Re-fetch the detail endpoint for every already-enriched record (profiles with an "enrich" block). Costs one detail call per record — for routine freshness set enrich.invalidateOn in the profile instead')
     .option('--no-memory', 'Skip the unified memory dual-write (default: memory is always written)')
     .option('--embed', 'Embed synced rows under the configured model, regardless of profile.memory.embed', false)
@@ -1488,7 +1488,7 @@ function registerSyncSubcommands(sync: Command): void {
     .option('--order-by <field>', 'Sort by field')
     .option('--order <dir>', 'Sort direction: asc or desc')
     .option('--refresh', 'Trigger incremental sync before querying')
-    .option('--refresh-force', 'Trigger full re-sync before querying (implies --refresh)')
+    .option('--refresh-force', 'Re-sync ignoring saved state before querying (last 90 days for dateFilter profiles; implies --refresh)')
     .option('--date-field <field>', 'Specify date column for --after/--before')
     .action(async (platformModel: string, options: any) => {
       await syncQueryCommand(platformModel, {
@@ -1506,7 +1506,7 @@ function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('search <query>')
-    .description('Full-text search across all synced data (or filter by --platform / --models)')
+    .description('Search the synced models that have a profile in this project (hybrid when embeddings are available; filter by --platform / --models)')
     .option('--platform <platform>', 'Search only this platform (default: all)')
     .option('--models <models>', 'Comma-separated list of models to search')
     .option('--limit <n>', 'Max results (default: 20)')
@@ -1516,7 +1516,7 @@ function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('sql <platform/model> <sql>')
-    .description('Run a read-only SELECT / WITH / EXPLAIN against the memory store (type-scoped helper)')
+    .description('Run a read-only SELECT / WITH / EXPLAIN against the memory store (add WHERE type = \'<platform>/<model>\' yourself)')
     .action(async (platformModel: string, sql: string) => {
       await syncSqlCommand(platformModel, sql);
     });
@@ -1531,7 +1531,7 @@ function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('delete <platform/model>')
-    .description('Delete records from local sync data (e.g. one sync delete notion/pages --id "abc-123")')
+    .description('Delete rows from the project\'s SQLite sync mirror (not memory records), e.g. one sync delete notion/pages --id "abc-123"')
     .option('--id <value>', 'Delete record by ID')
     .option('--where <conditions>', 'Delete records matching conditions (e.g. "status=archived")')
     .option('--where-sql <predicate>', 'Delete using a raw SQL WHERE clause (e.g. "json_extract(data, \'$.type\') = \'promotion\'")')
@@ -1603,7 +1603,7 @@ function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('remove <platform>')
-    .description('Remove sync data and profiles for a platform')
+    .description('Remove a platform\'s SQLite sync mirror and sync state (keeps profiles and memory records)')
     .option('--models <models>', 'Specific models to remove (comma-separated)')
     .option('--dry-run', 'Show what would be removed without deleting')
     .option('--yes', 'Skip confirmation prompt')

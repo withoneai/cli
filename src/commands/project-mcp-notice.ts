@@ -12,7 +12,7 @@ export function noteProjectMcp(results: McpInstallResult[]): void {
   p.note(
     pc.yellow('These files contain your One API key. They are added to .gitignore\n') +
     pc.yellow('and readable only by you. Do not commit or share them; each team\n') +
-    pc.yellow('member should run `one init` to set up MCP with their own key.'),
+    pc.yellow('member should use their own key.'),
     'Tip',
   );
   const committed = results.filter(r => r.committed);

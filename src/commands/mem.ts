@@ -91,7 +91,7 @@ export function registerMemoryCommands(program: Command): void {
     );
 
   mem.command('doctor')
-    .description('Diagnose schema, indexes, plugin resolution, connectivity, embeddings')
+    .description('Diagnose schema, plugin resolution, connectivity, and embeddings')
     .action(memDoctorCommand);
 
   mem.command('vacuum')
@@ -153,7 +153,7 @@ export function registerMemoryCommands(program: Command): void {
     .action(memWeightCommand);
 
   mem.command('flush <id>')
-    .description('Reset access count for a record')
+    .description('Reset access count for a record (not implemented yet: a no-op)')
     .action(memFlushCommand);
 
   mem.command('list <type>')

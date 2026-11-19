@@ -533,7 +533,7 @@ export function renderDigestNotice(digest: KnowledgeDigest, actionId: string): s
  */
 export function renderDigestBanner(digest: KnowledgeDigest): string {
   if (!digest.truncated) return '';
-  return `> **Digest.** ${digest.omitted} section${digest.omitted === 1 ? '' : 's'} (${digest.omittedChars.toLocaleString('en-US')} chars) omitted: response shapes, reference schemas, or worked examples. The notice at the end names them and shows how to load them; the JSON \`sections\` array marks them included:false.`;
+  return `> **Digest.** ${digest.omitted} section${digest.omitted === 1 ? '' : 's'} (${digest.omittedChars.toLocaleString('en-US')} chars) omitted: response shapes, reference schemas, or worked examples. The notice at the end names them and shows how to load them.`;
 }
 
 // ---------------------------------------------------------------------------

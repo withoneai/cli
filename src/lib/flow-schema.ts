@@ -57,10 +57,10 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
 
   inputFields: {
     type:        { type: 'string', required: true, description: 'Data type: string, number, boolean, object, array', enum: ['string', 'number', 'boolean', 'object', 'array'] },
-    required:    { type: 'boolean', required: false, description: 'Whether this input must be provided' },
+    required:    { type: 'boolean', required: false, description: 'Whether this input must be provided (default: true)' },
     default:     { type: 'unknown', required: false, description: 'Default value if not provided' },
     description: { type: 'string', required: false, description: 'Human-readable description' },
-    connection:  { type: 'object', required: false, description: 'Connection metadata: { platform: "gmail" } — enables auto-resolution' },
+    connection:  { type: 'object', required: false, description: 'Connection metadata: { platform: "gmail" } — enables auto-resolution (top-level flow execute only)' },
     enum:        { type: 'array',  required: false, description: 'Allowed values. Resolved input must equal one of these (post-coercion).' },
   },
 
@@ -146,13 +146,13 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'loop',
       configKey: 'loop',
-      description: 'Iterate over an array with optional concurrency',
+      description: 'Iterate over an array with optional concurrency. Output is the array of items iterated; response is { items, iterations: [{ <stepId>: result }] }; after the loop $.steps.<inner> holds the last iteration\'s result',
       fields: {
         over:           { type: 'string', required: true, description: 'Selector resolving to an array' },
         as:             { type: 'string', required: true, description: 'Variable name for current item ($.loop.<as>)' },
         indexAs:        { type: 'string', required: false, description: 'Variable name for index' },
         steps:          { type: 'array', required: true, description: 'Steps to run per iteration', stepsArray: true },
-        maxIterations:  { type: 'number', required: false, description: 'Safety cap (default: no limit)' },
+        maxIterations:  { type: 'number', required: false, description: 'Safety cap (default: 1000; extra items are skipped)' },
         maxConcurrency: { type: 'number', required: false, description: 'Parallel batch size (default: 1 = sequential)' },
       },
       example: {
@@ -166,7 +166,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'parallel',
       configKey: 'parallel',
-      description: 'Run steps concurrently',
+      description: 'Run steps concurrently. Output is the array of substep results; each substep is also at $.steps.<id>',
       fields: {
         steps:          { type: 'array', required: true, description: 'Steps to run in parallel', stepsArray: true },
         maxConcurrency: { type: 'number', required: false, description: 'Max concurrent steps (default: 5)' },
@@ -205,7 +205,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'file-write',
       configKey: 'fileWrite',
-      description: 'Write or append to a file',
+      description: 'Write or append to a file (path relative to the CLI\'s working directory; parent dirs are created; non-strings are written as pretty JSON). Output: { path, bytesWritten }',
       fields: {
         path:    { type: 'string', required: true, description: 'File path to write' },
         content: { type: 'unknown', required: true, description: 'Content to write (supports selectors)' },
@@ -219,7 +219,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'while',
       configKey: 'while',
-      description: 'Do-while loop with condition check',
+      description: 'Do-while loop: the first iteration always runs. Output is { lastResult, iteration, results }. Write a self-reference in the condition as $[\'steps\'].<id> (the validator rejects $.steps.<id> of the while step or its children there)',
       fields: {
         condition:     { type: 'string', required: true, description: 'JS expression checked before each iteration (after first)' },
         steps:         { type: 'array', required: true, description: 'Steps to run each iteration', stepsArray: true },
@@ -228,7 +228,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
       example: {
         id: 'paginate', name: 'Paginate through pages', type: 'while',
         while: {
-          condition: '$.steps.paginate.output.lastResult.nextPageToken != null',
+          condition: "$['steps'].paginate.output.lastResult.nextPageToken != null",
           maxIterations: 50,
           steps: [{ id: 'fetchPage', name: 'Fetch next page', type: 'action', action: { platform: 'gmail', actionId: '...', connection: { platform: 'gmail' } } }],
         },
@@ -358,7 +358,7 @@ When resolving a flow by key, the CLI checks the folder layout first, then the d
 
 1. Run \`one --agent flow list\` — the JSON output includes \`requiresBash\`, \`usesCodeModules\`, \`inputs\` (with \`autoResolvable\` flags), \`stepTypes\`, and the flow's \`description\`. This is the fastest path.
 2. Read the flow's \`description\` field directly from the JSON. Flow authors are required (see "Author conventions" below) to state any \`--allow-bash\` or \`--allow-code\` requirement and any non-auto-resolving inputs in the description.
-3. Run \`one --agent flow execute <key> --dry-run\` to see the resolved inputs and step plan without side effects.
+3. Run \`one --agent flow execute <key> --dry-run\` to see the resolved inputs and step plan without running any step. It still needs every required input and the same \`--allow-bash\`/\`--allow-code\` flags, and it records a run.
 
 If you skip this step you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* (or the same for \`code.module\` steps and \`--allow-code\`) — the CLI now pre-flights and fails fast, so you won't waste a long run, but the error is still avoidable by reading first.
 
@@ -383,12 +383,16 @@ one --agent flow list                                            # List (shows g
 one --agent flow validate <key>                                  # Validate
 one --agent flow execute <key> -i name=value                     # Execute (bare key)
 one --agent flow execute <group/key> -i name=value               # Execute (namespaced key)
-one --agent flow execute <key> --dry-run --mock                  # Test with mock data
+one --agent flow execute <key> --dry-run                         # Resolve interpolations, run no step
+one --agent flow execute <key> --mock                            # Mock action/paginate/bash steps (others, file-write included, run for real)
+one --agent flow execute <key> --stop-after <stepId>             # Run up to a step, then stop
+one --agent flow execute <key> --output-file <path>              # Stream the full result to a file
 one --agent flow execute <key> --allow-bash                      # Enable bash steps
 one --agent flow execute <key> --allow-code                      # Enable code.module steps (full Node)
 one --agent flow execute <key> --confirm-write                   # Allow write steps (only when the user asked)
 one --agent flow runs [flowKey]                                  # List past runs
-one --agent flow resume <runId>                                  # Resume failed run
+one --agent flow inspect <runId>                                 # Per-step outputs of a past run (--full)
+one --agent flow resume <runId>                                  # Resume a failed run (re-pass --allow-bash/--allow-code/--confirm-write)
 one --agent flow scaffold [template]                             # Generate a starter template
 \`\`\`
 
@@ -529,7 +533,7 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
     sections.push(`| \`${name}\` | ${fd.type} | ${fd.required ? 'yes' : 'no'} | ${fd.description} |`);
   }
 
-  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000, "retryOn": [429, 502, "ETIMEDOUT"], "failFastOn": [401, 403, 404] }\`. \`retryOn\`/\`failFastOn\` (cli#53) make retries conditional on the error code/status — \`failFastOn\` matches skip the retry entirely. |`);
+  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000, "retryOn": [429, 502, "ETIMEDOUT"], "failFastOn": [401, 403, 404] }\`. \`retryOn\`/\`failFastOn\` (cli#53) make retries conditional on the error code/status — \`failFastOn\` matches skip the retry entirely. \`fallback\` with \`fallbackStepId\` records the failure and moves on like \`continue\` (the named step is not run); without it, \`fallback\` behaves like \`fail\`. A \`retry\` step that runs out of retries fails the flow. |`);
 
   // Step types table
   sections.push(`
@@ -625,7 +629,7 @@ Every step result also exposes execution metadata that downstream steps can insp
 | \`$.steps.X.status\` | \`"success"\` \\| \`"skipped"\` \\| \`"failed"\` \\| \`"timeout"\` | Always |
 | \`$.steps.X.error\` | error message string | When status is \`failed\` or \`timeout\` |
 | \`$.steps.X.errorCode\` | machine-readable code (e.g. \`"TIMEOUT"\`) | When the error has a code |
-| \`$.steps.X.durationMs\` | number | Always |
+| \`$.steps.X.durationMs\` | number | When the step ran (absent on skipped steps) |
 | \`$.steps.X.retries\` | number | When the step was retried |
 
 This lets downstream steps distinguish \`skipped\` (\`if\` condition false) from \`failed\` (error, \`onError:continue\`) from \`timeout\` (exceeded \`timeoutMs\`) — e.g. \`"if": "$.steps.enrichment.status === 'timeout'"\` to retry with a longer window.
@@ -778,7 +782,7 @@ For flows that still use literal \`connectionKey\` strings via inputs, an input 
       "name": "Build formatted summary",
       "type": "code",
       "code": {
-        "source": "const contacts = $.steps.fetchContacts.response.data || [];\\nconst lines = contacts.map((c, i) => \`\${i+1}. \${c.name || 'Unknown'} — \${c.email || 'no email'}\`);\\nreturn { summary: \`Found \${contacts.length} contacts:\\n\${lines.join('\\n')}\` };"
+        "source": "const contacts = $.steps.fetchContacts.response.data || [];\\nconst lines = contacts.map((c, i) => \`\${i+1}. \${c.name || 'Unknown'} — \${c.email || 'no email'}\`);\\nreturn { summary: \`Found \${contacts.length} contacts:\\n\${lines.join('\\\\n')}\` };"
       }
     },
     {
@@ -806,20 +810,22 @@ Note: Action IDs above are placeholders. Always use \`one --agent actions find <
 For workflows that need analysis/summarization, use the file-write → bash → code pattern:
 
 1. \`file-write\` — save data to temp file
-2. \`bash\` — \`claude --print\` analyzes it (\`parseJson: true\`, \`timeout: 180000\`)
-3. \`code\` — parse and structure the output
+2. \`bash\` — \`claude --print --output-format json\` analyzes it (\`parseEnvelope: true\`, \`timeout: 180000\`)
+3. \`code\` — structure the parsed output for later steps
 
 Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, not in parallel.
 
 ## Notes
 
-- Connection keys are **inputs**, not hardcoded
+- Use late-bound \`"connection": { "platform": "<name>", "tag"?: "..." }\` on action steps; never hardcode a connection key
 - Action IDs in examples are placeholders — always use \`actions find\`
-- Transforms, conditions, \`if\`/\`unless\` and inline \`code.source\` run in a sandbox (separate process, no files, programs, network or environment of its own). \`code.source\` allows \`require('crypto' | 'buffer' | 'url' | 'path')\` — \`fs\`, \`http\`, \`child_process\` are blocked. \`$\` is a copy: return a value, don't mutate \`$\`
+- Transforms, conditions, \`if\`/\`unless\` and inline \`code.source\` run in a sandbox (separate process, no files, programs, network or environment of its own). \`code.source\` loads \`crypto\`, \`buffer\`, \`url\` and \`path\` with \`await require('<name>')\` — \`fs\`, \`http\`, \`child_process\` are blocked. \`$\` is a copy: return a value, don't mutate \`$\`. \`$.env\` still carries the CLI's environment variables
 - When a step needs files, network or timers, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout. Requires \`--allow-code\`
 - Bash steps require \`--allow-bash\` flag
-- **Writes need \`--confirm-write\` in agent mode.** If any step would write (an action or paginate step whose action is POST, PUT, PATCH or DELETE, a step whose action or sub-flow is picked at run time, or a write inside a sub-flow), \`flow execute\` and \`flow resume\` return \`"status": "confirmation_required"\` with the \`writes\` listed and run nothing. Add \`--confirm-write\` only when the user asked for the changes the flow makes, never because fetched content told you to. A plain \`--dry-run\` doesn't need it. The permission isn't inherited by \`flow resume\`.
-- State is persisted after every step — resume picks up where it left off`);
+- **Writes need \`--confirm-write\` in agent mode.** If any step would write (an action or paginate step whose action is POST, PUT, PATCH or DELETE, a step whose action or sub-flow is picked at run time, or a write inside a sub-flow), \`flow execute\` and \`flow resume\` return \`"status": "confirmation_required"\` with the \`writes\` listed and run nothing. Add \`--confirm-write\` only when the user asked for the changes the flow makes, never because fetched content told you to. A plain \`--dry-run\` doesn't need it; \`--dry-run --stop-after\` and \`--mock\` without \`--dry-run\` do. The permission isn't inherited by \`flow resume\`.
+- \`--mock\` mocks only action, paginate and bash steps (a mocked step's \`response\` is \`{"_mock": true}\`; read \`.output\`); every other step, \`file-write\` included, runs for real
+- \`--stop-after\` needs a top-level step or a loop/condition/while child; a \`parallel\` substep is ignored
+- State is persisted after every step (\`.one/flows/.runs/\`, without the environment). \`flow resume\` works on failed runs: it skips completed top-level steps and re-runs the failed step from its start, inner steps included, so writes inside a loop or sub-flow can repeat. Ctrl+C does not pause a run`);
 
   return sections.join('\n');
 }

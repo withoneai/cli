@@ -45,7 +45,7 @@ When making any feature change, **always update documentation as part of the imp
 1. `src/lib/guide-content.ts` — CLI guide content (`one guide <topic>`)
 2. `skills/one/SKILL.md` — Agent-facing skill documentation
 3. `README.md` — User-facing command reference
-4. `src/index.ts` — Help text and command descriptions
+4. `src/cli.ts` — Help text and command descriptions (`src/index.ts` only re-exports `program`)
 
 Agent experience is the highest priority. Agents rely on accurate documentation to use the CLI correctly. Stale docs = broken agent workflows.
 
