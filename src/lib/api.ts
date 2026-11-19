@@ -105,9 +105,12 @@ async function fetchApi(url: string, init: RequestInit): Promise<Response> {
     }
     if (nextUrl.username || nextUrl.password || nextUrl.origin !== new URL(currentUrl).origin) {
       await response.body?.cancel();
-      throw new ApiError(response.status, 'Refusing cross-origin or credentialed API redirect');
+      // Name the origin only: a redirect's path and query can carry tokens.
+      const target = nextUrl.origin === 'null' ? nextUrl.protocol : nextUrl.origin;
+      throw new ApiError(response.status, `Refusing cross-origin or credentialed API redirect to ${target}`);
     }
-    if (redirects >= 19) {
+    // Native fetch follows 20 redirects and fails on the 21st.
+    if (redirects >= 20) {
       await response.body?.cancel();
       throw new ApiError(response.status, 'Too many API redirects');
     }

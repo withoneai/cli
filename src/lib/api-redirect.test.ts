@@ -52,6 +52,8 @@ describe('OneApi redirect credentials', () => {
       try { await api.whoami(); } catch (caught) { error = caught; }
       assert.equal(received.length, 0, 'a foreign origin must not receive a request');
       assert.match(String(error), /redirect|origin/i);
+      assert.ok(String(error).includes(origin(other)), 'the error names the refused origin');
+      assert.ok(!String(error).includes('/capture'), 'but never its path, which can carry tokens');
     } finally {
       await close(apiServer);
       await close(other);
@@ -166,7 +168,7 @@ describe('OneApi redirect credentials', () => {
     try {
       const api = new OneApi(SECRET, `${origin(server)}/v1`, {});
       await assert.rejects(api.whoami(), /Too many API redirects/);
-      assert.equal(requests, 20);
+      assert.equal(requests, 21, 'the original request plus 20 redirects, as native fetch does');
     } finally {
       await close(server);
     }

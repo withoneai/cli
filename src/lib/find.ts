@@ -580,7 +580,7 @@ Environment variables: ONE_SECRET (their One API key) and ${connEnv} (the key of
 \`\`\`typescript
 const response = await fetch("${base}/passthrough${path}", {
 method: "${method}",
-redirect: "error",
+redirect: "manual", // never carry the One secret to another origin
 headers: {
 "x-one-secret": process.env.ONE_SECRET,
 "x-one-connection-key": process.env.${connEnv},
@@ -589,6 +589,9 @@ headers: {
 },
 // body: JSON.stringify(...) - only for non-GET requests
 });
+if (response.status >= 300 && response.status < 400) {
+throw new Error("Unexpected redirect from the One API: " + response.status);
+}
 \`\`\``;
 }
 

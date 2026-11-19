@@ -269,7 +269,7 @@ describe('misplaced intent', () => {
     assert.ok(pick.knowledge.includes(LARGE), 'the whole document, not a digest');
     assert.ok(pick.knowledge.includes('URL:    https://api.withone.ai/v1/passthrough/v1/custom'));
     assert.ok(pick.knowledge.includes('This is a custom action'));
-    assert.match(pick.knowledge, /redirect: "error"/);
+    assert.match(pick.knowledge, /redirect: "manual"/);
     assert.deepEqual(result.answers[0].alsoSelected.map((a) => a.actionId), ['b']);
     assert.match(result.guide ?? '', /INTEGRATION CODE GUIDE/);
   });
@@ -346,7 +346,7 @@ describe('actions load', () => {
     const result = await load(['x'], {}, unplaced, settings({ connectionKeys: ['k'], knowledgeAgent: true }));
 
     assert.match((result.loaded[0] as DocumentedAction).knowledge, /ONE_PLATFORM_CONNECTION_KEY/);
-    assert.match((result.loaded[0] as DocumentedAction).knowledge, /redirect: "error"/);
+    assert.match((result.loaded[0] as DocumentedAction).knowledge, /redirect: "manual"/);
   });
 
   it('generated fetch code refuses a foreign redirect without sending credentials', async () => {
@@ -379,7 +379,10 @@ describe('actions load', () => {
       const snippet = guide.match(/```typescript\n([\s\S]*?)\n```/)?.[1];
       assert.ok(snippet);
       const run = new Function('fetch', 'process', `return (async () => { ${snippet} return response; })()`);
-      await assert.rejects(run(fetch, { env: { ONE_SECRET: 'dummy-secret', ONE_PLATFORM_CONNECTION_KEY: 'dummy-connection' } }));
+      await assert.rejects(
+        run(fetch, { env: { ONE_SECRET: 'dummy-secret', ONE_PLATFORM_CONNECTION_KEY: 'dummy-connection' } }),
+        /Unexpected redirect from the One API: 307/,
+      );
       assert.equal(sourceRequests, 1);
       assert.equal(sourceHeaders?.['x-one-secret'], 'dummy-secret');
       assert.equal(sourceHeaders?.['x-one-connection-key'], 'dummy-connection');
@@ -391,6 +394,32 @@ describe('actions load', () => {
         new Promise<void>(resolve => source.close(() => resolve())),
         new Promise<void>(resolve => target.close(() => resolve())),
       ]);
+    }
+  });
+
+  it('generated fetch code returns an ordinary response unchanged', async () => {
+    const source = http.createServer((_req, res) => { res.end('{"ok":true}'); });
+    try {
+      await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve));
+      const sourceAddress = source.address();
+      assert.ok(sourceAddress && typeof sourceAddress !== 'string');
+      const unplaced: FindDeps = {
+        ...deps([]),
+        getActionDetails: async (id: string): Promise<ActionDetails> => ({ _id: id, title: 'X', method: 'GET', path: '/x', knowledge: '# X' }),
+      };
+      const result = await load(['x'], {}, unplaced, settings({
+        knowledgeAgent: true,
+        apiBase: `http://127.0.0.1:${sourceAddress.port}/v1`,
+      }));
+      const snippet = (result.loaded[0] as DocumentedAction).knowledge.match(/```typescript\n([\s\S]*?)\n```/)?.[1];
+      assert.ok(snippet);
+      const run = new Function('fetch', 'process', `return (async () => { ${snippet} return response; })()`);
+      const response = await run(fetch, { env: { ONE_SECRET: 'dummy-secret', ONE_PLATFORM_CONNECTION_KEY: 'dummy-connection' } });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { ok: true });
+    } finally {
+      source.closeAllConnections();
+      await new Promise<void>(resolve => source.close(() => resolve()));
     }
   });
 
