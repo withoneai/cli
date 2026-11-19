@@ -88,6 +88,47 @@ function parseRetryAfter(value: string | null): number | undefined {
   return undefined;
 }
 
+/** Follow ordinary API redirects without sending credentials to another origin. */
+async function fetchApi(url: string, init: RequestInit): Promise<Response> {
+  let currentUrl = url;
+  let request = { ...init, redirect: 'manual' as const };
+  for (let redirects = 0; ; redirects++) {
+    const response = await fetch(currentUrl, request);
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get('location');
+    if (!location) return response;
+    let nextUrl: URL;
+    try {
+      nextUrl = new URL(location, currentUrl);
+    } catch {
+      await response.body?.cancel();
+      throw new ApiError(response.status, 'Invalid API redirect URL');
+    }
+    if (nextUrl.username || nextUrl.password || nextUrl.origin !== new URL(currentUrl).origin) {
+      await response.body?.cancel();
+      // Name the origin only: a redirect's path and query can carry tokens.
+      const target = nextUrl.origin === 'null' ? nextUrl.protocol : nextUrl.origin;
+      throw new ApiError(response.status, `Refusing cross-origin or credentialed API redirect to ${target}`);
+    }
+    // Native fetch follows 20 redirects and fails on the 21st.
+    if (redirects >= 20) {
+      await response.body?.cancel();
+      throw new ApiError(response.status, 'Too many API redirects');
+    }
+    const method = (request.method ?? 'GET').toUpperCase();
+    if ((response.status === 303 && method !== 'GET' && method !== 'HEAD') ||
+        ((response.status === 301 || response.status === 302) && method === 'POST')) {
+      const headers = new Headers(request.headers);
+      for (const name of ['content-type', 'content-length', 'content-encoding', 'content-language', 'content-location']) {
+        headers.delete(name);
+      }
+      request = { ...request, method: 'GET', body: undefined, headers };
+    }
+    await response.body?.cancel();
+    currentUrl = nextUrl.href;
+  }
+}
+
 export class OneApi {
   private apiBase: string;
 
@@ -140,7 +181,7 @@ export class OneApi {
       fetchOpts.body = JSON.stringify(opts.body);
     }
 
-    const response = await fetch(url, fetchOpts);
+    const response = await fetchApi(url, fetchOpts);
 
     if (!response.ok) {
       const text = await response.text();
@@ -397,7 +438,7 @@ export class OneApi {
       fetchOpts.body = JSON.stringify(opts.body);
     }
 
-    const response = await fetch(url, fetchOpts);
+    const response = await fetchApi(url, fetchOpts);
 
     if (response.status === 304) {
       return { data: null as T, etag: opts.ifNoneMatch ?? null, status: 304 };
@@ -586,7 +627,7 @@ export class OneApi {
       };
     }
 
-    const response = await fetch(fullUrl, fetchOpts);
+    const response = await fetchApi(fullUrl, fetchOpts);
 
     if (!response.ok) {
       const text = await response.text();
