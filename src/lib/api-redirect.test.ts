@@ -106,6 +106,108 @@ describe('OneApi redirect credentials', () => {
     }
   });
 
+  it('preserves an action request signal across a same-origin redirect', async (t) => {
+    const controller = new AbortController();
+    const signals: (AbortSignal | null | undefined)[] = [];
+    t.mock.method(globalThis, 'fetch', async (_url: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal);
+      return signals.length === 1
+        ? new Response(null, { status: 307, headers: { Location: '/v1/passthrough/moved' } })
+        : new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const api = new OneApi(SECRET, 'https://api.example.test/v1', {});
+    await api.executePassthroughRequest({
+      platform: 'test', actionId: action._id, connectionKey: CONNECTION,
+      signal: controller.signal,
+    }, action);
+    assert.deepEqual(signals, [controller.signal, controller.signal]);
+  });
+
+  it('aborts an in-flight passthrough fetch on a local server', async () => {
+    let received!: () => void;
+    const entered = new Promise<void>(resolve => { received = resolve; });
+    const server = await listen((_req, _res) => { received(); });
+    try {
+      const controller = new AbortController();
+      const api = new OneApi(SECRET, `${origin(server)}/v1`, {});
+      const pending = api.executePassthroughRequest({
+        platform: 'test', actionId: action._id, connectionKey: CONNECTION,
+        signal: controller.signal,
+      }, action);
+      await entered;
+      controller.abort();
+      await assert.rejects(pending);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('does not call fetch when cancellation precedes passthrough dispatch', async (t) => {
+    let fetches = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      fetches++;
+      return new Response('{}');
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const api = new OneApi(SECRET, 'https://api.example.test/v1', {});
+    await assert.rejects(api.executePassthroughRequest({
+      platform: 'test', actionId: action._id, connectionKey: CONNECTION,
+      signal: controller.signal,
+    }, action));
+    assert.equal(fetches, 0);
+  });
+
+  it('aborts while reading a passthrough response body', async (t) => {
+    let readingStarted!: () => void;
+    const reading = new Promise<void>(resolve => { readingStarted = resolve; });
+    const server = await listen((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"incomplete":');
+      res.flushHeaders();
+    });
+    try {
+      const nativeFetch = globalThis.fetch;
+      t.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+        const response = await nativeFetch(url, init);
+        const read = response.text.bind(response);
+        response.text = () => {
+          readingStarted();
+          return read();
+        };
+        return response;
+      });
+      const controller = new AbortController();
+      const api = new OneApi(SECRET, `${origin(server)}/v1`, {});
+      const pending = api.executePassthroughRequest({
+        platform: 'test', actionId: action._id, connectionKey: CONNECTION,
+        signal: controller.signal,
+      }, action);
+      await reading;
+      controller.abort();
+      await assert.rejects(pending);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('does not follow a redirect if the signal was aborted while closing the first response', async (t) => {
+    const controller = new AbortController();
+    let fetches = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      fetches++;
+      return new Response(new ReadableStream({ cancel: () => controller.abort() }), {
+        status: 307, headers: { Location: '/v1/passthrough/moved' },
+      });
+    });
+    const api = new OneApi(SECRET, 'https://api.example.test/v1', {});
+    await assert.rejects(api.executePassthroughRequest({
+      platform: 'test', actionId: action._id, connectionKey: CONNECTION,
+      signal: controller.signal,
+    }, action));
+    assert.equal(fetches, 1);
+  });
+
   it('resolves relative redirects against the current URL', async () => {
     const paths: string[] = [];
     const server = await listen((req, res) => {

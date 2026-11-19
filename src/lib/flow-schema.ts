@@ -671,6 +671,8 @@ Strategies: \`${FLOW_SCHEMA.errorStrategies.join('\`, \`')}\`
 }
 \`\`\`
 
+When an action step sets timeoutMs, the CLI aborts its local preflight and request on timeout. A configured retry follows the existing retryDelayMs and backoff policy; the earlier operation may still be active when the retry begins, especially with retryDelayMs: 0. Aborting locally does not guarantee a remote write was rolled back. Use the destination's idempotency support for stronger protection against duplicate writes.
+
 ## Step Output Contracts (\`outputSchema\`, cli#59)
 
 Declare a step's output shape so the validator catches downstream field-name typos at flow load time:

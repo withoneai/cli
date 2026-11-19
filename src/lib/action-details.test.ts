@@ -129,6 +129,20 @@ describe('resolveActionDetails', () => {
     assert.deepEqual(result.details, FULL_DETAILS);
   });
 
+  it('does not serve stale action details after preflight is aborted', async () => {
+    writeEntry(makeEntry(FULL_DETAILS, { ageSeconds: 7200, ttl: 3600 }));
+    const controller = new AbortController();
+    const api = {
+      getActionDetailsWithMeta: async (_id: string, _etag?: string, signal?: AbortSignal) =>
+        new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+    };
+    const pending = resolveActionDetails(api, ACTION_ID, { signal: controller.signal });
+    controller.abort(new Error('cancelled'));
+    await assert.rejects(pending, /cancelled/);
+  });
+
   it('routes the stale-fallback warning to a custom warn sink instead of stderr', async () => {
     writeEntry(makeEntry(FULL_DETAILS, { ageSeconds: 7200, ttl: 3600 }));
     const api = stubApi(() => { throw new Error('network down'); });

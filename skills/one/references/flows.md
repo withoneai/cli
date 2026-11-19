@@ -642,6 +642,8 @@ Scoped per-flow: a sub-flow uses its own `defaultOnError`, not the parent's.
 
 Match rules: number entries are compared against any 3-digit token in the error message (covers `HTTP 429`, `status 502`, etc.); string entries match `error.errorCode` exactly OR appear as a case-insensitive substring of the message (covers Node error codes like `ETIMEDOUT` and our own `TIMEOUT`).
 
+For an action step with `timeoutMs`, the CLI aborts its local preflight and request on timeout. A configured retry follows the existing `retryDelayMs` and backoff policy; the earlier operation may still be active when the retry begins, especially with `retryDelayMs: 0`. Aborting locally does not guarantee a remote write was rolled back. Use the destination's idempotency support for stronger protection against duplicate writes.
+
 **Inspecting retry outcomes.** Every retried step exposes how it ended on its `StepResult`:
 
 - `$.steps.<id>.status` — `"success"` or `"failed"`

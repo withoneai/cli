@@ -57,8 +57,9 @@ export function isActionDetailsEntry(
 export async function resolveActionDetails(
   api: Pick<OneApi, 'getActionDetailsWithMeta'>,
   actionId: string,
-  opts: { useCache?: boolean; warn?: (msg: string) => void } = {}
+  opts: { useCache?: boolean; warn?: (msg: string) => void; signal?: AbortSignal } = {}
 ): Promise<ResolvedActionDetails> {
+  opts.signal?.throwIfAborted();
   const useCache = opts.useCache !== false;
   // Default warning sink is stderr; callers that resolve many actions (e.g.
   // `execute --parallel`) pass a deduping sink so a shared stale action only
@@ -73,7 +74,8 @@ export async function resolveActionDetails(
   }
 
   try {
-    const result = await api.getActionDetailsWithMeta(actionId, cached?.etag ?? undefined);
+    const result = await api.getActionDetailsWithMeta(actionId, cached?.etag ?? undefined, opts.signal);
+    opts.signal?.throwIfAborted();
 
     if (result.status === 304 && cached) {
       cached.cachedAt = new Date().toISOString();
@@ -85,6 +87,9 @@ export async function resolveActionDetails(
     writeCache(cachePath, entry);
     return { details: result.data, cacheHit: false, stale: false, entry };
   } catch (fetchError) {
+    // Cancellation must not turn into a stale-cache fallback. In particular,
+    // an aborted preflight must never proceed to a write action.
+    opts.signal?.throwIfAborted();
     if (cached) {
       warn(
         `Warning: serving cached action details (network unavailable, cached ${formatAge(getAge(cached))} ago)\n`

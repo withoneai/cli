@@ -54,6 +54,27 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stepId: string):
   }) as Promise<T>;
 }
 
+async function withActionTimeout<T>(
+  operation: Promise<T>, timeoutMs: number, stepId: string, controller: AbortController,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const timeoutError = new StepTimeoutError(stepId, timeoutMs);
+      // Queue the timeout result before abort listeners can settle the action.
+      // A request that resolves as a consequence of abort is still timed out.
+      reject(timeoutError);
+      controller.abort(timeoutError);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    // Promise.race observes a late rejection from the aborted operation.
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * Thrown when a `file-read` step's parsed output fails its declared
  * `fileRead.schema`. Carries `errorCode: 'SCHEMA_VALIDATION'` so it rides the
@@ -717,9 +738,10 @@ async function executeActionStep(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  signal?: AbortSignal,
 ): Promise<StepResult> {
   const resolved = resolveValue(step.action!, context) as FlowActionConfig;
-  return executeResolvedAction(step.id, resolved, context, api, permissions, allowedActionIds, options);
+  return executeResolvedAction(step.id, resolved, context, api, permissions, allowedActionIds, options, signal);
 }
 
 /**
@@ -738,7 +760,9 @@ async function executeResolvedAction(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  signal?: AbortSignal,
 ): Promise<StepResult> {
+  signal?.throwIfAborted();
   const platform = action.platform as string;
   const actionId = action.actionId as string;
 
@@ -769,9 +793,13 @@ async function executeResolvedAction(
     // flow does ONE listConnections per run.
     const ref = action.connection as { platform: string; tag?: string };
     if (!context._connections) {
-      context._connections = await api.listConnections();
+      const connections = await api.listConnections(signal);
+      signal?.throwIfAborted();
+      context._connections = connections;
     }
+    signal?.throwIfAborted();
     const conn = await api.resolveConnection(ref, context._connections);
+    signal?.throwIfAborted();
     connectionKey = conn.key;
   }
 
@@ -785,7 +813,8 @@ async function executeResolvedAction(
     throw new Error(`Action "${actionId}" is not in the allowed action list`);
   }
 
-  const { details: actionDetails } = await resolveActionDetails(api, actionId);
+  const { details: actionDetails } = await resolveActionDetails(api, actionId, { signal });
+  signal?.throwIfAborted();
   if (!isMethodAllowed(actionDetails.method, permissions)) {
     throw new Error(`Method "${actionDetails.method}" is not allowed under "${permissions}" permission level`);
   }
@@ -809,6 +838,7 @@ async function executeResolvedAction(
     pathVariables: pathVars,
     queryParams,
     headers,
+    signal,
   }, actionDetails);
 
   return {
@@ -1591,10 +1621,11 @@ export async function executeSingleStep(
         return result;
       }
 
+      const actionController = step.type === 'action' ? new AbortController() : undefined;
       const dispatch = async (): Promise<StepResult> => {
         switch (step.type) {
           case 'action':
-            return await executeActionStep(step, context, api, permissions, allowedActionIds, options);
+            return await executeActionStep(step, context, api, permissions, allowedActionIds, options, actionController?.signal);
           case 'transform':
             return await executeTransformStep(step, context);
           case 'code':
@@ -1622,9 +1653,12 @@ export async function executeSingleStep(
         }
       };
 
+      const operation = dispatch();
       const result: StepResult = step.timeoutMs
-        ? await withTimeout(dispatch(), step.timeoutMs, step.id)
-        : await dispatch();
+        ? actionController
+          ? await withActionTimeout(operation, step.timeoutMs, step.id, actionController)
+          : await withTimeout(operation, step.timeoutMs, step.id)
+        : await operation;
 
       result.durationMs = Date.now() - startTime;
       if (attempt > 1) {

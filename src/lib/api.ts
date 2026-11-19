@@ -93,6 +93,9 @@ async function fetchApi(url: string, init: RequestInit): Promise<Response> {
   let currentUrl = url;
   let request = { ...init, redirect: 'manual' as const };
   for (let redirects = 0; ; redirects++) {
+    // The same signal is carried through same-origin redirects. A cancellation
+    // during response cleanup must not dispatch the next request.
+    request.signal?.throwIfAborted();
     const response = await fetch(currentUrl, request);
     if (![301, 302, 303, 307, 308].includes(response.status)) return response;
     const location = response.headers.get('location');
@@ -149,8 +152,8 @@ export class OneApi {
     this.apiBase = apiBase ?? 'https://api.withone.ai/v1';
   }
 
-  private async request<T>(path: string): Promise<T> {
-    return this.requestFull<T>({ path });
+  private async request<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return this.requestFull<T>({ path, signal });
   }
 
   private async requestFull<T>(opts: {
@@ -159,6 +162,7 @@ export class OneApi {
     body?: unknown;
     headers?: Record<string, string>;
     queryParams?: Record<string, string>;
+    signal?: AbortSignal;
   }): Promise<T> {
     let url = `${this.apiBase}${opts.path}`;
     if (opts.queryParams && Object.keys(opts.queryParams).length > 0) {
@@ -175,6 +179,7 @@ export class OneApi {
     const fetchOpts: RequestInit = {
       method: opts.method || 'GET',
       headers,
+      signal: opts.signal,
     };
 
     if (opts.body !== undefined) {
@@ -223,13 +228,13 @@ export class OneApi {
     }
   }
 
-  async listConnections(): Promise<Connection[]> {
+  async listConnections(signal?: AbortSignal): Promise<Connection[]> {
     const allConnections: Connection[] = [];
     let page = 1;
     let totalPages = 1;
 
     do {
-      const response = await this.request<ConnectionsResponse>(`/vault/connections?page=${page}&limit=100`);
+      const response = await this.request<ConnectionsResponse>(`/vault/connections?page=${page}&limit=100`, signal);
       allConnections.push(...(response.rows || []));
       totalPages = response.pages || 1;
       page++;
@@ -391,10 +396,11 @@ export class OneApi {
     return Array.isArray(response) ? response : [];
   }
 
-  async getActionDetails(actionId: string): Promise<ActionDetails> {
+  async getActionDetails(actionId: string, signal?: AbortSignal): Promise<ActionDetails> {
     const response = await this.requestFull<{ rows: ActionDetails[] }>({
       path: '/knowledge',
       queryParams: { _id: actionId },
+      signal,
     });
 
     const actions = response?.rows || [];
@@ -412,6 +418,7 @@ export class OneApi {
     headers?: Record<string, string>;
     queryParams?: Record<string, string>;
     ifNoneMatch?: string;
+    signal?: AbortSignal;
   }): Promise<ApiResponseWithMeta<T>> {
     let url = `${this.apiBase}${opts.path}`;
     if (opts.queryParams && Object.keys(opts.queryParams).length > 0) {
@@ -432,6 +439,7 @@ export class OneApi {
     const fetchOpts: RequestInit = {
       method: opts.method || 'GET',
       headers,
+      signal: opts.signal,
     };
 
     if (opts.body !== undefined) {
@@ -463,12 +471,14 @@ export class OneApi {
    */
   async getActionDetailsWithMeta(
     actionId: string,
-    ifNoneMatch?: string
+    ifNoneMatch?: string,
+    signal?: AbortSignal,
   ): Promise<ApiResponseWithMeta<ActionDetails>> {
     const result = await this.requestWithMeta<{ rows: ActionDetails[] }>({
       path: '/knowledge',
       queryParams: { _id: actionId },
       ifNoneMatch,
+      signal,
     });
 
     if (result.status === 304) {
@@ -487,7 +497,7 @@ export class OneApi {
     args: ExecuteActionArgs,
     preloadedAction?: ActionDetails
   ): Promise<ExecutePassthroughResponse> {
-    const action = preloadedAction ?? await this.getActionDetails(args.actionId);
+    const action = preloadedAction ?? await this.getActionDetails(args.actionId, args.signal);
 
     const method = action.method;
     const contentType = args.isFormData
@@ -571,6 +581,7 @@ export class OneApi {
     const fetchOpts: RequestInit = {
       method,
       headers: requestHeaders,
+      signal: args.signal,
     };
 
     if (method?.toLowerCase() !== 'get' && requestData !== undefined) {
@@ -627,6 +638,7 @@ export class OneApi {
       };
     }
 
+    args.signal?.throwIfAborted();
     const response = await fetchApi(fullUrl, fetchOpts);
 
     if (!response.ok) {
