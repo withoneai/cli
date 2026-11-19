@@ -47,3 +47,25 @@ describe('OneApi.getOwnAccess (GET /v1/access/me)', () => {
     await assert.rejects(new OneApi('k', 'https://api.test/v1').getOwnAccess(), ApiError);
   });
 });
+
+describe('OneApi.listViewerLevels (GET /v1/connections)', () => {
+  it('maps each connection key to the person\'s level across pages', async () => {
+    const pages = [
+      { rows: [{ key: 'live::gmail::default::g', viewerAccessLevel: 'read' }], pages: 2 },
+      { rows: [{ key: 'live::slack::default::s', viewerAccessLevel: 'full' }], pages: 2 },
+    ];
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify(pages[urls.length - 1]), { status: 200 });
+    }) as typeof fetch;
+    const levels = await new OneApi('k', 'https://api.test/v1').listViewerLevels();
+    assert.deepEqual([...levels], [['live::gmail::default::g', 'read'], ['live::slack::default::s', 'full']]);
+    assert.deepEqual(urls, ['https://api.test/v1/connections?page=1&limit=100', 'https://api.test/v1/connections?page=2&limit=100']);
+  });
+
+  it('is empty from an older backend that sends no level', async () => {
+    answer(200, JSON.stringify({ rows: [{ key: 'live::gmail::default::g' }], pages: 1 }));
+    assert.equal((await new OneApi('k', 'https://api.test/v1').listViewerLevels()).size, 0);
+  });
+});

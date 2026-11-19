@@ -11,12 +11,14 @@ import {
   intersectEnvelopes,
   envelopeToAccess,
   accessLevel,
+  heldLevel,
+  viewerLevelLabel,
 } from '../lib/access.js';
 import { openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { AccessLevel, Connection, ConnectionAccess, KeyAccessDocument, PermissionLevel } from '../lib/types.js';
+import type { AccessLevel, Connection, ConnectionAccess, KeyAccessDocument, PermissionLevel, ViewerAccessLevel } from '../lib/types.js';
 
 export async function connectionAddCommand(platformArg?: string, options?: { tag?: string }): Promise<void> {
   if (output.isAgentMode()) {
@@ -187,12 +189,15 @@ export async function connectionListCommand(options?: { search?: string; limit?:
     // dashboard's access editor), fetched beside the listing. An API that
     // does not answer it yet leaves the CLI's own settings as the only source,
     // and says so.
-    const [allConnections, serverAccess] = await Promise.all([
+    // The person's own level (their share, or App Controls) caps every call
+    // too; an older backend sends none, which leaves the listing as it was.
+    const [allConnections, serverAccess, viewerLevels] = await Promise.all([
       api.listConnections(),
       api.getOwnAccess().then(
         doc => ({ ok: true as const, doc }),
         () => ({ ok: false as const, doc: null }),
       ),
+      api.listViewerLevels().catch(() => new Map<string, ViewerAccessLevel>()),
     ]);
 
     // The CLI's own access settings (`one config`) narrow it further.
@@ -235,14 +240,19 @@ export async function connectionListCommand(options?: { search?: string; limit?:
         total: filtered.length,
         showing: limited.length,
         ...(searchQuery && { search: searchQuery }),
-        connections: limited.map(conn => ({
-          platform: conn.platform,
-          state: conn.state,
-          key: conn.key,
-          ...(conn.name && { name: conn.name }),
-          ...(conn.tags?.length && { tags: conn.tags }),
-          access: withLevel(accessFor(conn)),
-        })),
+        connections: limited.map(conn => {
+          const access = accessFor(conn);
+          const viewer = viewerLevels.get(conn.key);
+          return {
+            platform: conn.platform,
+            state: conn.state,
+            key: conn.key,
+            ...(conn.name && { name: conn.name }),
+            ...(conn.tags?.length && { tags: conn.tags }),
+            access: withLevel(access),
+            ...(viewer && { viewerAccessLevel: viewer, effectiveLevel: heldLevel(access, viewer) }),
+          };
+        }),
         accessSource: serverAccess.ok ? 'server' : 'local',
         ...(knowledgeOnly && { knowledgeOnly: true }),
         ...(unresolved.size > 0 && { unresolvedActionIds: [...unresolved] }),
@@ -290,9 +300,12 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       key: conn.key,
       tags: conn.tags?.length ? conn.tags.join(', ') : '',
       access: formatAccess(accessFor(conn)),
+      viewer: viewerLevelLabel(viewerLevels.get(conn.key) ?? 'full'),
     }));
 
     const hasTags = rows.some(r => r.tags);
+    // Only when something holds the person below the key; otherwise every row reads Full access.
+    const isHeld = displayed.some(conn => (viewerLevels.get(conn.key) ?? 'full') !== 'full');
 
     printTable(
       [
@@ -302,9 +315,17 @@ export async function connectionListCommand(options?: { search?: string; limit?:
         { key: 'key', label: 'Connection Key', color: pc.dim },
         ...(hasTags ? [{ key: 'tags', label: 'Tags', color: pc.dim }] : []),
         { key: 'access', label: serverAccess.ok ? 'Access' : 'Access (CLI settings only)', color: pc.yellow },
+        ...(isHeld ? [{ key: 'viewer', label: 'Your level', color: pc.yellow }] : []),
       ],
       rows
     );
+
+    if (isHeld) {
+      p.note(
+        wrapText('Your level is what your share or App Controls let you do through a connection. One holds every call to both it and Access.'),
+        'Your level'
+      );
+    }
 
     console.log();
 
