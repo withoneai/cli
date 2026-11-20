@@ -12,6 +12,12 @@ function profilePath(platform: string, model: string): string {
   return path.join(PROFILES_DIR, `${platform}_${model}.json`);
 }
 
+/** Path of a profile file, and whether it exists (even if it doesn't parse). */
+export function profileFileStatus(platform: string, model: string): { path: string; exists: boolean } {
+  const filePath = profilePath(platform, model);
+  return { path: filePath, exists: fs.existsSync(filePath) };
+}
+
 export function readProfile(platform: string, model: string): SyncProfile | null {
   const filePath = profilePath(platform, model);
   try {

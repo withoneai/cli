@@ -10,7 +10,7 @@ import type {
   FlowRunState,
   FlowExecuteOptions,
 } from './flow-types.js';
-import { executeFlow } from './flow-engine.js';
+import { executeFlow, FlowPauseSignal } from './flow-engine.js';
 import { getNestedStepsKeys } from './flow-schema.js';
 import { isDynamicValue, writeMethodOf, type PlannedWrite } from './access-gate.js';
 import type { FlowStep, FlowStepType } from './flow-types.js';
@@ -124,8 +124,30 @@ export class FlowRunner {
     return this.statePath;
   }
 
+  /** Ctrl+C: stop before the next step (the engine polls `pauseRequested`). */
   requestPause(): void {
     this.paused = true;
+  }
+
+  /**
+   * A second Ctrl+C quits without waiting for the step boundary. Completed
+   * steps are already saved incrementally; mark the run paused so
+   * `flow resume` can pick it up.
+   */
+  markInterrupted(): void {
+    this.state.status = 'paused';
+    this.state.pausedAt = new Date().toISOString();
+    this.state.currentStepId = undefined;
+    this.saveState();
+    this.log('info', 'Flow interrupted', { completedSteps: this.state.completedSteps });
+  }
+
+  private markPaused(error: FlowPauseSignal): void {
+    this.state.status = 'paused';
+    this.state.pausedAt = new Date().toISOString();
+    this.state.currentStepId = undefined;
+    this.saveState();
+    this.log('info', 'Flow paused', { pausedBefore: error.stepId, completedSteps: this.state.completedSteps });
   }
 
   private log(level: string, msg: string, data?: Record<string, unknown>): void {
@@ -170,14 +192,6 @@ export class FlowRunner {
 
       // Forward to external handler
       externalHandler?.(event);
-
-      // Check if pause was requested
-      if (this.paused && event.event === 'step:complete') {
-        this.state.status = 'paused';
-        this.state.pausedAt = new Date().toISOString();
-        this.saveState();
-        // TODO: In a real implementation, we'd throw a special error to break execution
-      }
     };
   }
 
@@ -210,7 +224,7 @@ export class FlowRunner {
         api,
         permissions,
         allowedActionIds,
-        { ...options, onEvent: eventHandler },
+        { ...options, onEvent: eventHandler, pauseRequested: () => this.paused },
         { context: liveContext, completedSteps: [] },
       );
 
@@ -222,6 +236,10 @@ export class FlowRunner {
       this.log('info', 'Flow completed', { status: 'success' });
       return context;
     } catch (error) {
+      if (error instanceof FlowPauseSignal) {
+        this.markPaused(error);
+        throw error;
+      }
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.state.status = 'failed';
       this.state.context.steps = this.state.context.steps || {};
@@ -256,7 +274,7 @@ export class FlowRunner {
         api,
         permissions,
         allowedActionIds,
-        { ...options, onEvent: eventHandler },
+        { ...options, onEvent: eventHandler, pauseRequested: () => this.paused },
         {
           context: this.state.context,
           completedSteps: this.state.completedSteps,
@@ -271,6 +289,10 @@ export class FlowRunner {
       this.log('info', 'Flow completed after resume', { status: 'success' });
       return context;
     } catch (error) {
+      if (error instanceof FlowPauseSignal) {
+        this.markPaused(error);
+        throw error;
+      }
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.state.status = 'failed';
       this.saveState();

@@ -636,7 +636,7 @@ Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 
 - `continue` records the step as failed (`status`, `error`, `errorCode`) and moves on.
 - `retry` retries; if it still fails (or `failFastOn` matches, or `retryOn` doesn't), the step fails the flow.
-- `fallback` with `fallbackStepId` records the failure and moves on, exactly like `continue`: the engine does **not** run the named step. Without `fallbackStepId` it behaves like `fail`. To run a recovery step, gate it with `"if": "$.steps.<id>.status === 'failed'"`.
+- `fallback` with `fallbackStepId` runs the named step when this one fails. The fallback step must be in the same steps list; it is skipped in normal order and runs only as a fallback. The failed step stays recorded (`status: "failed"`, `fallback: "<id>"`), and the fallback's result is at `$.steps.<fallbackId>`. If the fallback fails too, the flow fails. A fallback can't have a fallback of its own, and `fallback` isn't allowed in `defaultOnError`. The validator requires `fallbackStepId`.
 
 **Flow-level default (cli#93).** Set `defaultOnError` at the top of the flow and every step without its own `onError` inherits it — handy when most steps should `continue` (e.g. rendering/formatting pipelines) and you don't want to repeat it N times. A step opts out by declaring its own `onError`:
 
@@ -759,11 +759,11 @@ Three tools that turn "re-run the whole 40-step flow to debug step 30" into near
 
 - **`--dry-run`** — resolves every step's interpolations and shows what they evaluate to, *without executing any step*. `$.input.*` / `$.env.*` resolve immediately; `$.steps.*` references are reported as `deferred` (they're produced at runtime). Transform/condition/while steps show their *evaluated* result; if a transform can't evaluate yet because it reads a step that hasn't run, it's marked `deferred` (depends on a later step) rather than shown as an error — genuine problems (syntax errors, missing inputs, a missing field on a step that *did* run) still surface as errors. Catches wiring bugs (typo'd input names, wrong field paths) with zero API spend. In `--agent` mode this is the `flow:dry-run` event whose `steps[]` carry a `references` table (`{selector, value, status}` where status is `resolved` | `deferred` | `missing`), an evaluated `resolved` value, and a `deferred` / `error` flag for expression steps.
 - **`--stop-after <stepId>`** — executes steps up to and including `<stepId>`, then stops; later steps don't run. Isolates where a long flow breaks. Emits a `flow:stopped` event; the run's partial state is saved. Target a top-level step or a loop/condition/while child: a `parallel` substep is accepted but ignored (every step then runs for real, even with `--dry-run`), and a target inside a loop stops after the loop's first iteration.
-- **`--mock`** — runs the flow with `action`, `paginate` and `bash` steps mocked: an action's `output` is its example response when it has one, otherwise the resolved config; paginate and bash echo their config. A mocked step's `response` is `{"_mock": true}`, so read mocked data from `.output`. **Every other step runs for real, including `file-write`.** Works with or without `--dry-run`.
+- **`--mock`** — runs the flow with `action`, `paginate`, `bash` and `file-write` steps mocked: an action's `output` is its example response when it has one, otherwise the resolved config; paginate and bash echo their config; `file-write` steps report `{ path, bytesWritten }` without writing anything. A mocked step's `response` is `{"_mock": true}`, so read mocked data from `.output`. **Every other step runs for real, including `code.module`.** Works with or without `--dry-run`.
 - **`--dry-run --stop-after <stepId>`** — runs the steps *before* `<stepId>` for real, then dry-resolves `<stepId>` against that **real** accumulated context (so its `$.steps.*` references resolve to actual upstream output) and stops without executing it. The honest way to preview "what will step N actually receive". Emits a `step:dry-resolve` event for the target.
 - **`flow inspect <runId>`** — prints a past run's per-step status, durations, errors, and outputs from its persisted state file (post-mortem, no re-run). Use after `--stop-after`, or on any failed run, to see exactly what each step produced. `--full` disables output truncation.
 
-Ctrl+C does not pause a run; let it finish or fail, then use `flow resume` on a failed run.
+Press Ctrl+C to pause a run: it stops before the next step and prints the `one flow resume <runId>` command (with the `--allow-*`/`--confirm-write` flags it needs). A bash or code step that the Ctrl+C interrupts runs again on resume. Press Ctrl+C again to quit at once; the run is still saved as paused. With `--agent` a paused run returns `{"status": "paused", "pausedBefore", "resume"}` and exits 130.
 
 ## Important Notes
 
@@ -775,6 +775,6 @@ Ctrl+C does not pause a run; let it finish or fail, then use `flow resume` on a 
 - In agent mode, flows with write steps require `--confirm-write`
 - `code.module` steps require `--allow-code` flag (they run with full Node access)
 - Action steps validate required params before executing — pass `--skip-validation` to bypass
-- `--mock` mocks only action, paginate and bash steps (actions return their schema's example output when it has one); other steps, file writes included, run for real
+- `--mock` mocks action, paginate, bash and file-write steps (actions return their schema's example output when it has one; file writes touch nothing); other steps, `code.module` included, run for real
 - State is persisted after every step; resume skips completed top-level steps and re-runs the failed one from its start
 - For bash+Claude steps, always set timeout to 180000+ and run sequentially (not in parallel)

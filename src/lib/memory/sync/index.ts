@@ -4,7 +4,7 @@ import { OneApi } from '../../api.js';
 import { resolveActionDetails } from '../../action-details.js';
 import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../../config.js';
 import { discoverModels } from './models.js';
-import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTemplate } from './profile.js';
+import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTemplate, profileFileStatus } from './profile.js';
 import { syncModel } from './runner.js';
 import { testSyncProfile } from './test.js';
 import { inferProfileFromKnowledge } from './infer.js';
@@ -216,7 +216,39 @@ async function syncModelsCommand(platform: string): Promise<void> {
 
 // ── sync init ──
 
-async function syncInitCommand(platform: string, model: string, options: { config?: string }): Promise<void> {
+/**
+ * `sync init <p> <m>` without --config writes a fresh template over the
+ * profile file. When one already exists that silently drops the user's
+ * changes (connection tag, memory settings, hooks), so require --force to
+ * re-seed, and point at --config for a merge. Returns null when init may go on.
+ */
+export function existingProfileGuard(
+  platform: string,
+  model: string,
+  options: { config?: string; force?: boolean },
+): { error: string; profilePath: string; _hint: string } | null {
+  if (options.config || options.force) return null;
+  const { path: profilePath, exists } = profileFileStatus(platform, model);
+  if (!exists) return null;
+  return {
+    error: `A sync profile for ${platform}/${model} already exists. sync init would replace it.`,
+    profilePath,
+    _hint:
+      `To change it, merge with: one sync init ${platform} ${model} --config '<json>'. ` +
+      `To start over from the built-in (your changes are lost): one sync init ${platform} ${model} --force.`,
+  };
+}
+
+async function syncInitCommand(platform: string, model: string, options: { config?: string; force?: boolean }): Promise<void> {
+  const refusal = existingProfileGuard(platform, model, options);
+  if (refusal) {
+    if (output.isAgentMode()) {
+      output.json({ status: 'exists', ...refusal });
+      process.exit(1);
+    }
+    output.error(`${refusal.error}\n${refusal._hint}`);
+  }
+
   if (!options.config) {
     // Output a template with resolved executable action ID
     const api = getApi();
@@ -734,7 +766,7 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
       console.log(
         `  ${pc.yellow('!')} ${platform}/${d.model} is missing ${d.missing.map(f => pc.bold(f)).join(', ')} ` +
         `from the current built-in profile.\n` +
-        `    Run ${pc.bold(`one sync init ${platform} ${d.model}`)} to pick ${d.missing.length > 1 ? 'them' : 'it'} up.`
+        `    Run ${pc.bold(`one sync init ${platform} ${d.model} --force`)} to pick ${d.missing.length > 1 ? 'them' : 'it'} up (this replaces the profile: re-apply your changes with --config).`
       );
     }
   }
@@ -774,7 +806,8 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
             profileDrift: profileDrift.map(d => ({
               model: d.model,
               missingFields: d.missing,
-              fix: `one sync init ${platform} ${d.model}`,
+              fix: `one sync init ${platform} ${d.model} --force`,
+              note: 'Replaces the profile with the built-in; re-apply your changes with --config.',
             })),
           }
         : {}),
@@ -1421,9 +1454,10 @@ function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('init <platform> <model>')
-    .description('Create or update a sync profile for a model')
-    .option('--config <json>', 'Sync profile configuration as JSON')
-    .action(async (platform: string, model: string, options: { config?: string }) => {
+    .description('Create a sync profile for a model (--config merges into an existing one)')
+    .option('--config <json>', 'Sync profile configuration as JSON (merged into an existing profile)')
+    .option('--force', 'Replace an existing profile with a fresh one from the built-in (your changes are lost)')
+    .action(async (platform: string, model: string, options: { config?: string; force?: boolean }) => {
       await syncInitCommand(platform, model, options);
     });
 
@@ -1454,7 +1488,7 @@ function registerSyncSubcommands(sync: Command): void {
     .option('--full-refresh', 'Fetch ALL records and archive memory rows no longer in the source (handles deletions)')
     .option('--re-enrich', 'Re-fetch the detail endpoint for every already-enriched record (profiles with an "enrich" block). Costs one detail call per record — for routine freshness set enrich.invalidateOn in the profile instead')
     .option('--no-memory', 'Skip the unified memory dual-write (default: memory is always written)')
-    .option('--embed', 'Embed synced rows under the configured model, regardless of profile.memory.embed', false)
+    .option('--embed', 'Embed synced rows under the configured model, regardless of profile.memory.embed')
     .option('--no-embed', 'Skip embedding even if the profile opts in')
     // Back-compat alias: `--to-memory` was opt-in during the dual-write
     // derisking window. Memory is now the primary target, so the flag is

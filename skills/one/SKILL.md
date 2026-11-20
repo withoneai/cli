@@ -31,7 +31,7 @@ one login                    # Browser-based login (opens app.withone.ai)
 one logout                   # Clear local credentials
 ```
 
-`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. If already logged in, the user can choose to log in globally or for the current directory. It is not available with `--agent`; use `one --agent init --auth browser [-p]` instead. `one logout` shows current session info and confirms before clearing credentials, but **with `--agent` there is no confirmation**: it deletes both this directory's project config and the global config. Never run it unless the user asked to log out.
+`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. If already logged in, the user can choose to log in globally or for the current directory. It is not available with `--agent`; use `one --agent init --auth browser [-p]` instead. `one logout` shows current session info and confirms before clearing credentials, With `--agent` there's no prompt: without `--force` it returns `confirmation_required` and the config it would clear. With `--force` it clears only the config in effect (the project config if there is one, else the global one); `--scope global|both` picks another. Never run it unless the user asked to log out.
 
 The consent page asks which harness will use the key (Claude Code, Codex, Cursor, …) and records the install location as tags on the key (`scope:global` / `scope:project`, `path:`, `host:`, `user:`, `harness:`, and `device:` unless telemetry is off). The CLI prints what it will send before opening the browser. `one whoami` shows the key's name once it is stored.
 
@@ -227,6 +227,7 @@ Underneath, the store has no `platform` column — `type` is the only platform-s
 one --agent mem add note '{"content":"..."}' --tags work --weight 7
 one --agent mem update <id> '{"status":"done"}'         # merges into data; refreshes searchable_text
 one --agent mem search "deadline"                       # hybrid with key + pgvector, else FTS
+one --agent mem search "deadline" --deep                # hybrid, or an error listing what's missing (no FTS fallback)
 one --agent mem list note --limit 20
 one --agent mem link <from-id> <to-id> relates_to --bi
 
@@ -298,8 +299,8 @@ export OPENAI_API_KEY=sk-...
 # Check built-in profiles (pre-validated configs for common platforms)
 one --agent sync profiles
 
-# Setup — seeds from the built-in. Without --config it REPLACES an existing profile;
-# with --config it merges into the existing one.
+# Setup — seeds from the built-in. If a profile already exists, init refuses
+# (status: "exists"); --config merges into it, --force replaces it.
 one --agent sync init stripe balanceTransactions
 # If _complete: true and _test.ok: true → ready to run
 
@@ -327,8 +328,9 @@ one --agent sync test attio/attioPeople --show-searchable
 # Iterate until the numbers match intent.
 
 # Run — memory is always written; pass --no-memory to skip (rare).
-# Add --embed to embed: the profile's memory.embed alone isn't applied today.
-one --agent sync run stripe --embed
+# Embeds when the profile's memory.embed says so (else defaults.embedOnSync);
+# --embed / --no-embed override it for one run.
+one --agent sync run stripe
 one --agent sync schema stripe/customers         # inspect field paths/types before querying
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync search "refund"                 # this project's synced models (mem search works anywhere)
@@ -356,7 +358,7 @@ Without declared paths, the default walker concatenates every string in the reco
 
 **Extracting a flat field? Use `derive`, not `transform`.** `derive` computes top-level fields from paths already in the record (`"derive": { "from_email": { "path": "messages[0].payload.headers[name=From].value", "extract": "email" } }`), using the same path syntax as `identityKeys`. `transform` spawns `sh -c`, so it needs `jq` on PATH and silently does nothing on Windows — never put one in a profile you intend to share. Shell commands in a profile you didn't create with `sync init --config` (e.g. one from a cloned repo) are refused until approved: `one --agent sync approve <platform>` returns the commands; show them to the user and re-run with `--yes` only if they agree. A path that resolves to nothing omits the field rather than writing null.
 
-**Installed profiles do not auto-update.** `sync run` reads only `.one/sync/profiles/<platform>_<model>.json` and never merges the shipped built-in, so a profile created before a capability shipped silently lacks it — a pre-#167 gmail profile writes zero identity keys, forever, with no change in record counts. `sync run` warns when the built-in declares `identityKeys` / `identityKey` / `enrich` / `dateFilter` / `memory` that your copy lacks (agent mode: a `profileDrift` array). **Don't fix it with a bare `one sync init <platform> <model>`**: without `--config` that replaces the profile and loses the user's `connection.tag`, `memory`, hooks and other edits. Copy just the missing fields from `one --agent sync profiles <platform>` and pass them with `one sync init <platform> <model> --config '{...}'`, which merges.
+**Installed profiles do not auto-update.** `sync run` reads only `.one/sync/profiles/<platform>_<model>.json` and never merges the shipped built-in, so a profile created before a capability shipped silently lacks it — a pre-#167 gmail profile writes zero identity keys, forever, with no change in record counts. `sync run` warns when the built-in declares `identityKeys` / `identityKey` / `enrich` / `dateFilter` / `memory` that your copy lacks (agent mode: a `profileDrift` array). **Don't fix it with `one sync init <platform> <model> --force`** (the hint's suggestion): that replaces the profile and loses the user's `connection.tag`, `memory`, hooks and other edits. A bare `sync init` refuses because the profile exists. Copy just the missing fields from `one --agent sync profiles <platform>` and pass them with `one sync init <platform> <model> --config '{...}'`, which merges.
 
 **Old project sync data is never imported automatically.** `sync run` ignores `.one/sync/data/*.db` and `.one/sync/state/` (a cloned repo can ship them) and prints a hint. Show the user `one --agent mem migrate --dry-run` before running `mem migrate`.
 

@@ -35,7 +35,41 @@ function formatWhoami(config: Config, apiKey: string, pc: typeof import('picocol
   return lines;
 }
 
-export async function logoutCommand(): Promise<void> {
+type ConfigScope = 'project' | 'global';
+export type LogoutScope = ConfigScope | 'both';
+const LOGOUT_SCOPES: readonly LogoutScope[] = ['project', 'global', 'both'];
+
+/**
+ * Which config files a logout clears. With no `--scope`, only the config in
+ * effect: the project config when there is one (it wins resolution), else the
+ * global one. `both` is opt-in. Paths are null when that file doesn't exist.
+ */
+export function resolveLogoutTargets(opts: {
+  scope?: string;
+  projectPath: string | null;
+  globalPath: string | null;
+}): { targets: Array<{ scope: ConfigScope; path: string }> } | { error: string } {
+  const { scope, projectPath, globalPath } = opts;
+  if (scope !== undefined && !LOGOUT_SCOPES.includes(scope as LogoutScope)) {
+    return { error: `Unknown --scope "${scope}". Use project, global or both.` };
+  }
+  const project = projectPath ? [{ scope: 'project' as const, path: projectPath }] : [];
+  const global = globalPath ? [{ scope: 'global' as const, path: globalPath }] : [];
+  if (scope === 'both') return { targets: [...project, ...global] };
+  if (scope === 'project' || scope === 'global') {
+    const found = scope === 'project' ? project : global;
+    if (found.length === 0) return { error: `There is no ${scope} config to clear.` };
+    return { targets: found };
+  }
+  return { targets: project.length > 0 ? project : global };
+}
+
+const LOGOUT_CONFIRMATION_HINT =
+  'Re-run with --force to clear these credentials. This deletes the whole config file, ' +
+  'including the OpenAI key, access control and memory settings. ' +
+  'Pass --scope project|global|both to choose which config.';
+
+export async function logoutCommand(options: { force?: boolean; scope?: string } = {}): Promise<void> {
   const apiKey = getApiKey();
 
   if (!apiKey) {
@@ -48,13 +82,41 @@ export async function logoutCommand(): Promise<void> {
   }
 
   if (output.isAgentMode()) {
-    // Agent mode: clear resolved config, no prompts
-    const globalPath = getGlobalConfigPath();
+    // Agent mode: no prompts, so deleting needs --force (as `connection delete`
+    // does), and only the config in effect is cleared unless --scope says so.
     const projectPath = getProjectConfigPath();
-    let cleared = false;
-    if (fs.existsSync(projectPath)) { fs.unlinkSync(projectPath); cleared = true; }
-    if (fs.existsSync(globalPath)) { fs.unlinkSync(globalPath); cleared = true; }
-    output.json({ status: cleared ? 'logged_out' : 'not_logged_in', message: cleared ? 'Credentials cleared.' : 'No config found.' });
+    const globalPath = getGlobalConfigPath();
+    const plan = resolveLogoutTargets({
+      scope: options.scope,
+      projectPath: fs.existsSync(projectPath) ? projectPath : null,
+      globalPath: fs.existsSync(globalPath) ? globalPath : null,
+    });
+    if ('error' in plan) {
+      output.json({ error: plan.error });
+      process.exit(1);
+    }
+    if (plan.targets.length === 0) {
+      output.json({
+        status: 'not_logged_in',
+        message: 'No config file found. The key comes from ONE_SECRET or .onerc; remove it there.',
+      });
+      return;
+    }
+    if (!options.force) {
+      output.json({
+        status: 'confirmation_required',
+        error: 'Logging out needs --force in agent mode.',
+        wouldClear: plan.targets,
+        _hint: LOGOUT_CONFIRMATION_HINT,
+      });
+      process.exit(1);
+    }
+    for (const t of plan.targets) fs.unlinkSync(t.path);
+    output.json({
+      status: 'logged_out',
+      cleared: plan.targets,
+      message: 'Credentials cleared. The API key itself stays active; revoke it in the dashboard.',
+    });
     return;
   }
 

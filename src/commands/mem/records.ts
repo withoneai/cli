@@ -17,7 +17,14 @@ interface AddFlags {
   keys?: string;
   weight?: string;
   embed?: boolean;
-  noEmbed?: boolean;
+}
+
+/**
+ * `--embed` / `--no-embed` both land on `flags.embed` (commander maps
+ * `--no-embed` to `embed: false`). Unset defers to `defaults.embedOnAdd`.
+ */
+export function addEmbedOption(flags: { embed?: boolean }): { embed?: boolean } {
+  return typeof flags.embed === 'boolean' ? { embed: flags.embed } : {};
 }
 
 export async function memAddCommand(type: string, dataRaw: string, flags: AddFlags): Promise<void> {
@@ -27,7 +34,7 @@ export async function memAddCommand(type: string, dataRaw: string, flags: AddFla
   if (weight !== undefined && (weight < 1 || weight > 10)) {
     output.error('weight must be between 1 and 10');
   }
-  const opts = flags.noEmbed ? { embed: false } : flags.embed ? { embed: true } : {};
+  const opts = addEmbedOption(flags);
   const record = await addRecord(
     { type, data, tags: parseCsv(flags.tags), keys: parseCsv(flags.keys), weight },
     opts,
@@ -206,8 +213,24 @@ interface SearchFlags {
   type?: string;
   limit?: string;
   deep?: boolean;
-  noTrack?: boolean;
+  /** `--no-track` sets this to false (commander's negated-flag convention). */
+  track?: boolean;
   includeArchived?: boolean;
+}
+
+/** `mem search --deep` when semantic search can't run: fail loudly, never fall back to FTS. */
+function deepSearchUnavailable(how: string[]): never {
+  const message = "Semantic search isn't available, so --deep can't run.";
+  if (output.isAgentMode()) {
+    output.json({ error: message, searchMode: 'unavailable', how });
+    process.exit(1);
+  }
+  output.error([message, ...how.map(h => `- ${h}`)].join('\n'));
+}
+
+/** Bump access counts on results unless `--no-track` or the config turns it off. */
+export function shouldTrackSearchAccess(flags: { track?: boolean }, configDefault: boolean): boolean {
+  return flags.track !== false && configDefault;
 }
 
 export async function memSearchCommand(query: string, flags: SearchFlags): Promise<void> {
@@ -215,19 +238,33 @@ export async function memSearchCommand(query: string, flags: SearchFlags): Promi
   const backend = await getBackend();
   const cfg = getMemoryConfigOrDefault();
 
-  // `--deep` forces semantic embedding if provider configured. Default also
-  // does semantic when provider is openai; FTS-only when provider is none.
+  // Hybrid (FTS + semantic) when an OpenAI key, the provider and pgvector are
+  // all in place; FTS-only otherwise. `--deep` means "semantic or nothing":
+  // instead of quietly falling back to FTS it fails and names what's missing.
+  const vectorSearch = backend.capabilities().vectorSearch;
+  if (flags.deep) {
+    // Name every missing piece at once, not one per attempt.
+    const missing = [
+      ...(vectorSearch ? [] : [semanticSearchUpgradeHint({ vectorSearchAvailable: false })!.how]),
+      ...[semanticSearchUpgradeHint({ vectorSearchAvailable: true })?.how].filter((h): h is string => !!h),
+    ];
+    if (missing.length > 0) deepSearchUnavailable(missing);
+  }
+
   let queryEmbedding: number[] | null = null;
-  if ((flags.deep || cfg.embedding.provider === 'openai') && backend.capabilities().vectorSearch) {
+  if (cfg.embedding.provider === 'openai' && vectorSearch) {
     const embedded = await embed(query);
     if (embedded) queryEmbedding = embedded.vector;
+  }
+  if (flags.deep && !queryEmbedding) {
+    deepSearchUnavailable(['Embedding the query failed (the OpenAI request returned no vector). Retry, or search without --deep.']);
   }
 
   const results = await backend.search(query, {
     type: flags.type,
     limit: flags.limit ? parsePositiveInt(flags.limit, 10, 'limit') : undefined,
     queryEmbedding,
-    trackAccess: !flags.noTrack && cfg.defaults.trackAccessOnSearch,
+    trackAccess: shouldTrackSearchAccess(flags, cfg.defaults.trackAccessOnSearch),
     includeArchived: flags.includeArchived,
   });
 

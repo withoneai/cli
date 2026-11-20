@@ -49,6 +49,9 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
       if (!FLOW_SCHEMA.errorStrategies.includes(oe.strategy as string)) {
         errors.push({ path: 'defaultOnError.strategy', message: `Error strategy must be one of: ${FLOW_SCHEMA.errorStrategies.join(', ')}` });
       }
+      if (oe.strategy === 'fallback') {
+        errors.push({ path: 'defaultOnError.strategy', message: '"fallback" names one specific step, so it can\'t be the flow-wide defaultOnError. Set it on the step\'s own onError.' });
+      }
     }
   }
 
@@ -146,6 +149,19 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
       const oe = s.onError as Record<string, unknown>;
       if (!FLOW_SCHEMA.errorStrategies.includes(oe.strategy as string)) {
         errors.push({ path: `${path}.onError.strategy`, message: `Error strategy must be one of: ${FLOW_SCHEMA.errorStrategies.join(', ')}` });
+      }
+      if (oe.strategy === 'fallback') {
+        const target = oe.fallbackStepId;
+        const siblingIds = steps
+          .map(st => (st && typeof st === 'object' ? (st as Record<string, unknown>).id : undefined))
+          .filter((id): id is string => typeof id === 'string');
+        if (typeof target !== 'string' || target === '') {
+          errors.push({ path: `${path}.onError.fallbackStepId`, message: '"fallback" needs "fallbackStepId": the id of the step to run when this one fails' });
+        } else if (target === s.id) {
+          errors.push({ path: `${path}.onError.fallbackStepId`, message: `Step "${s.id}" can't fall back to itself` });
+        } else if (!siblingIds.includes(target)) {
+          errors.push({ path: `${path}.onError.fallbackStepId`, message: `Fallback step "${target}" must be in the same steps list as "${s.id}"` });
+        }
       }
     }
 

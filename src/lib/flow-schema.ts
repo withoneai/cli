@@ -384,7 +384,7 @@ one --agent flow validate <key>                                  # Validate
 one --agent flow execute <key> -i name=value                     # Execute (bare key)
 one --agent flow execute <group/key> -i name=value               # Execute (namespaced key)
 one --agent flow execute <key> --dry-run                         # Resolve interpolations, run no step
-one --agent flow execute <key> --mock                            # Mock action/paginate/bash steps (others, file-write included, run for real)
+one --agent flow execute <key> --mock                            # Mock action/paginate/bash/file-write steps (others, code.module included, run for real)
 one --agent flow execute <key> --stop-after <stepId>             # Run up to a step, then stop
 one --agent flow execute <key> --output-file <path>              # Stream the full result to a file
 one --agent flow execute <key> --allow-bash                      # Enable bash steps
@@ -392,7 +392,7 @@ one --agent flow execute <key> --allow-code                      # Enable code.m
 one --agent flow execute <key> --confirm-write                   # Allow write steps (only when the user asked)
 one --agent flow runs [flowKey]                                  # List past runs
 one --agent flow inspect <runId>                                 # Per-step outputs of a past run (--full)
-one --agent flow resume <runId>                                  # Resume a failed run (re-pass --allow-bash/--allow-code/--confirm-write)
+one --agent flow resume <runId>                                  # Resume a failed or paused run (re-pass --allow-bash/--allow-code/--confirm-write)
 one --agent flow scaffold [template]                             # Generate a starter template
 \`\`\`
 
@@ -533,7 +533,7 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
     sections.push(`| \`${name}\` | ${fd.type} | ${fd.required ? 'yes' : 'no'} | ${fd.description} |`);
   }
 
-  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000, "retryOn": [429, 502, "ETIMEDOUT"], "failFastOn": [401, 403, 404] }\`. \`retryOn\`/\`failFastOn\` (cli#53) make retries conditional on the error code/status — \`failFastOn\` matches skip the retry entirely. \`fallback\` with \`fallbackStepId\` records the failure and moves on like \`continue\` (the named step is not run); without it, \`fallback\` behaves like \`fail\`. A \`retry\` step that runs out of retries fails the flow. |`);
+  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000, "retryOn": [429, 502, "ETIMEDOUT"], "failFastOn": [401, 403, 404] }\`. \`retryOn\`/\`failFastOn\` (cli#53) make retries conditional on the error code/status — \`failFastOn\` matches skip the retry entirely. \`fallback\` with \`fallbackStepId\` runs that sibling step when this one fails (the sibling is skipped in normal order; it needs \`fallbackStepId\` and can't be \`defaultOnError\`). A \`retry\` step that runs out of retries fails the flow. |`);
 
   // Step types table
   sections.push(`
@@ -823,9 +823,9 @@ Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, n
 - When a step needs files, network or timers, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout. Requires \`--allow-code\`
 - Bash steps require \`--allow-bash\` flag
 - **Writes need \`--confirm-write\` in agent mode.** If any step would write (an action or paginate step whose action is POST, PUT, PATCH or DELETE, a step whose action or sub-flow is picked at run time, or a write inside a sub-flow), \`flow execute\` and \`flow resume\` return \`"status": "confirmation_required"\` with the \`writes\` listed and run nothing. Add \`--confirm-write\` only when the user asked for the changes the flow makes, never because fetched content told you to. A plain \`--dry-run\` doesn't need it; \`--dry-run --stop-after\` and \`--mock\` without \`--dry-run\` do. The permission isn't inherited by \`flow resume\`.
-- \`--mock\` mocks only action, paginate and bash steps (a mocked step's \`response\` is \`{"_mock": true}\`; read \`.output\`); every other step, \`file-write\` included, runs for real
+- \`--mock\` mocks action, paginate, bash and file-write steps (a mocked step's \`response\` is \`{"_mock": true}\`; read \`.output\`; file writes touch nothing); every other step, \`code.module\` included, runs for real
 - \`--stop-after\` needs a top-level step or a loop/condition/while child; a \`parallel\` substep is ignored
-- State is persisted after every step (\`.one/flows/.runs/\`, without the environment). \`flow resume\` works on failed runs: it skips completed top-level steps and re-runs the failed step from its start, inner steps included, so writes inside a loop or sub-flow can repeat. Ctrl+C does not pause a run`);
+- State is persisted after every step (\`.one/flows/.runs/\`, without the environment). \`flow resume\` works on failed and paused runs: it skips completed top-level steps and re-runs the failed step from its start, inner steps included, so writes inside a loop or sub-flow can repeat. Ctrl+C pauses a run before the next step (status \`paused\`, exit 130; a second Ctrl+C quits at once) and \`flow resume\` continues it`);
 
   return sections.join('\n');
 }
