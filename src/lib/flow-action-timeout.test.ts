@@ -274,3 +274,67 @@ describe('flow action timeout cancellation', () => {
     }
   });
 });
+
+describe('flow paginate timeout cancellation', () => {
+  function paginateSetup(execute: (page: number, signal?: AbortSignal) => Promise<{ responseData: unknown }>) {
+    const actionId = `paginate-timeout-test-${++nextId}`;
+    const step: FlowStep = {
+      id: 'list', name: 'List', type: 'paginate', timeoutMs: 75, onError: { strategy: 'continue' },
+      paginate: {
+        action: { platform: 'test', actionId, connectionKey: 'test-connection' },
+        pageTokenField: 'next',
+        resultsField: 'items',
+        inputTokenParam: 'queryParams.cursor',
+        maxPages: 20,
+      },
+    };
+    const signals: (AbortSignal | undefined)[] = [];
+    let requests = 0;
+    const api = {
+      getActionDetailsWithMeta: async () => ({
+        data: { _id: actionId, title: 'List', method: 'GET', path: '/items', tags: [] } as ActionDetails,
+        status: 200, etag: null,
+      }),
+      executePassthroughRequest: async (args: { signal?: AbortSignal }) => {
+        signals.push(args.signal);
+        return execute(requests++, args.signal);
+      },
+    } as unknown as OneApi;
+    return { step, api, signals, requests: () => requests };
+  }
+
+  it('aborts the in-flight page and fetches no more after the timeout', async () => {
+    const { step, api, signals, requests } = paginateSetup(async (page, signal) => {
+      if (page === 0) return { responseData: { items: [page], next: 'cursor-1' } };
+      return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    });
+    const pageEvents: number[] = [];
+    const result = await bounded(executeSingleStep(step, context(), api, 'admin', ['*'], {
+      skipValidation: true,
+      onEvent: event => { if (event.event === 'step:page') pageEvents.push(event.page as number); },
+    }), 1000);
+    assert.equal(result.status, 'timeout');
+    assert.equal(result.errorCode, 'TIMEOUT');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(requests(), 2, 'no page is fetched after the timeout');
+    assert.deepEqual(pageEvents, [1]);
+    assert.ok(signals.every(signal => signal?.aborted), 'every page request carries the aborted step signal');
+  });
+
+  it('does not fetch the next page when a page resolves after the timeout', async () => {
+    const late = deferred<{ responseData: unknown }>();
+    const { step, api, requests } = paginateSetup(async page =>
+      page === 0 ? late.promise : { responseData: { items: [page], next: `cursor-${page + 1}` } },
+    );
+    const pageEvents: number[] = [];
+    const result = await bounded(executeSingleStep(step, context(), api, 'admin', ['*'], {
+      skipValidation: true,
+      onEvent: event => { if (event.event === 'step:page') pageEvents.push(event.page as number); },
+    }), 1000);
+    assert.equal(result.status, 'timeout');
+    late.resolve({ responseData: { items: [0], next: 'cursor-1' } });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(requests(), 1, 'a late page must not start another request');
+    assert.deepEqual(pageEvents, []);
+  });
+});

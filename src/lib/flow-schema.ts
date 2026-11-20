@@ -70,7 +70,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     type:   { type: 'string', required: true, description: 'Step type (determines which config object is required)' },
     if:     { type: 'string', required: false, description: 'JS expression — skip step if falsy' },
     unless: { type: 'string', required: false, description: 'JS expression — skip step if truthy' },
-    timeoutMs: { type: 'number', required: false, description: 'Wall-clock timeout (ms). On expiry the step fails with errorCode:"TIMEOUT"; with onError:continue the result gets status:"timeout".' },
+    timeoutMs: { type: 'number', required: false, description: 'Wall-clock timeout (ms). On expiry the step fails with errorCode:"TIMEOUT"; with onError:continue the result gets status:"timeout". Action and paginate steps abort their request; other step types keep running in the background.' },
     requires:  { type: 'array', required: false, description: 'Presence preconditions: array of $.input.X or $.steps.X.output... selectors that must resolve to a non-empty value before the step runs. Failures honor onError.' },
     outputSchema: { type: 'object', required: false, description: 'Optional declaration of the shape this step\'s output produces. When set, the validator checks that downstream $.steps.<this.id>.output.<field> references point at declared fields. Format: { fieldName: "string"|"number"|"boolean"|"object"|"array"|"unknown" } — nested objects are supported.' },
   },
@@ -675,7 +675,7 @@ Strategies: \`${FLOW_SCHEMA.errorStrategies.join('\`, \`')}\`
 }
 \`\`\`
 
-When an action step sets timeoutMs, the CLI aborts its local preflight and request on timeout. A configured retry follows the existing retryDelayMs and backoff policy; the earlier operation may still be active when the retry begins, especially with retryDelayMs: 0. Aborting locally does not guarantee a remote write was rolled back. Use the destination's idempotency support for stronger protection against duplicate writes.
+When an action or paginate step sets timeoutMs, the CLI aborts its local preflight and request on timeout, and a paginate step fetches no further pages. Other step types keep running in the background after a timeout, including the steps inside a timed-out loop, parallel, while or flow step. A configured retry follows the existing retryDelayMs and backoff policy; the earlier operation may still be active when the retry begins, especially with retryDelayMs: 0. Aborting locally does not guarantee a remote write was rolled back: a write cancelled mid-request may or may not have reached the destination. Use the destination's idempotency support for stronger protection against duplicate writes.
 
 ## Step Output Contracts (\`outputSchema\`, cli#59)
 

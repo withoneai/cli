@@ -290,7 +290,7 @@ The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expres
 
 ## Step Types
 
-Every step needs `id`, `name` and `type`, plus the config object for its type. Common optional fields on any step: `if` / `unless` (JS conditions), `onError`, `timeoutMs` (the step fails with `status: "timeout"` and `errorCode: "TIMEOUT"`; the underlying API call or command is not cancelled), `requires` and `outputSchema` (below).
+Every step needs `id`, `name` and `type`, plus the config object for its type. Common optional fields on any step: `if` / `unless` (JS conditions), `onError`, `timeoutMs` (the step fails with `status: "timeout"` and `errorCode: "TIMEOUT"`; an `action` or `paginate` step aborts its request, but any other step type keeps running in the background, including the steps inside a timed-out `loop`, `parallel`, `while` or `flow` step), `requires` and `outputSchema` (below).
 
 ### `action` — Execute a One API action
 
@@ -690,7 +690,7 @@ Scoped per-flow: a sub-flow uses its own `defaultOnError`, not the parent's.
 
 Match rules: number entries are compared against any 3-digit token in the error message (covers `HTTP 429`, `status 502`, etc.); string entries match `error.errorCode` exactly OR appear as a case-insensitive substring of the message (covers Node error codes like `ETIMEDOUT` and our own `TIMEOUT`).
 
-For an action step with `timeoutMs`, the CLI aborts its local preflight and request on timeout. A configured retry follows the existing `retryDelayMs` and backoff policy; the earlier operation may still be active when the retry begins, especially with `retryDelayMs: 0`. Aborting locally does not guarantee a remote write was rolled back. Use the destination's idempotency support for stronger protection against duplicate writes.
+For an `action` or `paginate` step with `timeoutMs`, the CLI aborts its local preflight and request on timeout, and a `paginate` step fetches no further pages. A configured retry follows the existing `retryDelayMs` and backoff policy; the earlier operation may still be active when the retry begins, especially with `retryDelayMs: 0`. Aborting locally does not guarantee a remote write was rolled back: a write cancelled mid-request may or may not have reached the destination. Use the destination's idempotency support for stronger protection against duplicate writes.
 
 **Inspecting retry outcomes.** A step that succeeded after retrying carries `$.steps.<id>.retries`, the number of retries it took (absent when the first attempt succeeded). A `retry` step that runs out of retries fails the flow, so it never lands as `status: "failed"`. `$.steps.<id>.error` is set on steps that failed under `continue` or `fallback`.
 

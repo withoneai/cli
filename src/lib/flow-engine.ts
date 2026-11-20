@@ -1364,6 +1364,7 @@ async function executePaginateStep(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  signal?: AbortSignal,
 ): Promise<StepResult> {
   const config = step.paginate!;
   const maxPages = config.maxPages ?? 10;
@@ -1377,13 +1378,16 @@ async function executePaginateStep(
   const resolvedTemplate = resolveValue(config.action, context) as FlowActionConfig;
 
   for (let page = 0; page < maxPages; page++) {
+    // A timed-out paginate step must not fetch (or report) another page.
+    signal?.throwIfAborted();
     const actionConfig = structuredClone(resolvedTemplate) as FlowActionConfig;
     if (page > 0) {
       setByDotPath(actionConfig as unknown as Record<string, unknown>, config.inputTokenParam, pageToken);
     }
     const result = await executeResolvedAction(
-      `${step.id}__page${page}`, actionConfig, context, api, permissions, allowedActionIds, options,
+      `${step.id}__page${page}`, actionConfig, context, api, permissions, allowedActionIds, options, signal,
     );
+    signal?.throwIfAborted();
     const response = result.response as Record<string, unknown>;
     const pageResults = getByDotPath(response, config.resultsField);
     if (Array.isArray(pageResults)) allResults.push(...pageResults);
@@ -1659,7 +1663,10 @@ export async function executeSingleStep(
         return result;
       }
 
-      const actionController = step.type === 'action' ? new AbortController() : undefined;
+      // Action-backed steps get a signal so a timeout cancels their requests.
+      const actionController = step.type === 'action' || step.type === 'paginate'
+        ? new AbortController()
+        : undefined;
       const dispatch = async (): Promise<StepResult> => {
         switch (step.type) {
           case 'action':
@@ -1686,7 +1693,7 @@ export async function executeSingleStep(
           case 'flow':
             return await executeSubflowStep(step, context, api, permissions, allowedActionIds, options, flowStack);
           case 'paginate':
-            return await executePaginateStep(step, context, api, permissions, allowedActionIds, options);
+            return await executePaginateStep(step, context, api, permissions, allowedActionIds, options, actionController?.signal);
           case 'bash':
             return await executeBashStep(step, context, options);
           default:
