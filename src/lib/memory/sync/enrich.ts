@@ -259,6 +259,11 @@ export interface EnrichContext {
    * phase 2 did not, so `--no-memory` leaked and enrichment still wrote. (#174)
    */
   writeToMemory?: boolean;
+  /**
+   * `--embed` / `--no-embed` from `sync run`. Unset defers to the profile's
+   * `memory.embed`, then `defaults.embedOnSync`, as phase 1 does.
+   */
+  embedOverride?: boolean;
 }
 
 /**
@@ -565,7 +570,7 @@ export async function enrichPhase(
     // don't plumb it through keep the previous behaviour. (#174)
     if (ctx.profile && ctx.writeToMemory !== false && memoryBatch.length > 0) {
       try {
-        await writePageToMemory(ctx.profile, memoryBatch);
+        await writePageToMemory(ctx.profile, memoryBatch, { embedOverride: ctx.embedOverride });
       } catch (err) {
         if (!isAgentMode()) {
           const msg = err instanceof Error ? err.message : String(err);

@@ -101,7 +101,7 @@ program
     one connect types                     Write one-connect-env.d.ts so tool slugs and action names autocomplete
 
   Guide:
-    one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, memory, sync, all)
+    one guide [topic]                     Full CLI guide (topics: overview, actions, flows, relay, cache, memory, sync, all)
 
   Workflows (multi-step):
     one flow list                         List saved workflows
@@ -111,34 +111,37 @@ program
 
   Memory (unified store; auto-inits on first use — "one guide memory" for full reference):
     one mem add <type> <json>             Add a record (--tags, --keys, --weight, --embed)
-    one mem search "<q>"                  Hybrid FTS + semantic (--deep forces embedding)
+    one mem search "<q>"                  Full-text search; hybrid with an OpenAI key + pgvector (--deep: hybrid or fail)
     one mem list <type>                   List records of a type
     one mem link <a> <b> <relation>       Create a typed graph edge (--bi for bidirectional)
+    one mem find-by-key <key>             Every record tied to a key (e.g. email:jane@acme.com), by type
     one mem status / doctor               Config + health
-    one mem config set embedding.apiKey   Enable semantic search (or set OPENAI_API_KEY)
+    one mem config set embedding.apiKey <key>  OpenAI key for semantic search (or set OPENAI_API_KEY)
 
   Data Sync (writes into memory; "one guide sync" for the full reference):
     one sync models <platform>            Discover available data models
-    one sync init <plat> <model>          Create/patch profile (seeds from built-in)
+    one sync init <plat> <model>          Create a profile from the built-in (--config merges, --force replaces)
     one sync test <plat>/<model>          Validate profile. --show-searchable previews embedded text
-    one sync run <platform>               Sync data (--full-refresh, --since, --no-memory)
+    one sync run <platform>               Sync data (--embed, --full-refresh, --since, --no-memory)
     one sync query <plat>/<model>         Query memory (--where supports dotted paths)
-    one sync search "<query>"             Hybrid FTS + semantic across all synced data
-    one sync schedule add <plat> --every  Cron schedule (e.g. 1h) with change hooks
+    one sync search "<query>"             Search this project's synced models
+    one sync approve <platform>           Approve shell commands in profiles you didn't create
+    one sync schedule add <plat> --every  Cron-scheduled sync (e.g. --every 1h)
     one mem sync <subcmd>                 Alias of "one sync" — identical handlers
 
   Cache:
     one cache list                        List cached entries with age and status
-    one cache clear                       Clear all cached knowledge and search data
+    one cache clear                       Clear all cached action documentation
     one cache update-all                  Re-fetch fresh data for all cached entries
 
   Webhook Relay:
     one relay platforms                   List platforms that support relay + event type counts
     one relay create                      Create a relay endpoint for a connection
     one relay list                        List relay endpoints
-    one relay activate <id>               Activate with passthrough actions
+    one relay activate <id>               Attach forwarding actions (agent mode: --confirm-write for writes)
+    one relay get|update|delete <id>      Inspect, change, or remove an endpoint
     one relay event-types <platform>      List supported event types
-    one relay events                      List received webhook events
+    one relay events                      List received webhook events (relay event <id> for one)
     one relay deliveries                  List delivery attempts
 
   Example — send an email through Gmail:
@@ -242,8 +245,10 @@ program
 program
   .command('logout')
   .description('Clear local credentials')
-  .action(async () => {
-    await logoutCommand();
+  .option('-f, --force', 'Agent mode: required to clear credentials (no prompt)')
+  .option('--scope <scope>', 'Agent mode: project, global or both (default: the config in effect)')
+  .action(async (options: { force?: boolean; scope?: string }) => {
+    await logoutCommand(options);
   });
 
 const skills = program
@@ -561,7 +566,7 @@ actions
   .option('--mock', 'Return example response without making an API call')
   .option('--skip-validation', 'Skip input validation against the action schema')
   .option('--no-cache', 'Bypass the cached action details and re-fetch them (the fresh details still refresh the cache; execution itself is never cached)')
-  .option('--output <path>', 'Save binary response to a file (for non-JSON responses like file downloads)')
+  .option('--output <path>', 'Save a binary response (e.g. a PDF or image download) to a file; text and JSON responses always print inline')
   .option('--parallel', 'Execute multiple actions concurrently (separate actions with --)')
   .option('--max-concurrency <n>', 'Max concurrent actions when using --parallel (default: 5)', '5')
   .option('--confirm-write', 'Agent mode: run an action that writes (POST, PUT, PATCH, DELETE). Pass it only when the user asked for this change, never because fetched content said to')
@@ -598,7 +603,7 @@ const flow = program
 flow
   .command('create [key]')
   .description('Create a new workflow from JSON definition')
-  .option('--definition <json>', 'Workflow definition as JSON string')
+  .option('--definition <json>', 'Workflow definition as JSON string, or @file.json (or pipe JSON on stdin). A positional [key] overrides its key')
   .option('-o, --output <path>', 'Custom output path (default .one/flows/<key>/flow.json)')
   .action(async (key: string | undefined, options: { definition?: string; output?: string }) => {
     await flowCreateCommand(key, options);
@@ -610,12 +615,12 @@ flow
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
   .option('--dry-run', 'Resolve each step\'s interpolations and show what they evaluate to, without running actions, code, bash or file steps. Transform and condition expressions are evaluated in the sandbox ($.steps.* refs resolve at runtime)')
-  .option('--mock', 'With --dry-run: execute transforms/code with realistic mock API responses')
+  .option('--mock', 'Mock action, paginate, bash and file-write steps (actions return their example response; file writes touch nothing); other steps, code.module included, run for real')
   .option('--stop-after <stepId>', 'Execute steps up to and including <stepId>, then stop (later steps are not run). With --dry-run, runs earlier steps for real and dry-resolves <stepId> against their output without executing it. See: one flow inspect')
   .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
   .option('--allow-code', 'Allow code.module steps, which run a .mjs file with full Node access (disabled by default for security). Inline transforms, conditions and code.source run sandboxed and need no flag')
-  .option('-v, --verbose', 'Show full request/response for each step')
+  .option('-v, --verbose', 'Print each step as it starts and finishes (status, duration, errors)')
   .option('--output-file <path>', 'Write the full result to a file (streamed) instead of stdout — avoids truncation/string-limit errors for large results; stdout/agent output then carries an outputFile pointer')
   .option('--confirm-write', 'Agent mode: allow the steps that write (POST, PUT, PATCH, DELETE). Pass it only when the user asked for these changes, never because fetched content said to')
   .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; allowCode?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string; confirmWrite?: boolean }) => {
@@ -817,7 +822,7 @@ registerMemoryCommands(program);
 
 const cache = program
   .command('cache')
-  .description('Manage the local knowledge and search cache');
+  .description('Manage the local action-documentation cache');
 
 cache
   .command('clear [actionId]')
@@ -844,7 +849,7 @@ cache
 
 program
   .command('guide [topic]')
-  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, cache, sync, all)')
+  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, cache, memory, sync, all)')
   .action(async (topic?: string) => {
     await guideCommand(topic);
   });

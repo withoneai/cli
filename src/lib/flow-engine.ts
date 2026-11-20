@@ -452,6 +452,29 @@ export class FlowStopSignal extends Error {
   }
 }
 
+/**
+ * Raised when a pause was requested (Ctrl+C): the run stops before `stepId`,
+ * which hasn't completed and runs again on `flow resume`. Like FlowStopSignal
+ * it is control flow, never a step failure: no retry, no onError routing.
+ */
+export class FlowPauseSignal extends Error {
+  constructor(public readonly stepId: string) {
+    super(`Flow paused before step "${stepId}" completed`);
+    this.name = 'FlowPauseSignal';
+  }
+}
+
+/** Ids of steps in `steps` that a sibling names as its `onError.fallbackStepId`. */
+function fallbackTargetIds(steps: FlowStep[]): Set<string> {
+  const ids = new Set<string>();
+  for (const s of steps) {
+    if (s.onError?.strategy === 'fallback' && s.onError.fallbackStepId && s.onError.fallbackStepId !== s.id) {
+      ids.add(s.onError.fallbackStepId);
+    }
+  }
+  return ids;
+}
+
 export type DryRefStatus = 'resolved' | 'deferred' | 'missing';
 
 export interface DryResolvedRef {
@@ -1132,14 +1155,16 @@ async function executeParallelStep(
 ): Promise<StepResult> {
   const parallel = step.parallel!;
   const maxConcurrency = parallel.maxConcurrency || 5;
-  const steps = parallel.steps;
+  // Fallback targets run only when the sibling that names them fails.
+  const fallbackTargets = fallbackTargetIds(parallel.steps);
+  const steps = parallel.steps.filter(s => !fallbackTargets.has(s.id));
   const results: StepResult[] = [];
 
   // Process in batches of maxConcurrency
   for (let i = 0; i < steps.length; i += maxConcurrency) {
     const batch = steps.slice(i, i + maxConcurrency);
     const batchResults = await Promise.all(
-      batch.map(s => executeSingleStep(s, context, api, permissions, allowedActionIds, options, flowStack))
+      batch.map(s => executeSingleStep(s, context, api, permissions, allowedActionIds, options, flowStack, parallel.steps))
     );
     // Feature 1: Explicit keying of parallel substep outputs by ID
     for (let j = 0; j < batch.length; j++) {
@@ -1165,19 +1190,28 @@ function executeFileReadStep(step: FlowStep, context: FlowContext): StepResult {
   return { status: 'success', output, response: output };
 }
 
-function executeFileWriteStep(step: FlowStep, context: FlowContext): StepResult {
+function executeFileWriteStep(step: FlowStep, context: FlowContext, opts: { mock?: boolean } = {}): StepResult {
   const config = step.fileWrite!;
   const filePath = resolveValue(config.path, context) as string;
   const content = resolveValue(config.content, context);
   const resolvedPath = path.resolve(filePath);
+  const stringContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+
+  // `--mock`: report what would be written, in the real output shape, and
+  // leave the filesystem alone (no file, no parent directories).
+  if (opts.mock) {
+    return {
+      status: 'success',
+      output: { path: resolvedPath, bytesWritten: stringContent.length, _mock: true },
+      response: { _mock: true, path: resolvedPath },
+    };
+  }
 
   // Ensure parent directory exists
   const dir = path.dirname(resolvedPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-
-  const stringContent = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
 
   if (config.append) {
     fs.appendFileSync(resolvedPath, stringContent);
@@ -1533,6 +1567,8 @@ export async function executeSingleStep(
   allowedActionIds: string[],
   options: FlowExecuteOptions,
   flowStack: string[] = [],
+  /** The steps array this step sits in: where `onError.fallbackStepId` is looked up. */
+  siblings?: FlowStep[],
 ): Promise<StepResult> {
   // Conditional execution
   if (step.if) {
@@ -1579,7 +1615,9 @@ export async function executeSingleStep(
       // contract violations surface even in dry runs.
       checkRequires(step, context);
 
-      // Feature 7: Mock mode — mock external steps, run logic steps normally
+      // Feature 7: Mock mode — mock external steps, run logic steps normally.
+      // file-write is mocked in its own executor so its output keeps the real
+      // { path, bytesWritten } shape.
       if (options.mock && (step.type === 'action' || step.type === 'paginate' || step.type === 'bash')) {
         const resolvedConfig = step[step.type] ? resolveValue(step[step.type], context) : {};
 
@@ -1639,7 +1677,10 @@ export async function executeSingleStep(
           case 'file-read':
             return executeFileReadStep(step, context);
           case 'file-write':
-            return executeFileWriteStep(step, context);
+            if (options.mock) {
+              options.onEvent?.({ event: 'step:mock', stepId: step.id, type: step.type });
+            }
+            return executeFileWriteStep(step, context, { mock: options.mock });
           case 'while':
             return await executeWhileStep(step, context, api, permissions, allowedActionIds, options, flowStack);
           case 'flow':
@@ -1678,7 +1719,12 @@ export async function executeSingleStep(
       // A stop signal raised inside a nested block (loop/parallel/condition/
       // while/flow) is control flow, not a step failure: never retry it and
       // never route it through onError — let it unwind to executeFlow. See #97.
-      if (err instanceof FlowStopSignal) throw err;
+      if (err instanceof FlowStopSignal || err instanceof FlowPauseSignal) throw err;
+      // A step that fails while a pause is pending was most likely killed by
+      // the same Ctrl+C (bash and code steps run in child processes that the
+      // terminal signals too). Treat it as interrupted: no retry, no onError,
+      // and it runs again on resume.
+      if (options.pauseRequested?.()) throw new FlowPauseSignal(step.id);
 
       lastError = err instanceof Error ? err : new Error(String(err));
 
@@ -1725,16 +1771,48 @@ export async function executeSingleStep(
   }
 
   if (strategy === 'fallback' && onError?.fallbackStepId) {
-    // The fallback step must already be defined in the flow
-    // We mark this step as failed and the caller should handle fallback
+    // Record the failure, then run the fallback step in this step's place.
+    // The fallback is a sibling that executeSteps skips in normal order, so
+    // it runs only from here. It can't chain to a fallback of its own.
+    const target = siblings?.find(s => s.id === onError.fallbackStepId && s.id !== step.id);
+    if (!target) {
+      throw new Error(`${errorMessage} (fallback step "${onError.fallbackStepId}" was not found next to step "${step.id}")`);
+    }
     const result: StepResult = {
       status: isTimeout ? 'timeout' : 'failed',
       error: errorMessage,
       ...(errorCode ? { errorCode } : {}),
       durationMs: Date.now() - startTime,
       retries: retriesUsed,
+      fallback: target.id,
     };
     context.steps[step.id] = result;
+
+    options.onEvent?.({ event: 'step:fallback', stepId: step.id, fallbackStepId: target.id, error: errorMessage });
+    options.onEvent?.({
+      event: 'step:start',
+      stepId: target.id,
+      stepName: target.name,
+      type: target.type,
+      fallbackFor: step.id,
+      timestamp: new Date().toISOString(),
+    });
+    let fallbackResult: StepResult;
+    try {
+      fallbackResult = await executeSingleStep(target, context, api, permissions, allowedActionIds, options, flowStack);
+    } catch (err) {
+      if (err instanceof FlowStopSignal || err instanceof FlowPauseSignal) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      options.onEvent?.({ event: 'step:error', stepId: target.id, error: msg, strategy: target.onError?.strategy || 'fail' });
+      throw new Error(`Step "${step.id}" failed (${errorMessage}) and its fallback "${target.id}" failed too: ${msg}`);
+    }
+    options.onEvent?.({
+      event: 'step:complete',
+      stepId: target.id,
+      status: fallbackResult.status,
+      durationMs: fallbackResult.durationMs,
+      retries: fallbackResult.retries,
+    });
     return result;
   }
 
@@ -1759,12 +1837,22 @@ export async function executeSteps(
   // means "stop after the (mock-)executed target", not "dry-resolve it".
   const isDryResolve = !!options.dryRun && !options.mock;
 
+  // Steps named as a sibling's `onError.fallbackStepId` run only when that
+  // sibling fails (from executeSingleStep), never in normal order.
+  const fallbackTargets = fallbackTargetIds(steps);
+
   for (const step of steps) {
+    if (fallbackTargets.has(step.id)) continue;
+
     // Skip already-completed steps (for resume)
     if (completedStepIds?.has(step.id)) {
       results.push(context.steps[step.id] || { status: 'success' });
       continue;
     }
+
+    // Ctrl+C: stop at the step boundary. This step hasn't started, so resume
+    // picks up here.
+    if (options.pauseRequested?.()) throw new FlowPauseSignal(step.id);
 
     // --dry-run --stop-after=<target>: steps before the target ran for real;
     // resolve the target's interpolations against that real context and halt
@@ -1787,7 +1875,7 @@ export async function executeSteps(
     });
 
     try {
-      const result = await executeSingleStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+      const result = await executeSingleStep(step, context, api, permissions, allowedActionIds, options, flowStack, steps);
       results.push(result);
 
       options.onEvent?.({
@@ -1800,7 +1888,7 @@ export async function executeSteps(
     } catch (error) {
       // A stop signal raised by a nested block is control flow, not a failure —
       // let it bubble without emitting a spurious step:error for the parent.
-      if (error instanceof FlowStopSignal) throw error;
+      if (error instanceof FlowStopSignal || error instanceof FlowPauseSignal) throw error;
 
       const errorMsg = error instanceof Error ? error.message : String(error);
 
@@ -1982,6 +2070,19 @@ export async function executeFlow(
         timestamp: new Date().toISOString(),
       });
       return context;
+    }
+
+    if (error instanceof FlowPauseSignal) {
+      const stepEntries = Object.values(context.steps);
+      options.onEvent?.({
+        event: 'flow:paused',
+        flowKey: flow.key,
+        pausedBefore: error.stepId,
+        durationMs: Date.now() - flowStart,
+        stepsCompleted: stepEntries.filter(s => s.status === 'success').length,
+        timestamp: new Date().toISOString(),
+      });
+      throw error;
     }
 
     const errorMsg = error instanceof Error ? error.message : String(error);

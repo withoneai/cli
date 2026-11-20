@@ -7,7 +7,7 @@ import { validateFlow } from '../lib/flow-validator.js';
 import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash, flowUsesCodeModules, walkSteps, flowWritesOf } from '../lib/flow-runner.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import { WRITE_CONFIRMATION_HINT } from '../lib/access-gate.js';
-import type { DryResolvedStep, DryResolvedRef } from '../lib/flow-engine.js';
+import { FlowPauseSignal, type DryResolvedStep, type DryResolvedRef } from '../lib/flow-engine.js';
 import type { Flow, FlowEvent, StepResult } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
 import fs from 'node:fs';
@@ -271,6 +271,66 @@ async function confirmFlowWrites(
   process.exit(1);
 }
 
+/** The `flow resume` command for a run, with the permission flags it was started with. */
+function resumeCommandFor(runId: string, options: { allowBash?: boolean; allowCode?: boolean; confirmWrite?: boolean }): string {
+  const flags = [
+    options.allowBash ? '--allow-bash' : '',
+    options.allowCode ? '--allow-code' : '',
+    options.confirmWrite ? '--confirm-write' : '',
+  ].filter(Boolean);
+  return [`one${output.isAgentMode() ? ' --agent' : ''} flow resume ${runId}`, ...flags].join(' ');
+}
+
+/**
+ * Ctrl+C while a flow runs: the first press pauses before the next step; the
+ * second quits at once. Either way the run is saved as paused for
+ * `flow resume`. Returns the function that removes the handler.
+ */
+function installPauseHandler(runner: FlowRunner, resumeCommand: string): () => void {
+  let presses = 0;
+  const handler = (): void => {
+    presses++;
+    if (presses === 1) {
+      runner.requestPause();
+      if (!output.isAgentMode()) {
+        console.log(`\n${pc.yellow('Pausing before the next step...')} ${pc.dim('(Ctrl+C again to quit now)')}`);
+      }
+      return;
+    }
+    runner.markInterrupted();
+    if (output.isAgentMode()) {
+      output.json({ event: 'workflow:result', runId: runner.getRunId(), status: 'paused', interrupted: true, resume: resumeCommand });
+    } else {
+      console.log(`\n${pc.yellow('Stopped.')} Resume with: ${pc.cyan(resumeCommand)}`);
+    }
+    process.exit(130);
+  };
+  process.on('SIGINT', handler);
+  return () => process.off('SIGINT', handler);
+}
+
+/** Report a run that stopped on Ctrl+C, then exit 130 (interrupted). */
+function reportPaused(runner: FlowRunner, error: FlowPauseSignal, resumeCommand: string): never {
+  const completed = FlowRunner.loadRunState(runner.getRunId())?.completedSteps.length ?? 0;
+  if (output.isAgentMode()) {
+    output.json({
+      event: 'workflow:result',
+      runId: runner.getRunId(),
+      logFile: runner.getLogPath(),
+      statePath: runner.getStatePath(),
+      status: 'paused',
+      pausedBefore: error.stepId,
+      resume: resumeCommand,
+    });
+  } else {
+    output.note(
+      `Paused before step "${error.stepId}" (${completed} step${completed === 1 ? '' : 's'} done).\nResume with: ${pc.cyan(resumeCommand)}`,
+      'Paused',
+    );
+  }
+  process.exit(130);
+}
+
 export async function flowExecuteCommand(
   keyOrPath: string,
   options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; allowCode?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string; confirmWrite?: boolean },
@@ -364,14 +424,9 @@ export async function flowExecuteCommand(
   const logPath = runner.getLogPath();
   const runId = runner.getRunId();
 
-  // Set up SIGINT handler for pause
-  const sigintHandler = () => {
-    runner.requestPause();
-    if (!output.isAgentMode()) {
-      console.log(`\n${pc.yellow('Pausing after current step completes...')} (run ID: ${runId})`);
-    }
-  };
-  process.on('SIGINT', sigintHandler);
+  // Ctrl+C pauses before the next step; a second Ctrl+C quits now.
+  const resumeCommand = resumeCommandFor(runId, options);
+  const removePauseHandler = installPauseHandler(runner, resumeCommand);
 
   // Debug-mode captures (#97): the engine streams these as events; we hold the
   // last-seen payloads to render a focused summary after execution returns.
@@ -421,7 +476,7 @@ export async function flowExecuteCommand(
       onEvent,
     });
 
-    process.off('SIGINT', sigintHandler);
+    removePauseHandler();
 
     if (!options.verbose && !output.isAgentMode()) {
       execSpinner.stop(stoppedAfter ? 'Workflow stopped' : dryRunSteps ? 'Dry run complete' : 'Workflow completed');
@@ -496,7 +551,11 @@ export async function flowExecuteCommand(
       output.note('Dry run — no steps were executed', 'Dry Run');
     }
   } catch (error) {
-    process.off('SIGINT', sigintHandler);
+    removePauseHandler();
+    if (error instanceof FlowPauseSignal) {
+      if (!options.verbose && !output.isAgentMode()) execSpinner.stop('Workflow paused');
+      reportPaused(runner, error, resumeCommand);
+    }
     if (!options.verbose && !output.isAgentMode()) {
       execSpinner.stop('Workflow failed');
     }
@@ -676,6 +735,9 @@ export async function flowResumeCommand(
   const spinner = output.createSpinner();
   spinner.start(`Resuming run ${runId} (${state!.completedSteps.length} steps already completed)...`);
 
+  const resumeCommand = resumeCommandFor(runId, options);
+  const removePauseHandler = installPauseHandler(runner, resumeCommand);
+
   try {
     const context = await runner.resume(flow, api, permissions, actionIds, {
       onEvent,
@@ -683,6 +745,7 @@ export async function flowResumeCommand(
       allowBash: options.allowBash,
       allowCode: options.allowCode,
     });
+    removePauseHandler();
     spinner.stop('Workflow completed');
 
     if (output.isAgentMode()) {
@@ -699,6 +762,11 @@ export async function flowResumeCommand(
     console.log(`  ${pc.green('✓')} Resumed and completed successfully`);
     console.log(`  ${pc.dim(`Log: ${runner.getLogPath()}`)}`);
   } catch (error) {
+    removePauseHandler();
+    if (error instanceof FlowPauseSignal) {
+      spinner.stop('Workflow paused');
+      reportPaused(runner, error, resumeCommand);
+    }
     spinner.stop('Resume failed');
     const errorMsg = error instanceof Error ? error.message : String(error);
 

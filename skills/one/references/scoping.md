@@ -7,7 +7,7 @@ The One CLI can be configured at two scopes:
 
 **Detecting the project root.** The CLI walks up from cwd looking for `.one`, `.git`, or `package.json` and treats the nearest hit as the project root — `.one` is checked first so a monorepo subproject can opt into being its own root with `mkdir .one`. Without a `.one` opt-in, every cwd under a parent `.git`/`package.json` shares one project config keyed by that parent. Exception: `$HOME` itself is never a project root — `~/.one` is the CLI's own config directory (not an opt-in marker), and a dotfiles `.git` or stray `package.json` in home must not shadow the global config for every directory under it. If a marker-less dir should be its own project, `mkdir .one` inside it before picking project scope.
 
-**Resolution order:** env vars → `.onerc` in cwd → project config → global config. The project lookup walks from cwd up — the nearest ancestor that has a config under `~/.one/projects/<slug>/config.json` wins, so cwd's own slug is checked before any parent's.
+**Resolution order** (API key, API base, OpenAI key): env vars → `.onerc` in cwd → project config → global config. The access settings are the exception: they come from the config, and a `.onerc` can only narrow them (stricter permission level, intersected allowlists, knowledge-only can only be turned on), never widen them; a widening value is ignored with a warning. In `.onerc`, `ONE_API_BASE` is honored only for `https://api.withone.ai` and `https://development-api.withone.ai`. The project lookup walks from cwd up — the nearest ancestor that has a config under `~/.one/projects/<slug>/config.json` wins, so cwd's own slug is checked before any parent's.
 
 ## When to suggest project scope
 
@@ -19,14 +19,21 @@ Suggest project scope when the user wants any of the following for a specific fo
 
 ## How to set it up
 
-Do **not** hand-edit `.onerc` or config files. Walk the user through the interactive init:
+Do **not** hand-edit `.onerc` or config files. You can run the setup yourself without prompts; it opens a browser window where the user signs in:
 
 ```bash
 cd /path/to/the/project
-one init
+one --agent init --auth browser --project
 ```
 
-When `init` asks "Where should this setup live?", pick **"This project only"**. Init will write the config to `~/.one/projects/<slug>/config.json` and everything else (skill install, MCP) stays untouched.
+Or have the user run the interactive init (it refuses `--agent`):
+
+```bash
+cd /path/to/the/project
+one init -p          # or plain `one init` and pick "This project only"
+```
+
+Either way the config is written to `~/.one/projects/<slug>/config.json`. The global config and any MCP entries are untouched. The interactive init still offers the (shared, global) skill install and connecting apps.
 
 **Monorepo / nested project.** If the target dir is *inside* another repo (i.e. a parent already has `.git` or `package.json`), the slug used by `init` would otherwise resolve to that parent. To scope a config to the nested dir specifically, run `mkdir .one` in that dir before `one init` — the empty `.one/` directory marks it as its own project root, and the config will be keyed by the nested dir's slug.
 
@@ -36,4 +43,8 @@ To see which config is currently active and the full fallback chain:
 one --agent config path
 ```
 
-To switch an existing project back to using the global config, delete its project config file — the CLI will automatically fall back to global on the next run.
+To switch an existing project back to using the global config, remove its project config; the CLI falls back to global on the next run:
+
+```bash
+one --agent config reset        # removes the nearest project config that applies here (may be a parent's)
+```

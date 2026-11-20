@@ -91,7 +91,7 @@ export function registerMemoryCommands(program: Command): void {
     );
 
   mem.command('doctor')
-    .description('Diagnose schema, indexes, plugin resolution, connectivity, embeddings')
+    .description('Diagnose schema, plugin resolution, connectivity, and embeddings')
     .action(memDoctorCommand);
 
   mem.command('vacuum')
@@ -153,7 +153,7 @@ export function registerMemoryCommands(program: Command): void {
     .action(memWeightCommand);
 
   mem.command('flush <id>')
-    .description('Reset access count for a record')
+    .description('Reset access count for a record (not implemented yet: a no-op)')
     .action(memFlushCommand);
 
   mem.command('list <type>')
@@ -168,8 +168,8 @@ export function registerMemoryCommands(program: Command): void {
     .description('Hybrid search across memory (FTS + optional semantic)')
     .option('--type <type>', 'Restrict to one record type')
     .option('--limit <n>', 'Max results (default 10)')
-    .option('--deep', 'Force semantic embedding on the query', false)
-    .option('--no-track', 'Do not bump access_count on results', false)
+    .option('--deep', 'Require semantic (hybrid) search: fail instead of falling back to full-text when it can\'t run', false)
+    .option('--no-track', 'Do not bump access_count on results')
     .option('--include-archived', 'Include archived records', false)
     .action(memSearchCommand);
 
