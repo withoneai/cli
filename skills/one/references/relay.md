@@ -59,61 +59,17 @@ Always use `--create-webhook` — it registers the webhook URL with the source p
 
 **One relay per source connection.** All relays on a connection share one hosted URL and one signing secret, and a second `--create-webhook` replaces the stored secret. If the connection already has a relay, add your actions to it with `relay update --actions` (pass the full list; it replaces) instead of creating another.
 
-**Many source platforms require extra identifiers via `--metadata`** (ask the user for the values). Every platform not listed (Stripe, Linear, Attio, Google Calendar, ...) needs none. Keys are case-sensitive; a missing one doesn't fail `create`, but the webhook isn't registered and the `warning` names the key.
+**Check what `--metadata` the source platform needs first:**
 
-| Platform | Required metadata keys |
-|---|---|
-| `airtable` | `AIRTABLE_DATABASE_ID` |
-| `apify` | `APIFY_ACTOR_ID` or `APIFY_ACTOR_TASK_ID` |
-| `asana` | `ASANA_RESOURCE_GID` |
-| `autodesk` | `AUTODESK_SYSTEM`, `AUTODESK_SCOPE` (an object) |
-| `basin` | `BASIN_FORM_ID` (a number) |
-| `bookingmood` | `BOOKINGMOOD_ORGANIZATION_ID` |
-| `box` | `BOX_TARGET_ID`, `BOX_TARGET_TYPE` |
-| `brevo` | `BREVO_DOMAIN`, only when `BREVO_TYPE` is `inbound` |
-| `browse-ai` | `BROWSE_AI_ROBOT_ID` |
-| `btcpay-server` | `BTCPAY_SERVER_STORE_ID` |
-| `calendly` | `CALENDLY_ORGANIZATION`, plus `CALENDLY_USER` or `CALENDLY_GROUP` for a user or group `CALENDLY_SCOPE` |
-| `chargebee` | `CHARGEBEE_WEBHOOK_NAME` |
-| `click-up` | `CLICK_UP_TEAM_ID` |
-| `clockify` | `CLOCKIFY_WORKSPACE_ID`, `CLOCKIFY_WEBHOOK_NAME`, `CLOCKIFY_TRIGGER_SOURCE_TYPE`, `CLOCKIFY_TRIGGER_SOURCE` (a list) |
-| `cloudinary` | `CLOUDINARY_SIGNING_SECRET` |
-| `contentful-content-management` | `CONTENTFUL_CONTENT_MANAGEMENT_SPACE_ID` |
-| `crowdin` | `CROWDIN_PROJECT_ID` |
-| `datadog` | `DATADOG_WEBHOOK_NAME` |
-| `doppler-secretops` | `DOPPLER_SECRETOPS_PROJECT`, `DOPPLER_SECRETOPS_CONFIGS` (a list) |
-| `fathom` | `FATHOM_TRIGGERED_FOR` |
-| `figma` | `FIGMA_CONTEXT`, `FIGMA_CONTEXT_ID` |
-| `files-com` | `FILES_COM_PATH` |
-| `fillout` | `FILLOUT_FORM_ID` |
-| `formbricks` | `FORMBRICKS_ENVIRONMENT_ID` |
-| `git-lab` | `GIT_LAB_PROJECT_ID` |
-| `github` | `GITHUB_OWNER`, `GITHUB_REPOSITORY` |
-| `grist` | `GRIST_DOC_ID`, `GRIST_TABLE_ID` |
-| `heyy` | `HEYY_TENANT_ID` |
-| `hugging-face` | `HUGGING_FACE_WATCHED` |
-| `jira` | `jqlFilter` |
-| `launchdarkly` | `LAUNCHDARKLY_RESOURCES` (a list) |
-| `loyverse` | `LOYVERSE_MERCHANT_ID` |
-| `mailchimp-marketing` | `MAILCHIMP_MARKETING_LIST_ID` |
-| `mailersend` | `MAILERSEND_DOMAIN_ID` |
-| `monday` | `MONDAY_BOARD_ID` |
-| `paradym` | `PARADYM_PROJECT_ID`, `PARADYM_WEBHOOK_NAME` |
-| `parseur` | `PARSEUR_MAILBOX_ID`, `PARSEUR_WEBHOOK_NAME` |
-| `posthog` | `POSTHOG_PROJECT_ID`, `POSTHOG_WEBHOOK_NAME` |
-| `productive` | `PRODUCTIVE_ORGANIZATION_ID` |
-| `sanity` | `SANITY_PROJECT_ID`, `SANITY_DATASET` |
-| `sentry` | `SENTRY_ORGANIZATION_ID_OR_SLUG`, `SENTRY_PROJECT_ID_OR_SLUG` |
-| `storyblok` | `STORYBLOK_SPACE_ID` |
-| `tally` | `TALLY_FORM_ID` |
-| `toggl-track` | `TOGGL_TRACK_WORKSPACE_ID` |
-| `trello` | `TRELLO_MODEL_ID` |
-| `typeform` | `TYPEFORM_FORM_ID` |
-| `webflow` | `WEBFLOW_SITE_ID` |
-| `workable` | `WORKABLE_ACCOUNT_ID`, only for `candidate_*` events |
-| `workiom` | `WORKIOM_APP_ID`, `WORKIOM_LIST_ID` |
+```bash
+one --agent relay metadata <source-platform>
+```
 
-Some platforms also take optional keys (e.g. `GOOGLE_CALENDAR_CALENDAR_ID`, which defaults to the primary calendar). Example for GitHub:
+It returns `{platform, fields: [{key, label, required, secret, placeholder?}]}`: the keys One lists for registering that platform's webhook (the same list the dashboard's setup form shows). Ask the user for the values and pass them as one JSON object in `--metadata`. Keys are case-sensitive. A `secret` field is a credential: ask the user for it, and never use the placeholder as a value. An empty `fields` list means One lists none; most such platforms need none.
+
+With `--create-webhook`, `relay create` checks the required keys first. If any is missing it returns `"status": "metadata_required"` with the `missing` fields, exits 1 and creates nothing. A key the list doesn't name can still be missing: then the create response's `warning` names it.
+
+Example for GitHub:
 
 ```bash
 one --agent relay create \
@@ -274,6 +230,7 @@ The access settings from `one config` (and `.onerc`) apply to relays as well as 
 ```bash
 one --agent relay platforms                        # All relay-capable platforms + event type counts
 one --agent relay event-types <platform>           # Event types for a specific platform
+one --agent relay metadata <platform>              # --metadata keys the platform needs on create
 ```
 
 ## Management Commands
@@ -304,6 +261,8 @@ Agent-mode output:
 | `delete` | `{deleted: true, id}` |
 | `platforms` | `{platforms: [{platform, eventTypeCount}]}` |
 | `event-types` | `{platform, eventTypes: [...]}` |
+| `metadata` | `{platform, fields: [{key, label, required, secret, placeholder?}]}` |
+| `create` refused | `{status: "metadata_required", error, platform, missing: [...]}`, exit 1 |
 
 To page `list` or `events`, raise `--page` until `showing` is 0. With a connection allowlist, rows are filtered after the server pages them, so a page can hold fewer than `--limit` rows and `total` counts only the rows shown.
 
@@ -323,7 +282,7 @@ To page `list` or `events`, raise `--page` until `showing` is 0. With a connecti
 - Event filters on both the endpoint and individual actions must match
 - Multiple actions can be attached to a single relay endpoint
 - Missing template variables resolve to empty strings — verify `{{payload.*}}` paths against the actual payload
-- Many platforms require `--metadata` on create (see the table in Step 5); a `warning` in the create response means the webhook was not registered with the source platform
+- Many platforms require `--metadata` on create (`relay metadata <platform>` lists the keys); a `warning` in the create response means the webhook was not registered with the source platform
 - Every rendered template value is a string
 - Don't pass `--webhook-secret` on activate when the endpoint was created with `--create-webhook` unless activate asks for one; a wrong secret makes One reject every webhook on that connection (no events at all)
 - Keep one relay per source connection and add actions to it

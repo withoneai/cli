@@ -42,6 +42,7 @@ import {
   relayDeliveriesCommand,
   relayEventTypesCommand,
   relayPlatformsCommand,
+  relayMetadataCommand,
 } from './commands/relay.js';
 import { connectCreateCommand, connectTypesCommand } from './commands/connect.js';
 
@@ -141,6 +142,7 @@ program
     one relay activate <id>               Attach forwarding actions (agent mode: --confirm-write for writes)
     one relay get|update|delete <id>      Inspect, change, or remove an endpoint
     one relay event-types <platform>      List supported event types
+    one relay metadata <platform>         List the --metadata keys a platform needs on create
     one relay events                      List received webhook events (relay event <id> for one)
     one relay deliveries                  List delivery attempts
 
@@ -712,7 +714,7 @@ relay
   .option('--description <desc>', 'Description of the relay endpoint')
   .option('--event-filters <json>', 'JSON array of event types to filter (e.g. \'["customer.created"]\')')
   .option('--tags <json>', 'JSON array of tags')
-  .option('--metadata <json>', 'JSON object of platform-specific values many platforms need to register the webhook (e.g. GitHub: \'{"GITHUB_OWNER":"org","GITHUB_REPOSITORY":"repo"}\', Airtable: \'{"AIRTABLE_DATABASE_ID":"app..."}\'). `one guide relay` lists every platform\'s keys; a missing one leaves the webhook unregistered and the response carries a warning')
+  .option('--metadata <json>', 'JSON object of platform-specific values many platforms need to register the webhook (e.g. GitHub: \'{"GITHUB_OWNER":"org","GITHUB_REPOSITORY":"repo"}\'). `one relay metadata <platform>` lists a platform\'s keys. With --create-webhook, a missing required key stops the create before anything is made')
   .option('--create-webhook', 'Automatically register the webhook with the source platform')
   .action(async (options: { connectionKey: string; description?: string; eventFilters?: string; tags?: string; metadata?: string; createWebhook?: boolean }) => {
     await relayCreateCommand(options);
@@ -807,6 +809,13 @@ relay
   .description('List all platforms that support webhook relay, with their event type counts')
   .action(async () => {
     await relayPlatformsCommand();
+  });
+
+relay
+  .command('metadata <platform>')
+  .description('List the --metadata keys a platform needs on relay create to register its webhook')
+  .action(async (platform: string) => {
+    await relayMetadataCommand(platform);
   });
 
 

@@ -23,6 +23,7 @@ import type {
   KeyAccessDocument,
   AccessControlSettings,
   ViewerAccessLevel,
+  RelayFormField,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -784,6 +785,30 @@ export class OneApi {
 
   async listRelayPlatforms(): Promise<Array<{ platform: string; eventTypeCount: number }>> {
     return this.requestFull({ path: '/webhooks/relay/platforms' });
+  }
+
+  /**
+   * The `--metadata` fields One stores for a platform's relay setup, which is
+   * the list the dashboard's Configuration step shows. Resolves `null` when
+   * One stores none for the platform (or has no such connector), so callers
+   * can tell "nothing listed" from a failed request, which throws.
+   */
+  async getRelayMetadataFields(platform: string): Promise<RelayFormField[] | null> {
+    const connectors = await this.requestFull<{ rows?: Array<{ id: string; platform: string }> }>({
+      path: '/available-connectors',
+      queryParams: { platform, limit: '5' },
+    });
+    const connector = (connectors.rows || []).find(row => row.platform === platform);
+    if (!connector) return null;
+    try {
+      const config = await this.requestFull<{ formData?: RelayFormField[] }>({
+        path: `/webhooks/relay/config/${encodeURIComponent(connector.id)}`,
+      });
+      return config.formData ?? [];
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
   }
 
 

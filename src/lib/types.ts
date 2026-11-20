@@ -44,6 +44,23 @@ export interface Platform {
   oauth?: boolean;
 }
 
+/**
+ * One field of a platform's relay setup form, as One stores it
+ * (`GET /webhooks/relay/config/{connectorId}`). `name` is the key to pass in
+ * `relay create --metadata`. The dashboard builds its Configuration step from
+ * the same list.
+ */
+export interface RelayFormField {
+  name: string;
+  /** `input`, or `password` for a value that should not be echoed. */
+  type: string;
+  label: string;
+  placeholder: string;
+  options?: unknown[] | null;
+  /** Only `true` makes a field optional; One stores `null` for required ones. */
+  optional?: boolean | null;
+}
+
 export interface PlatformsResponse {
   rows: Platform[];
   total: number;
