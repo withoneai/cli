@@ -48,7 +48,7 @@ one login              # Opens the browser to sign in and create a key
 one logout             # Clear local credentials
 ```
 
-The first `one login` writes the global config; once a key exists it asks whether the new one applies globally or to this directory. For a project key from the start, use `one init -p`. `one logout` asks which config to clear when both a project and a global config exist, and deletes the whole file (API key, OpenAI key, access control and memory settings). The API key itself stays active until you revoke it in the dashboard.
+The first `one login` writes the global config; once a key exists it asks whether the new one applies globally or to this directory. For a project key from the start, use `one init -p`. `one logout` asks which config to clear when both a project and a global config exist, and deletes the whole file (API key, OpenAI key, access control and memory settings). With `--agent` there's no prompt: it needs `--force` (without it, it returns `confirmation_required` and the config it would clear), and it clears only the config in effect (the project config if there is one) unless you pass `--scope global` or `--scope both`. The API key itself stays active until you revoke it in the dashboard.
 
 The browser consent page names the key and tags it with where this CLI is installed (scope, project path, machine, OS user, CLI version, chosen harnesses, and the per-install device id unless telemetry is off) so you can find and revoke it from Settings → API keys. The terminal prints exactly what will be sent before the browser opens.
 
@@ -422,6 +422,7 @@ One ships a local memory store (a real Postgres process bootstrapped on demand v
 one mem add note '{"content":"Design review is Thursday"}' --tags work --weight 7
 one mem update <id> '{"status":"done"}'              # merges into data; refreshes searchable_text
 one mem search "design review"                       # FTS; hybrid with an OpenAI key + pgvector
+one mem search "design review" --deep                # hybrid or an error naming what's missing (no FTS fallback)
 one mem list note --limit 20
 
 # Merge keys (`keys[]`) are a first-class column (unique across ACTIVE records;
@@ -477,7 +478,8 @@ one sync models stripe
 one sync init stripe balanceTransactions
 
 # Optional: declare clean fields for embedding, then preview
-# (--config merges into the existing profile; without it, init replaces the profile)
+# (--config merges into the existing profile. Without it, init refuses when a
+# profile already exists; --force replaces it with the built-in)
 one sync init stripe balanceTransactions --config '{
   "memory": {
     "embed": true,
@@ -487,9 +489,10 @@ one sync init stripe balanceTransactions --config '{
 one sync test stripe/balanceTransactions --show-searchable
 
 # Run — every row lands in memory (enriching profiles also keep a project-local
-# SQLite mirror). --embed embeds the rows; the profile's memory.embed alone is not
-# applied today. --since only applies to profiles with a dateFilter (Stripe has none).
-one sync run stripe --embed
+# SQLite mirror). Rows are embedded when the profile's memory.embed says so (else
+# defaults.embedOnSync); --embed / --no-embed override it for one run.
+# --since only applies to profiles with a dateFilter (Stripe has none).
+one sync run stripe
 one mem sync run stripe                              # identical (alias)
 # Profiles with `enrich` run a second detail pass. It enriches each record ONCE;
 # the list pass thereafter merges rather than replaces, so the enriched payload
@@ -526,7 +529,7 @@ one sync run stripe --full-refresh
 | `profiles [platform]` | List built-in pre-validated profiles |
 | `doctor` | Verify sync engine health (exits non-zero when not ready) |
 | `models <platform>` | Discover available data models |
-| `init <platform> <model>` | Create a profile from the built-in or inference (replaces an existing one); `--config` merges into it. Auto-tests |
+| `init <platform> <model>` | Create a profile from the built-in or inference. If one exists it refuses unless you pass `--config` (merges into it) or `--force` (replaces it). Auto-tests |
 | `test <platform>/<model>` | Validate profile. `--show-searchable` previews embedded text |
 | `suggest-searchable <platform>/<model>` | Rank candidate `memory.searchable` paths from a live sample |
 | `approve <platform>` | Approve the shell commands (`transform`, hooks) in profiles you didn't create |
@@ -669,13 +672,13 @@ one flow execute welcome-customer -v -i email=jane@example.com
 
 Connection inputs with a `connection` field in the workflow definition are auto-resolved when the user has exactly one connection for that platform (top-level runs only, not sub-flows or resumes).
 
-Ctrl+C does not pause a run. A run that fails can be resumed with `one flow resume <runId>`.
+Press Ctrl+C to pause a run: it stops before the next step and prints the `one flow resume <runId>` command (with the `--allow-*`/`--confirm-write` flags it needs). A bash or code step that the Ctrl+C interrupts runs again on resume. Press Ctrl+C again to quit at once; the run is still saved as paused. A run that fails can also be resumed with `one flow resume <runId>`.
 
 | Option | What it does |
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
 | `--dry-run` | Resolve each step's interpolations and show what they evaluate to, without running actions, code, bash or file steps. Transform and condition expressions are evaluated, in the sandbox. `$.input.*`/`$.env.*` resolve up front; `$.steps.*` refs are reported as deferred (they're produced at runtime). Still needs required inputs and `--allow-bash`/`--allow-code`, and records a run. |
-| `--mock` | Mock `action`, `paginate` and `bash` steps (an action returns its schema's example response when it has one). Every other step runs for real, `file-write` included. A mocked step's `response` is `{"_mock": true}`; read `.output`. Works with or without `--dry-run` |
+| `--mock` | Mock `action`, `paginate`, `bash` and `file-write` steps (an action returns its schema's example response when it has one; `file-write` steps report `{ path, bytesWritten }` without writing anything). Every other step runs for real, `code.module` included. A mocked step's `response` is `{"_mock": true}`; read `.output`. Works with or without `--dry-run` |
 | `--stop-after <stepId>` | Execute steps up to and including `<stepId>`, then stop (later steps are not run). Combined with `--dry-run`, runs earlier steps for real and dry-resolves `<stepId>` against their output without executing it. Use a top-level step or a loop/condition/while child; a `parallel` substep is ignored. Inspect what ran with `one flow inspect <runId>`. |
 | `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
@@ -706,7 +709,7 @@ one flow validate welcome-customer
 
 ### `one flow resume <runId>`
 
-Resume a failed workflow run. It skips the top-level steps that completed and re-runs the failed step from its start (a failed loop, parallel, while or sub-flow step re-runs all its inner steps, so writes there can repeat). It uses the current flow file.
+Resume a failed or paused workflow run. It skips the top-level steps that completed and re-runs the failed step from its start (a failed loop, parallel, while or sub-flow step re-runs all its inner steps, so writes there can repeat). It uses the current flow file.
 
 ```bash
 one flow resume abc123

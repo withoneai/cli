@@ -206,7 +206,7 @@ export async function writePageToMemory(
   // Lets users flip on embeddings for one run (e.g. backfilling after
   // a first sync done with embedOnSync: false) without editing the
   // profile. No override → profile's choice → config default.
-  const embedFlag = opts.embedOverride ?? deriveEmbedFlag(profile);
+  const embedFlag = resolveSyncEmbed(opts.embedOverride, profile);
   const searchablePaths = getSearchablePaths(profile);
   // Does this profile have anything to say about identity_keys at all? A
   // profile without `identityKeys` must send NULL (= "no opinion"), never `[]`
@@ -477,9 +477,16 @@ export async function keysHeldByOtherTypes(
   return new Set(res.rows.map(row => String((row as { k: unknown }).k)));
 }
 
-function deriveEmbedFlag(profile: SyncProfile): boolean {
+/**
+ * Whether a sync write embeds its rows. Precedence: `--embed` / `--no-embed`
+ * → the profile's `memory.embed` → `undefined`, which lets the memory runtime
+ * fall back to `defaults.embedOnSync`. Never coerce a missing setting to
+ * `false`: that silently disabled both the profile flag and the config default.
+ */
+export function resolveSyncEmbed(override: boolean | undefined, profile: SyncProfile): boolean | undefined {
+  if (typeof override === 'boolean') return override;
   if (profile.memory && typeof profile.memory.embed === 'boolean') return profile.memory.embed;
-  return false;
+  return undefined;
 }
 
 /**

@@ -838,6 +838,7 @@ export async function syncModel(
           profile,
           // Phase 1 honours --no-memory; phase 2 used to ignore it. (#174)
           writeToMemory: options.toMemory !== false,
+          embedOverride: options.embed,
         },
       );
       enrichedTotal = enrichResult.enriched;

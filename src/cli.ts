@@ -111,7 +111,7 @@ program
 
   Memory (unified store; auto-inits on first use — "one guide memory" for full reference):
     one mem add <type> <json>             Add a record (--tags, --keys, --weight, --embed)
-    one mem search "<q>"                  Full-text search; hybrid with an OpenAI key + pgvector
+    one mem search "<q>"                  Full-text search; hybrid with an OpenAI key + pgvector (--deep: hybrid or fail)
     one mem list <type>                   List records of a type
     one mem link <a> <b> <relation>       Create a typed graph edge (--bi for bidirectional)
     one mem find-by-key <key>             Every record tied to a key (e.g. email:jane@acme.com), by type
@@ -120,7 +120,7 @@ program
 
   Data Sync (writes into memory; "one guide sync" for the full reference):
     one sync models <platform>            Discover available data models
-    one sync init <plat> <model>          Create a profile from the built-in (--config merges into an existing one)
+    one sync init <plat> <model>          Create a profile from the built-in (--config merges, --force replaces)
     one sync test <plat>/<model>          Validate profile. --show-searchable previews embedded text
     one sync run <platform>               Sync data (--embed, --full-refresh, --since, --no-memory)
     one sync query <plat>/<model>         Query memory (--where supports dotted paths)
@@ -245,8 +245,10 @@ program
 program
   .command('logout')
   .description('Clear local credentials')
-  .action(async () => {
-    await logoutCommand();
+  .option('-f, --force', 'Agent mode: required to clear credentials (no prompt)')
+  .option('--scope <scope>', 'Agent mode: project, global or both (default: the config in effect)')
+  .action(async (options: { force?: boolean; scope?: string }) => {
+    await logoutCommand(options);
   });
 
 const skills = program
@@ -613,7 +615,7 @@ flow
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
   .option('--dry-run', 'Resolve each step\'s interpolations and show what they evaluate to, without running actions, code, bash or file steps. Transform and condition expressions are evaluated in the sandbox ($.steps.* refs resolve at runtime)')
-  .option('--mock', 'Mock action, paginate and bash steps (actions return their example response); other steps, file-write included, run for real')
+  .option('--mock', 'Mock action, paginate, bash and file-write steps (actions return their example response; file writes touch nothing); other steps, code.module included, run for real')
   .option('--stop-after <stepId>', 'Execute steps up to and including <stepId>, then stop (later steps are not run). With --dry-run, runs earlier steps for real and dry-resolves <stepId> against their output without executing it. See: one flow inspect')
   .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')

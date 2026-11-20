@@ -283,6 +283,8 @@ export interface StepResult {
   errorCode?: string;
   durationMs?: number;
   retries?: number;
+  /** Set on a failed step whose `onError.fallbackStepId` ran in its place. */
+  fallback?: string;
 }
 
 export interface FlowContext {
@@ -348,4 +350,9 @@ export interface FlowExecuteOptions {
   /** Absolute directory that contains this flow's `flow.json` (or the legacy `.one/flows/` dir). Used to resolve code.module paths. */
   rootDir?: string;
   onEvent?: (event: FlowEvent) => void;
+  /**
+   * Polled at every step boundary. Once it returns true the run stops with a
+   * FlowPauseSignal before starting another step (Ctrl+C in `flow execute`).
+   */
+  pauseRequested?: () => boolean;
 }
