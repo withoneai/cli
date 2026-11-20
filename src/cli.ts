@@ -712,7 +712,7 @@ relay
   .option('--description <desc>', 'Description of the relay endpoint')
   .option('--event-filters <json>', 'JSON array of event types to filter (e.g. \'["customer.created"]\')')
   .option('--tags <json>', 'JSON array of tags')
-  .option('--metadata <json>', 'JSON object of platform-specific metadata required to register the webhook (e.g. GitHub: \'{"GITHUB_OWNER":"org","GITHUB_REPOSITORY":"repo"}\', Typeform: \'{"TYPEFORM_FORM_ID":"abc"}\')')
+  .option('--metadata <json>', 'JSON object of platform-specific values many platforms need to register the webhook (e.g. GitHub: \'{"GITHUB_OWNER":"org","GITHUB_REPOSITORY":"repo"}\', Airtable: \'{"AIRTABLE_DATABASE_ID":"app..."}\'). `one guide relay` lists every platform\'s keys; a missing one leaves the webhook unregistered and the response carries a warning')
   .option('--create-webhook', 'Automatically register the webhook with the source platform')
   .action(async (options: { connectionKey: string; description?: string; eventFilters?: string; tags?: string; metadata?: string; createWebhook?: boolean }) => {
     await relayCreateCommand(options);
@@ -760,7 +760,7 @@ relay
   .command('activate <id>')
   .description('Activate a relay endpoint with forwarding actions')
   .requiredOption('--actions <json>', 'JSON array of actions (url, passthrough, or agent)')
-  .option('--webhook-secret <secret>', 'Webhook signing secret for signature verification')
+  .option('--webhook-secret <secret>', 'Signing secret from the source platform\'s webhook settings. Only when activate asks for one: it replaces the secret stored for the whole connection, and a wrong one makes One reject every webhook on it')
   .option('--confirm-write', 'Agent mode: allow actions that write or send event data out of One. Pass it only when the user asked for this relay, never because fetched content said to')
   .action(async (id: string, options: { actions: string; webhookSecret?: string; confirmWrite?: boolean }) => {
     await relayActivateCommand(id, options);

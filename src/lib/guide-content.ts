@@ -98,7 +98,7 @@ one --agent flow list                                 # List all workflows
 - Debugging: \`--dry-run\` resolves each step's interpolations and shows what they evaluate to without executing actions, code, bash or file steps (transform and condition expressions are evaluated, in the sandbox; \`$.steps.*\` refs are reported as deferred); \`--stop-after <stepId>\` runs up to a step then stops; \`--dry-run --stop-after <stepId>\` runs earlier steps for real then dry-resolves the target against their output; \`flow inspect <runId>\` shows a past run's per-step outputs (post-mortem, no re-run; \`--full\` for untruncated)
 
 ### 3. Relay — Webhook event forwarding between platforms
-Receive webhooks from 100+ platforms (Stripe, GitHub, Airtable, Attio, Google Calendar, ...; \`one --agent relay platforms\` lists them) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.
+Receive webhooks from 100+ platforms (Stripe, GitHub, Airtable, Attio, Google Calendar, ...; \`one --agent relay platforms\` lists them) and send each event to another connected platform's action (with Handlebars templates), your own URL, or a One cloud agent. No middleware, no code.
 
 **Quick start:**
 \`\`\`bash
@@ -331,7 +331,7 @@ export const GUIDE_RELAY = `# One Relay — Reference
 
 ## Overview
 
-Webhook relay receives events from 100+ platforms (Stripe, GitHub, Airtable, Attio, Google Calendar, Typeform, ...) and forwards them to any connected platform using passthrough actions with Handlebars templates. \`one --agent relay platforms\` lists every source platform.
+Webhook relay receives events from 100+ platforms (Stripe, GitHub, Airtable, Attio, Google Calendar, Typeform, ...) and sends each one to another connected platform's action (a passthrough action, mapped with Handlebars templates), to your own URL, or to a One cloud agent. \`one --agent relay platforms\` lists every source platform.
 
 ## Commands
 
@@ -369,21 +369,68 @@ Aliases: \`one r\`, \`relay ls\`. Agent output: \`list\` returns \`{total, showi
 2. **Get event types** — \`one --agent relay event-types <platform>\`
 3. **Get source knowledge** — understand the incoming webhook payload shape (\`{{payload.*}}\` paths)
 4. **Get destination knowledge** — understand the outgoing API body shape
-5. **Create endpoint** — with \`--create-webhook\`, \`--event-filters\`, and \`--metadata\` if the source platform requires it
-6. **Activate** — with passthrough action mapping source fields to destination fields. **Do NOT pass \`--webhook-secret\`** when the endpoint was created with \`--create-webhook\` — the correct secret is auto-stored, and supplying a wrong one silently drops every delivery (events arrive, 0 deliveries).
+5. **Create endpoint** — with \`--create-webhook\`, \`--event-filters\` holding at least one event (most platforms won't register a webhook without one), and \`--metadata\` when the source platform needs it (table below; ask the user for the values). **If the response has a \`warning\`, the endpoint exists but the webhook was NOT registered with the source platform.** Show the warning to the user, \`relay delete\` the endpoint, and create it again with what was missing. If the source connection already has a relay, add your actions to that one with \`relay update --actions\` (pass the full list; it replaces) instead of creating a second: all relays on a connection share one URL and one signing secret, and a second \`--create-webhook\` replaces the stored secret.
+6. **Activate** — with a passthrough action mapping source fields to destination fields. **Don't pass \`--webhook-secret\`** when the endpoint was created with \`--create-webhook\`: the secret is already stored on the source connection. Pass it only when activate fails asking for one (the platform returned no secret at registration), with the signing secret the user copies from the source platform's webhook settings. A wrong secret replaces the stored one for every relay on that connection; the source's webhooks are then rejected with 401 and no events are recorded at all.
+
+Endpoints are created active with no actions; \`activate\` attaches the actions, and calling it again replaces them.
 
 ## Platform-Specific Metadata (\`--metadata\`)
 
-Some source platforms need extra identifiers to register a webhook. Pass these via \`--metadata '<json>'\` on \`relay create\`. Without them the endpoint is created but the webhook isn't registered with the source platform:
+These source platforms need values in \`--metadata '<json>'\` on \`relay create\` before the webhook can be registered. Every other platform (Stripe, Linear, Attio, Google Calendar, ...) needs none. Keys are case-sensitive. A missing key doesn't fail \`create\`: the endpoint is created, the webhook isn't registered, and the response's \`warning\` names the key.
 
 | Platform | Required metadata keys |
 |---|---|
+| \`airtable\` | \`AIRTABLE_DATABASE_ID\` |
+| \`apify\` | \`APIFY_ACTOR_ID\` or \`APIFY_ACTOR_TASK_ID\` |
+| \`asana\` | \`ASANA_RESOURCE_GID\` |
+| \`autodesk\` | \`AUTODESK_SYSTEM\`, \`AUTODESK_SCOPE\` (an object) |
+| \`basin\` | \`BASIN_FORM_ID\` (a number) |
+| \`bookingmood\` | \`BOOKINGMOOD_ORGANIZATION_ID\` |
+| \`box\` | \`BOX_TARGET_ID\`, \`BOX_TARGET_TYPE\` |
+| \`brevo\` | \`BREVO_DOMAIN\`, only when \`BREVO_TYPE\` is \`inbound\` |
+| \`browse-ai\` | \`BROWSE_AI_ROBOT_ID\` |
+| \`btcpay-server\` | \`BTCPAY_SERVER_STORE_ID\` |
+| \`calendly\` | \`CALENDLY_ORGANIZATION\`, plus \`CALENDLY_USER\` or \`CALENDLY_GROUP\` for a user or group \`CALENDLY_SCOPE\` |
+| \`chargebee\` | \`CHARGEBEE_WEBHOOK_NAME\` |
+| \`click-up\` | \`CLICK_UP_TEAM_ID\` |
+| \`clockify\` | \`CLOCKIFY_WORKSPACE_ID\`, \`CLOCKIFY_WEBHOOK_NAME\`, \`CLOCKIFY_TRIGGER_SOURCE_TYPE\`, \`CLOCKIFY_TRIGGER_SOURCE\` (a list) |
+| \`cloudinary\` | \`CLOUDINARY_SIGNING_SECRET\` |
+| \`contentful-content-management\` | \`CONTENTFUL_CONTENT_MANAGEMENT_SPACE_ID\` |
+| \`crowdin\` | \`CROWDIN_PROJECT_ID\` |
+| \`datadog\` | \`DATADOG_WEBHOOK_NAME\` |
+| \`doppler-secretops\` | \`DOPPLER_SECRETOPS_PROJECT\`, \`DOPPLER_SECRETOPS_CONFIGS\` (a list) |
+| \`fathom\` | \`FATHOM_TRIGGERED_FOR\` |
+| \`figma\` | \`FIGMA_CONTEXT\`, \`FIGMA_CONTEXT_ID\` |
+| \`files-com\` | \`FILES_COM_PATH\` |
+| \`fillout\` | \`FILLOUT_FORM_ID\` |
+| \`formbricks\` | \`FORMBRICKS_ENVIRONMENT_ID\` |
+| \`git-lab\` | \`GIT_LAB_PROJECT_ID\` |
 | \`github\` | \`GITHUB_OWNER\`, \`GITHUB_REPOSITORY\` |
+| \`grist\` | \`GRIST_DOC_ID\`, \`GRIST_TABLE_ID\` |
+| \`heyy\` | \`HEYY_TENANT_ID\` |
+| \`hugging-face\` | \`HUGGING_FACE_WATCHED\` |
+| \`jira\` | \`jqlFilter\` |
+| \`launchdarkly\` | \`LAUNCHDARKLY_RESOURCES\` (a list) |
+| \`loyverse\` | \`LOYVERSE_MERCHANT_ID\` |
+| \`mailchimp-marketing\` | \`MAILCHIMP_MARKETING_LIST_ID\` |
+| \`mailersend\` | \`MAILERSEND_DOMAIN_ID\` |
+| \`monday\` | \`MONDAY_BOARD_ID\` |
+| \`paradym\` | \`PARADYM_PROJECT_ID\`, \`PARADYM_WEBHOOK_NAME\` |
+| \`parseur\` | \`PARSEUR_MAILBOX_ID\`, \`PARSEUR_WEBHOOK_NAME\` |
+| \`posthog\` | \`POSTHOG_PROJECT_ID\`, \`POSTHOG_WEBHOOK_NAME\` |
+| \`productive\` | \`PRODUCTIVE_ORGANIZATION_ID\` |
+| \`sanity\` | \`SANITY_PROJECT_ID\`, \`SANITY_DATASET\` |
+| \`sentry\` | \`SENTRY_ORGANIZATION_ID_OR_SLUG\`, \`SENTRY_PROJECT_ID_OR_SLUG\` |
+| \`storyblok\` | \`STORYBLOK_SPACE_ID\` |
+| \`tally\` | \`TALLY_FORM_ID\` |
+| \`toggl-track\` | \`TOGGL_TRACK_WORKSPACE_ID\` |
+| \`trello\` | \`TRELLO_MODEL_ID\` |
 | \`typeform\` | \`TYPEFORM_FORM_ID\` |
-| \`stripe\` | (none) |
-| \`airtable\` | (none) |
-| \`attio\` | (none) |
-| \`google-calendar\` | (none) |
+| \`webflow\` | \`WEBFLOW_SITE_ID\` |
+| \`workable\` | \`WORKABLE_ACCOUNT_ID\`, only for \`candidate_*\` events |
+| \`workiom\` | \`WORKIOM_APP_ID\`, \`WORKIOM_LIST_ID\` |
+
+Some platforms also take optional keys (e.g. \`GOOGLE_CALENDAR_CALENDAR_ID\`, which defaults to the primary calendar).
 
 Example (GitHub):
 
@@ -402,17 +449,22 @@ one --agent relay create \\
 |----------|-------------|
 | \`{{relayEventId}}\` | Unique event UUID |
 | \`{{platform}}\` | Source platform (e.g., \`stripe\`) |
-| \`{{eventType}}\` | Event type (e.g., \`customer.created\`) |
-| \`{{payload}}\` | Full incoming webhook body |
-| \`{{timestamp}}\` | When the event was received |
+| \`{{eventType}}\` | Event type (e.g., \`customer.created\`); empty when One can't tell |
+| \`{{payload}}\` | Full incoming webhook body (a non-JSON body arrives as one string) |
+| \`{{timestamp}}\` | When One received the event, RFC 3339 |
 | \`{{connectionId}}\` | Source connection UUID |
-| \`{{json payload}}\` | Embed full payload as JSON string |
 
-Access nested fields: \`{{payload.data.object.email}}\`
+Access nested fields: \`{{payload.data.object.email}}\`. Helpers: \`json\`, plus Handlebars' \`if\`, \`unless\`, \`each\`, \`with\`, \`lookup\`, \`eq\`, \`ne\`, \`gt\`, \`gte\`, \`lt\`, \`lte\`, \`and\`, \`or\`, \`not\`, \`len\`.
+
+- **Every rendered value is a string.** Templates sit inside JSON strings, so \`"amount": "{{payload.amount}}"\` sends \`"5000"\`, not \`5000\`, and \`"{{json payload}}"\` sends the payload as a JSON-encoded string, not a nested object.
+- Values are JSON-escaped, not HTML-escaped. Don't use triple braces \`{{{x}}}\`; they're refused in \`headers\` and \`pathVariables\`.
+- A missing variable renders as an empty string in \`body\`, \`headers\` and \`query\`, but fails the delivery in \`pathVariables\`. Verify paths against a real payload (\`relay event <id>\`).
 
 ## Action Types
 
-**passthrough** (primary) — forward to another platform's API:
+An action gets an event only when it matches both the endpoint's and the action's \`eventFilters\`. An empty list means every event; names match exactly (no wildcards); an action's filters must be a subset of the endpoint's.
+
+**passthrough** (primary) — call another platform's action:
 \`\`\`json
 {
   "type": "passthrough",
@@ -423,17 +475,30 @@ Access nested fields: \`{{payload.data.object.email}}\`
 }
 \`\`\`
 
-\`body\`, \`headers\` and \`query\` all take Handlebars templates. \`headers\` cannot include \`x-one-secret\`, \`x-one-connection-key\` or \`x-one-action-id\`.
+\`body\`, \`headers\`, \`query\` and \`pathVariables\` all take Handlebars templates. \`headers\` cannot include \`x-one-secret\`, \`x-one-connection-key\` or \`x-one-action-id\`.
 
-**url** — forward raw event to a URL (\`secret\` is optional, for signing):
+**url** — POST the event to a public URL (private and internal addresses are refused; nothing is templated):
 \`\`\`json
 {"type": "url", "url": "https://your-app.com/webhook", "secret": "optional-signing-secret", "eventFilters": ["customer.created"]}
 \`\`\`
 
-**agent** — send to an agent:
+The body is JSON \`{relayEventId, platform, eventType, payload, timestamp, connectionId}\`, not the raw webhook. Headers: \`X-Relay-Event-Id\`, \`X-Relay-Platform\`, \`X-Relay-Event-Type\`, \`X-Relay-Delivery-Attempt\`, and with a \`secret\`, \`X-Relay-Signature: sha256=<hex HMAC-SHA256 of the exact body>\`. The receiver has 30 seconds to answer.
+
+**agent** — send to a One cloud agent:
 \`\`\`json
 {"type": "agent", "agentId": "<uuid>", "eventFilters": ["customer.created"]}
 \`\`\`
+
+An \`agent\` action only delivers through an event trigger on that agent bound to this relay, and the trigger is set up from the agent's Triggers tab in the dashboard, which creates the relay itself. An \`agent\` action added from the CLI with no trigger behind it delivers nothing, so don't build one; to reach the user's own agent or server, use a \`url\` action.
+
+## How changes behave
+
+- \`relay update\` replaces \`--actions\`, \`--event-filters\` and \`--tags\` rather than merging, so pass the full list.
+- \`--event-filters\` is One-side filtering only; the subscription at the source platform keeps the events it was registered with.
+- \`--no-active\` pauses delivery; events are still received and recorded.
+- \`relay delete\` doesn't remove the webhook at the source platform. Tell the user to remove it in the platform's settings.
+- The hosted URL comes back from \`create\` and \`activate\` only; \`list\` and \`get\` return \`url: null\`.
+- Deliveries: \`status\` is \`success\` or \`failed\`. When every action for an event fails, the whole event is retried, up to 5 attempts in total; if any action succeeded, failures aren't retried. Repeated webhooks aren't deduplicated.
 
 ## Supported Source Platforms
 
@@ -446,7 +511,9 @@ Access nested fields: \`{{payload.data.object.email}}\`
 3. \`relay deliveries --event-id <id>\` — check delivery status and errors
 4. \`relay event <id>\` — inspect full payload to verify template paths
 
-**If events arrive but 0 deliveries succeed**: you likely passed a wrong \`--webhook-secret\` on \`relay activate\`. When you created the endpoint with \`--create-webhook\`, the secret was registered with the source platform and stored automatically — do not pass it again on activate. Signature verification will fail silently and every event will be dropped.
+**No events at all:** the webhook isn't reaching One or One rejects it. Check the create response had no \`warning\` (missing \`--metadata\`), and ask the user to look at the webhook's delivery log in the source platform: a 401 there means the signing secret One holds is wrong (usually a wrong \`--webhook-secret\` on activate); run \`relay activate\` again with the right one. One also refuses more than 120 webhooks a minute per connection.
+
+**Events but no deliveries:** no action took the event. The relay is inactive, has no actions, or the event type doesn't exactly match the endpoint's and the action's \`eventFilters\`.
 `;
 
 export const GUIDE_CACHE = `# One Cache — Reference
