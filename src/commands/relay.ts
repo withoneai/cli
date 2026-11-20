@@ -3,7 +3,7 @@ import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/co
 import { OneApi } from '../lib/api.js';
 import { checkManagementAccess, checkRelayActions, isConnectionAllowed, relayWritesOf, WRITE_CONFIRMATION_HINT } from '../lib/access-gate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
-import type { AccessControlSettings } from '../lib/types.js';
+import type { AccessControlSettings, RelayFormField } from '../lib/types.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 
@@ -95,6 +95,60 @@ function parseJsonArg(value: string, argName: string): any {
   }
 }
 
+/** The platform segment of a connection key (`live::github::default::…`). */
+function platformOfConnectionKey(key: string): string | null {
+  const parts = key.split('::');
+  return parts.length >= 3 && parts[1] ? parts[1] : null;
+}
+
+/**
+ * A field as `relay metadata` reports it: the key to pass and what it is. A
+ * secret field's placeholder is never repeated, in case a real value was
+ * stored as the example.
+ */
+function describeField(field: RelayFormField) {
+  const secret = field.type === 'password';
+  return {
+    key: field.name,
+    label: field.label,
+    required: field.optional !== true,
+    secret,
+    ...(field.placeholder && !secret ? { placeholder: field.placeholder } : {}),
+    ...(Array.isArray(field.options) && field.options.length > 0 ? { options: field.options } : {}),
+  };
+}
+
+function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+/**
+ * The fields One lists as required for the connection's platform that
+ * `--metadata` leaves out. Without them the endpoint would be created but the
+ * webhook never registered, so `relay create --create-webhook` stops first.
+ * Returns nothing to report when the list can't be read: the server's own
+ * `warning` still covers that case.
+ */
+async function missingMetadataFields(
+  api: OneApi,
+  connectionKey: string,
+  metadata: unknown,
+): Promise<{ platform: string; missing: RelayFormField[] } | null> {
+  const platform = platformOfConnectionKey(connectionKey);
+  if (!platform) return null;
+  let fields: RelayFormField[] | null;
+  try {
+    fields = await api.getRelayMetadataFields(platform);
+  } catch {
+    return null;
+  }
+  const given = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+  const missing = (fields ?? []).filter(field => field.optional !== true && isBlank(given[field.name]));
+  return missing.length > 0 ? { platform, missing } : null;
+}
+
 // ── Commands ──
 
 export async function relayCreateCommand(options: {
@@ -112,20 +166,43 @@ export async function relayCreateCommand(options: {
     output.error(`Connection key "${options.connectionKey}" is not allowed.`);
   }
 
+  const body: Record<string, unknown> = {
+    connectionKey: options.connectionKey,
+  };
+  if (options.description) body.description = options.description;
+  if (options.eventFilters) body.eventFilters = parseJsonArg(options.eventFilters, '--event-filters');
+  if (options.tags) body.tags = parseJsonArg(options.tags, '--tags');
+  if (options.metadata) body.metadata = parseJsonArg(options.metadata, '--metadata');
+  if (options.createWebhook) body.createWebhook = true;
+
   const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
+
+  if (options.createWebhook) {
+    spinner.start('Checking --metadata...');
+    const gap = await missingMetadataFields(api, options.connectionKey, body.metadata);
+    spinner.stop(gap ? 'Missing --metadata' : 'Checked --metadata');
+    if (gap) {
+      const keys = gap.missing.map(field => field.name);
+      const message = `${gap.platform} needs ${keys.join(', ')} in --metadata to register the webhook. Nothing was created.`;
+      if (output.isAgentMode()) {
+        output.json({
+          status: 'metadata_required',
+          error: message,
+          platform: gap.platform,
+          missing: gap.missing.map(describeField),
+          _hint: `Ask the user for these values, then run relay create again with them in --metadata. \`one --agent relay metadata ${gap.platform}\` lists every field.`,
+        });
+        process.exit(1);
+      }
+      const lines = gap.missing.map(field => `  ${field.name}  ${pc.dim(field.label)}`);
+      output.error(`${message}\n${lines.join('\n')}`);
+    }
+  }
+
   spinner.start('Creating relay endpoint...');
 
   try {
-    const body: Record<string, unknown> = {
-      connectionKey: options.connectionKey,
-    };
-    if (options.description) body.description = options.description;
-    if (options.eventFilters) body.eventFilters = parseJsonArg(options.eventFilters, '--event-filters');
-    if (options.tags) body.tags = parseJsonArg(options.tags, '--tags');
-    if (options.metadata) body.metadata = parseJsonArg(options.metadata, '--metadata');
-    if (options.createWebhook) body.createWebhook = true;
-
     const result = await api.createRelayEndpoint(body as any);
 
     if (output.isAgentMode()) {
@@ -587,6 +664,60 @@ export async function relayEventTypesCommand(platform: string): Promise<void> {
     console.log();
   } catch (error) {
     spinner.stop('Failed to load event types');
+    output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function relayMetadataCommand(platform: string): Promise<void> {
+  const { apiKey } = getConfig();
+  const api = new OneApi(apiKey, getApiBase());
+  const spinner = output.createSpinner();
+  spinner.start(`Loading --metadata fields for ${pc.cyan(platform)}...`);
+
+  try {
+    const fields = await api.getRelayMetadataFields(platform);
+    const described = (fields ?? []).map(describeField);
+    const noneListed =
+      `One lists no --metadata fields for ${platform}. Most such platforms need none. If relay create returns a ` +
+      '`warning` naming a missing key, delete that endpoint and create it again with the key in --metadata.';
+
+    if (output.isAgentMode()) {
+      output.json({
+        platform,
+        fields: described,
+        ...(described.length === 0
+          ? { _hint: noneListed }
+          : { _hint: 'Pass these as one JSON object: relay create --create-webhook --metadata \'{"KEY":"value"}\'. Ask the user for the values; required ones must be set.' }),
+      });
+      return;
+    }
+
+    spinner.stop(`${described.length} --metadata field${described.length === 1 ? '' : 's'} for ${platform}`);
+
+    if (described.length === 0) {
+      console.log(`\n  ${noneListed}\n`);
+      return;
+    }
+
+    console.log();
+    printTable(
+      [
+        { key: 'key', label: 'Key' },
+        { key: 'required', label: 'Required' },
+        { key: 'label', label: 'What it is', color: pc.dim },
+        { key: 'placeholder', label: 'Example', color: pc.dim },
+      ],
+      described.map(field => ({
+        key: field.key,
+        required: field.required ? 'yes' : 'no',
+        label: field.label,
+        placeholder: field.placeholder ?? '',
+      }))
+    );
+    console.log();
+    console.log(pc.dim(`  Pass them as JSON: one relay create --create-webhook --metadata '{"${described[0].key}":"..."}'\n`));
+  } catch (error) {
+    spinner.stop('Failed to load --metadata fields');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }

@@ -338,6 +338,7 @@ Webhook relay receives events from 100+ platforms (Stripe, GitHub, Airtable, Att
 \`\`\`bash
 one --agent relay platforms                        # List relay-capable platforms + event type counts
 one --agent relay event-types <platform>          # List available events
+one --agent relay metadata <platform>             # --metadata keys the platform needs on create
 one --agent relay create --connection-key <key> --create-webhook --event-filters '["event.type"]'
      # also: --description <d>, --tags <json>, --metadata <json>
 one --agent relay activate <id> --actions '<json>' --confirm-write # Add forwarding actions
@@ -369,68 +370,22 @@ Aliases: \`one r\`, \`relay ls\`. Agent output: \`list\` returns \`{total, showi
 2. **Get event types** — \`one --agent relay event-types <platform>\`
 3. **Get source knowledge** — understand the incoming webhook payload shape (\`{{payload.*}}\` paths)
 4. **Get destination knowledge** — understand the outgoing API body shape
-5. **Create endpoint** — with \`--create-webhook\`, \`--event-filters\` holding at least one event (most platforms won't register a webhook without one), and \`--metadata\` when the source platform needs it (table below; ask the user for the values). **If the response has a \`warning\`, the endpoint exists but the webhook was NOT registered with the source platform.** Show the warning to the user, \`relay delete\` the endpoint, and create it again with what was missing. If the source connection already has a relay, add your actions to that one with \`relay update --actions\` (pass the full list; it replaces) instead of creating a second: all relays on a connection share one URL and one signing secret, and a second \`--create-webhook\` replaces the stored secret.
+5. **Create endpoint** — with \`--create-webhook\`, \`--event-filters\` holding at least one event (most platforms won't register a webhook without one), and \`--metadata\` when the source platform needs it (\`relay metadata <platform>\` lists the keys; ask the user for the values). **If the response has a \`warning\`, the endpoint exists but the webhook was NOT registered with the source platform.** Show the warning to the user, \`relay delete\` the endpoint, and create it again with what was missing. If the source connection already has a relay, add your actions to that one with \`relay update --actions\` (pass the full list; it replaces) instead of creating a second: all relays on a connection share one URL and one signing secret, and a second \`--create-webhook\` replaces the stored secret.
 6. **Activate** — with a passthrough action mapping source fields to destination fields. **Don't pass \`--webhook-secret\`** when the endpoint was created with \`--create-webhook\`: the secret is already stored on the source connection. Pass it only when activate fails asking for one (the platform returned no secret at registration), with the signing secret the user copies from the source platform's webhook settings. A wrong secret replaces the stored one for every relay on that connection; the source's webhooks are then rejected with 401 and no events are recorded at all.
 
 Endpoints are created active with no actions; \`activate\` attaches the actions, and calling it again replaces them.
 
 ## Platform-Specific Metadata (\`--metadata\`)
 
-These source platforms need values in \`--metadata '<json>'\` on \`relay create\` before the webhook can be registered. Every other platform (Stripe, Linear, Attio, Google Calendar, ...) needs none. Keys are case-sensitive. A missing key doesn't fail \`create\`: the endpoint is created, the webhook isn't registered, and the response's \`warning\` names the key.
+Many source platforms need values in \`--metadata '<json>'\` on \`relay create\` before the webhook can be registered. Look them up instead of guessing:
 
-| Platform | Required metadata keys |
-|---|---|
-| \`airtable\` | \`AIRTABLE_DATABASE_ID\` |
-| \`apify\` | \`APIFY_ACTOR_ID\` or \`APIFY_ACTOR_TASK_ID\` |
-| \`asana\` | \`ASANA_RESOURCE_GID\` |
-| \`autodesk\` | \`AUTODESK_SYSTEM\`, \`AUTODESK_SCOPE\` (an object) |
-| \`basin\` | \`BASIN_FORM_ID\` (a number) |
-| \`bookingmood\` | \`BOOKINGMOOD_ORGANIZATION_ID\` |
-| \`box\` | \`BOX_TARGET_ID\`, \`BOX_TARGET_TYPE\` |
-| \`brevo\` | \`BREVO_DOMAIN\`, only when \`BREVO_TYPE\` is \`inbound\` |
-| \`browse-ai\` | \`BROWSE_AI_ROBOT_ID\` |
-| \`btcpay-server\` | \`BTCPAY_SERVER_STORE_ID\` |
-| \`calendly\` | \`CALENDLY_ORGANIZATION\`, plus \`CALENDLY_USER\` or \`CALENDLY_GROUP\` for a user or group \`CALENDLY_SCOPE\` |
-| \`chargebee\` | \`CHARGEBEE_WEBHOOK_NAME\` |
-| \`click-up\` | \`CLICK_UP_TEAM_ID\` |
-| \`clockify\` | \`CLOCKIFY_WORKSPACE_ID\`, \`CLOCKIFY_WEBHOOK_NAME\`, \`CLOCKIFY_TRIGGER_SOURCE_TYPE\`, \`CLOCKIFY_TRIGGER_SOURCE\` (a list) |
-| \`cloudinary\` | \`CLOUDINARY_SIGNING_SECRET\` |
-| \`contentful-content-management\` | \`CONTENTFUL_CONTENT_MANAGEMENT_SPACE_ID\` |
-| \`crowdin\` | \`CROWDIN_PROJECT_ID\` |
-| \`datadog\` | \`DATADOG_WEBHOOK_NAME\` |
-| \`doppler-secretops\` | \`DOPPLER_SECRETOPS_PROJECT\`, \`DOPPLER_SECRETOPS_CONFIGS\` (a list) |
-| \`fathom\` | \`FATHOM_TRIGGERED_FOR\` |
-| \`figma\` | \`FIGMA_CONTEXT\`, \`FIGMA_CONTEXT_ID\` |
-| \`files-com\` | \`FILES_COM_PATH\` |
-| \`fillout\` | \`FILLOUT_FORM_ID\` |
-| \`formbricks\` | \`FORMBRICKS_ENVIRONMENT_ID\` |
-| \`git-lab\` | \`GIT_LAB_PROJECT_ID\` |
-| \`github\` | \`GITHUB_OWNER\`, \`GITHUB_REPOSITORY\` |
-| \`grist\` | \`GRIST_DOC_ID\`, \`GRIST_TABLE_ID\` |
-| \`heyy\` | \`HEYY_TENANT_ID\` |
-| \`hugging-face\` | \`HUGGING_FACE_WATCHED\` |
-| \`jira\` | \`jqlFilter\` |
-| \`launchdarkly\` | \`LAUNCHDARKLY_RESOURCES\` (a list) |
-| \`loyverse\` | \`LOYVERSE_MERCHANT_ID\` |
-| \`mailchimp-marketing\` | \`MAILCHIMP_MARKETING_LIST_ID\` |
-| \`mailersend\` | \`MAILERSEND_DOMAIN_ID\` |
-| \`monday\` | \`MONDAY_BOARD_ID\` |
-| \`paradym\` | \`PARADYM_PROJECT_ID\`, \`PARADYM_WEBHOOK_NAME\` |
-| \`parseur\` | \`PARSEUR_MAILBOX_ID\`, \`PARSEUR_WEBHOOK_NAME\` |
-| \`posthog\` | \`POSTHOG_PROJECT_ID\`, \`POSTHOG_WEBHOOK_NAME\` |
-| \`productive\` | \`PRODUCTIVE_ORGANIZATION_ID\` |
-| \`sanity\` | \`SANITY_PROJECT_ID\`, \`SANITY_DATASET\` |
-| \`sentry\` | \`SENTRY_ORGANIZATION_ID_OR_SLUG\`, \`SENTRY_PROJECT_ID_OR_SLUG\` |
-| \`storyblok\` | \`STORYBLOK_SPACE_ID\` |
-| \`tally\` | \`TALLY_FORM_ID\` |
-| \`toggl-track\` | \`TOGGL_TRACK_WORKSPACE_ID\` |
-| \`trello\` | \`TRELLO_MODEL_ID\` |
-| \`typeform\` | \`TYPEFORM_FORM_ID\` |
-| \`webflow\` | \`WEBFLOW_SITE_ID\` |
-| \`workable\` | \`WORKABLE_ACCOUNT_ID\`, only for \`candidate_*\` events |
-| \`workiom\` | \`WORKIOM_APP_ID\`, \`WORKIOM_LIST_ID\` |
+\`\`\`bash
+one --agent relay metadata <platform>
+\`\`\`
 
-Some platforms also take optional keys (e.g. \`GOOGLE_CALENDAR_CALENDAR_ID\`, which defaults to the primary calendar).
+It returns \`{platform, fields: [{key, label, required, secret, placeholder?}]}\`: the keys One lists for that platform (the same list the dashboard's setup form shows). Ask the user for the values. Keys are case-sensitive. A \`secret\` field is a credential to ask the user for; never use the placeholder as a value. An empty \`fields\` list means One lists none; most such platforms need none.
+
+With \`--create-webhook\`, \`relay create\` checks the required keys first: if any is missing it returns \`"status": "metadata_required"\` with the \`missing\` fields, exits 1 and creates nothing. A key the list doesn't name can still be missing: then the endpoint is created, the webhook isn't registered, and the response's \`warning\` names the key.
 
 Example (GitHub):
 
