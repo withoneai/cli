@@ -1,6 +1,6 @@
 # One Webhook Relay
 
-Webhook relay receives webhooks from a source platform and forwards the event data to a destination platform using passthrough actions with Handlebars templates — no middleware, no code needed.
+Webhook relay receives webhooks from a source platform and sends each event to another connected platform's action (a passthrough action, mapped with Handlebars templates), to your own URL, or to a One cloud agent — no middleware, no code needed.
 
 ## Supported Source Platforms
 
@@ -53,17 +53,67 @@ one --agent relay create \
   --create-webhook
 ```
 
-Always use `--create-webhook` — it registers the webhook URL with the source platform automatically.
+Always use `--create-webhook` — it registers the webhook URL with the source platform and stores its signing secret. Pass at least one event in `--event-filters`; most platforms won't register a webhook without one.
 
-**Some source platforms require extra identifiers via `--metadata`:**
+**If the create response has a `warning`, the endpoint exists but the webhook was NOT registered with the source platform.** Show the warning to the user, `relay delete` the endpoint, and create it again with what was missing.
+
+**One relay per source connection.** All relays on a connection share one hosted URL and one signing secret, and a second `--create-webhook` replaces the stored secret. If the connection already has a relay, add your actions to it with `relay update --actions` (pass the full list; it replaces) instead of creating another.
+
+**Many source platforms require extra identifiers via `--metadata`** (ask the user for the values). Every platform not listed (Stripe, Linear, Attio, Google Calendar, ...) needs none. Keys are case-sensitive; a missing one doesn't fail `create`, but the webhook isn't registered and the `warning` names the key.
 
 | Platform | Required metadata keys |
 |---|---|
+| `airtable` | `AIRTABLE_DATABASE_ID` |
+| `apify` | `APIFY_ACTOR_ID` or `APIFY_ACTOR_TASK_ID` |
+| `asana` | `ASANA_RESOURCE_GID` |
+| `autodesk` | `AUTODESK_SYSTEM`, `AUTODESK_SCOPE` (an object) |
+| `basin` | `BASIN_FORM_ID` (a number) |
+| `bookingmood` | `BOOKINGMOOD_ORGANIZATION_ID` |
+| `box` | `BOX_TARGET_ID`, `BOX_TARGET_TYPE` |
+| `brevo` | `BREVO_DOMAIN`, only when `BREVO_TYPE` is `inbound` |
+| `browse-ai` | `BROWSE_AI_ROBOT_ID` |
+| `btcpay-server` | `BTCPAY_SERVER_STORE_ID` |
+| `calendly` | `CALENDLY_ORGANIZATION`, plus `CALENDLY_USER` or `CALENDLY_GROUP` for a user or group `CALENDLY_SCOPE` |
+| `chargebee` | `CHARGEBEE_WEBHOOK_NAME` |
+| `click-up` | `CLICK_UP_TEAM_ID` |
+| `clockify` | `CLOCKIFY_WORKSPACE_ID`, `CLOCKIFY_WEBHOOK_NAME`, `CLOCKIFY_TRIGGER_SOURCE_TYPE`, `CLOCKIFY_TRIGGER_SOURCE` (a list) |
+| `cloudinary` | `CLOUDINARY_SIGNING_SECRET` |
+| `contentful-content-management` | `CONTENTFUL_CONTENT_MANAGEMENT_SPACE_ID` |
+| `crowdin` | `CROWDIN_PROJECT_ID` |
+| `datadog` | `DATADOG_WEBHOOK_NAME` |
+| `doppler-secretops` | `DOPPLER_SECRETOPS_PROJECT`, `DOPPLER_SECRETOPS_CONFIGS` (a list) |
+| `fathom` | `FATHOM_TRIGGERED_FOR` |
+| `figma` | `FIGMA_CONTEXT`, `FIGMA_CONTEXT_ID` |
+| `files-com` | `FILES_COM_PATH` |
+| `fillout` | `FILLOUT_FORM_ID` |
+| `formbricks` | `FORMBRICKS_ENVIRONMENT_ID` |
+| `git-lab` | `GIT_LAB_PROJECT_ID` |
 | `github` | `GITHUB_OWNER`, `GITHUB_REPOSITORY` |
+| `grist` | `GRIST_DOC_ID`, `GRIST_TABLE_ID` |
+| `heyy` | `HEYY_TENANT_ID` |
+| `hugging-face` | `HUGGING_FACE_WATCHED` |
+| `jira` | `jqlFilter` |
+| `launchdarkly` | `LAUNCHDARKLY_RESOURCES` (a list) |
+| `loyverse` | `LOYVERSE_MERCHANT_ID` |
+| `mailchimp-marketing` | `MAILCHIMP_MARKETING_LIST_ID` |
+| `mailersend` | `MAILERSEND_DOMAIN_ID` |
+| `monday` | `MONDAY_BOARD_ID` |
+| `paradym` | `PARADYM_PROJECT_ID`, `PARADYM_WEBHOOK_NAME` |
+| `parseur` | `PARSEUR_MAILBOX_ID`, `PARSEUR_WEBHOOK_NAME` |
+| `posthog` | `POSTHOG_PROJECT_ID`, `POSTHOG_WEBHOOK_NAME` |
+| `productive` | `PRODUCTIVE_ORGANIZATION_ID` |
+| `sanity` | `SANITY_PROJECT_ID`, `SANITY_DATASET` |
+| `sentry` | `SENTRY_ORGANIZATION_ID_OR_SLUG`, `SENTRY_PROJECT_ID_OR_SLUG` |
+| `storyblok` | `STORYBLOK_SPACE_ID` |
+| `tally` | `TALLY_FORM_ID` |
+| `toggl-track` | `TOGGL_TRACK_WORKSPACE_ID` |
+| `trello` | `TRELLO_MODEL_ID` |
 | `typeform` | `TYPEFORM_FORM_ID` |
-| `stripe`, `airtable`, `attio`, `google-calendar` | (none) |
+| `webflow` | `WEBFLOW_SITE_ID` |
+| `workable` | `WORKABLE_ACCOUNT_ID`, only for `candidate_*` events |
+| `workiom` | `WORKIOM_APP_ID`, `WORKIOM_LIST_ID` |
 
-Without metadata the endpoint is still created, but the webhook isn't registered with the source platform. If the create response carries a `warning`, read it. Example for GitHub:
+Some platforms also take optional keys (e.g. `GOOGLE_CALENDAR_CALENDAR_ID`, which defaults to the primary calendar). Example for GitHub:
 
 ```bash
 one --agent relay create \
@@ -90,7 +140,9 @@ one --agent relay activate <relay-id> --confirm-write --actions '[{
 
 Pass `--confirm-write` only when the user asked for this relay (see "Write actions need `--confirm-write`" below).
 
-**Do NOT pass `--webhook-secret` on activate** when you created the endpoint with `--create-webhook`. The correct secret is registered with the source platform and stored automatically. Supplying a wrong one does not error — events arrive but every delivery is dropped during signature verification (0 deliveries). If you don't have a reason to override the secret, omit the flag.
+**Don't pass `--webhook-secret` on activate** when you created the endpoint with `--create-webhook`: the secret is already stored on the source connection. Pass it only when activate fails asking for one (the platform returned no secret at registration), with the signing secret the user copies from the source platform's webhook settings. A wrong secret replaces the stored one for every relay on that connection; the source's webhooks are then rejected with 401 and no events are recorded at all.
+
+Endpoints are created active with no actions; `activate` attaches the actions, and calling it again replaces them.
 
 ## Template Context
 
@@ -98,16 +150,22 @@ Pass `--confirm-write` only when the user asked for this relay (see "Write actio
 |---|---|
 | `{{relayEventId}}` | Unique relay event ID |
 | `{{platform}}` | Source platform name |
-| `{{eventType}}` | Webhook event type |
-| `{{payload}}` | Full incoming webhook body |
-| `{{timestamp}}` | When event was received |
+| `{{eventType}}` | Webhook event type; empty when One can't tell |
+| `{{payload}}` | Full incoming webhook body (a non-JSON body arrives as one string) |
+| `{{timestamp}}` | When One received the event, RFC 3339 |
 | `{{connectionId}}` | Source connection UUID |
 
 Access nested fields with dot notation: `{{payload.data.object.email}}`
 
-Use `{{json payload}}` to embed a full object as a JSON string.
+Use `{{json payload}}` to embed a full object as a JSON string. Also available: Handlebars' `if`, `unless`, `each`, `with`, `lookup`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `and`, `or`, `not`, `len`.
+
+- **Every rendered value is a string.** Templates sit inside JSON strings, so `"amount": "{{payload.amount}}"` sends `"5000"`, not `5000`, and `"{{json payload}}"` sends the payload as a JSON-encoded string, not a nested object.
+- Values are JSON-escaped, not HTML-escaped. Don't use triple braces `{{{x}}}`; they're refused in `headers` and `pathVariables`.
+- A missing variable renders as an empty string in `body`, `headers` and `query`, but fails the delivery in `pathVariables`.
 
 ## Action Types
+
+An action gets an event only when it matches both the endpoint's and the action's `eventFilters`. An empty list means every event; names match exactly (no wildcards); an action's filters must be a subset of the endpoint's.
 
 ### `passthrough` — Forward to another platform's API (primary)
 
@@ -121,9 +179,9 @@ Use `{{json payload}}` to embed a full object as a JSON string.
 }
 ```
 
-The `body`, `headers`, and `query` fields all support Handlebars templates. `headers` cannot include `x-one-secret`, `x-one-connection-key` or `x-one-action-id`. The `actionId` must exist: the CLI looks it up to learn its method before saving the action.
+The `body`, `headers`, `query` and `pathVariables` fields all support Handlebars templates. `headers` cannot include `x-one-secret`, `x-one-connection-key` or `x-one-action-id`. The `actionId` must exist: the CLI looks it up to learn its method before saving the action.
 
-### `url` — Forward raw event to a URL
+### `url` — POST the event to a public URL
 
 ```json
 {
@@ -134,7 +192,9 @@ The `body`, `headers`, and `query` fields all support Handlebars templates. `hea
 }
 ```
 
-### `agent` — Send to an agent
+Private and internal addresses are refused, and nothing in a `url` action is templated. The body is JSON `{relayEventId, platform, eventType, payload, timestamp, connectionId}`, not the raw webhook. Headers: `X-Relay-Event-Id`, `X-Relay-Platform`, `X-Relay-Event-Type`, `X-Relay-Delivery-Attempt`, and with a `secret`, `X-Relay-Signature: sha256=<hex HMAC-SHA256 of the exact body>`. The receiver has 30 seconds to answer.
+
+### `agent` — Send to a One cloud agent
 
 ```json
 {
@@ -143,6 +203,8 @@ The `body`, `headers`, and `query` fields all support Handlebars templates. `hea
   "eventFilters": ["customer.created"]
 }
 ```
+
+An `agent` action only delivers through an event trigger on that agent bound to this relay, and the trigger is set up from the agent's Triggers tab in the dashboard, which creates the relay itself. An `agent` action added from the CLI with no trigger behind it delivers nothing, so don't build one; to reach the user's own agent or server, use a `url` action.
 
 ## Complete Example: Stripe customer.created -> Slack message
 
@@ -198,6 +260,15 @@ The access settings from `one config` (and `.onerc`) apply to relays as well as 
 - `url` and `agent` actions are allowed only when both the connection and action allowlists are `*` (all).
 - With a connection allowlist, `relay list` and `relay events` hide endpoints and events on other connections, and `get`, `event`, `deliveries`, `update`, `activate` and `delete` refuse them.
 
+## How Changes Behave
+
+- `relay update` replaces `--actions`, `--event-filters` and `--tags` rather than merging, so pass the full list.
+- `--event-filters` is One-side filtering only; the subscription at the source platform keeps the events it was registered with.
+- `--no-active` pauses delivery; events are still received and recorded.
+- `relay delete` doesn't remove the webhook at the source platform. Tell the user to remove it in the platform's settings.
+- The hosted URL comes back from `create` and `activate` only; `list` and `get` return `url: null`.
+- Deliveries: `status` is `success` or `failed`. When every action for an event fails, the whole event is retried, up to 5 attempts in total; if any action succeeded, failures aren't retried. Repeated webhooks aren't deduplicated.
+
 ## Discovery Commands
 
 ```bash
@@ -243,10 +314,17 @@ To page `list` or `events`, raise `--page` until `showing` is 0. With a connecti
 3. Check delivery status: `one --agent relay deliveries --event-id <id>`
 4. Inspect payload: `one --agent relay event <id>` — verify template paths
 
+**No events at all:** the webhook isn't reaching One or One rejects it. Check the create response had no `warning` (missing `--metadata`), and ask the user to look at the webhook's delivery log in the source platform: a 401 there means the signing secret One holds is wrong (usually a wrong `--webhook-secret` on activate); run `relay activate` again with the right one. One also refuses more than 120 webhooks a minute per connection.
+
+**Events but no deliveries:** no action took the event. The relay is inactive, has no actions, or the event type doesn't exactly match the endpoint's and the action's `eventFilters`.
+
 ## Important Notes
 
 - Event filters on both the endpoint and individual actions must match
 - Multiple actions can be attached to a single relay endpoint
 - Missing template variables resolve to empty strings — verify `{{payload.*}}` paths against the actual payload
-- GitHub and Typeform relays require `--metadata` on create; without it the webhook is not registered with the source platform
-- Never pass `--webhook-secret` on activate when the endpoint was created with `--create-webhook` — the auto-stored secret is correct, and a wrong one causes signature verification to drop every event silently
+- Many platforms require `--metadata` on create (see the table in Step 5); a `warning` in the create response means the webhook was not registered with the source platform
+- Every rendered template value is a string
+- Don't pass `--webhook-secret` on activate when the endpoint was created with `--create-webhook` unless activate asks for one; a wrong secret makes One reject every webhook on that connection (no events at all)
+- Keep one relay per source connection and add actions to it
+- Deleting a relay leaves the webhook at the source platform
