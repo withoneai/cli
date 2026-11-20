@@ -30,6 +30,26 @@ async function close(server: http.Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
 
+/**
+ * Fails after `ms` instead of waiting forever. The abort tests wait on a real
+ * request; if the signal ever stops reaching fetch they must fail and still
+ * close their server. A test-level timeout is not enough: the timed-out body
+ * never reaches its finally block, so the open server keeps the run alive.
+ */
+async function bounded<T>(promise: Promise<T>, what: string, ms = 5_000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} did not happen within ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function readRequest(req: IncomingMessage): Promise<SeenRequest> {
   let body = '';
   for await (const chunk of req) body += chunk.toString();
@@ -134,9 +154,9 @@ describe('OneApi redirect credentials', () => {
         platform: 'test', actionId: action._id, connectionKey: CONNECTION,
         signal: controller.signal,
       }, action);
-      await entered;
+      await bounded(entered, 'the request reaching the server');
       controller.abort();
-      await assert.rejects(pending);
+      await bounded(assert.rejects(pending), 'the aborted request rejecting');
     } finally {
       await close(server);
     }
@@ -183,9 +203,9 @@ describe('OneApi redirect credentials', () => {
         platform: 'test', actionId: action._id, connectionKey: CONNECTION,
         signal: controller.signal,
       }, action);
-      await reading;
+      await bounded(reading, 'the response body read starting');
       controller.abort();
-      await assert.rejects(pending);
+      await bounded(assert.rejects(pending), 'the aborted body read rejecting');
     } finally {
       await close(server);
     }
