@@ -230,6 +230,8 @@ export interface ExecuteActionArgs {
   platform: string;
   actionId: string;
   connectionKey: string;
+  /** Optional cancellation for preflight and the passthrough request. */
+  signal?: AbortSignal;
   data?: any;
   pathVariables?: Record<string, string | number | boolean>;
   queryParams?: Record<string, any>;
