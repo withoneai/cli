@@ -1,6 +1,6 @@
 import { callerHeaders } from './caller.js';
 import { checkPassthroughAccess, IDENTITY_HEADERS, AccessDeniedError, writeMethodOf, WRITE_CONFIRMATION_HINT } from './access-gate.js';
-import { getAccessControlFromAllSources } from './config.js';
+import { getAccessControlFromAllSources, getConnectUserId } from './config.js';
 import { createWriteStream } from 'node:fs';
 import { resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -24,6 +24,7 @@ import type {
   AccessControlSettings,
   ViewerAccessLevel,
   RelayFormField,
+  ReachableConnection,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -148,9 +149,29 @@ export class OneApi {
    */
   requireWriteConfirmation = false;
 
-  constructor(private apiKey: string, apiBase?: string, accessSettings?: AccessControlSettings) {
+  /**
+   * The Connect user (`cu_…`) the key acts for, sent on every request beside
+   * it. Read from `ONE_CONNECT_USER_ID` unless a caller supplies it; `null`
+   * for an ordinary key.
+   */
+  readonly connectUserId: string | null;
+
+  constructor(
+    private apiKey: string,
+    apiBase?: string,
+    accessSettings?: AccessControlSettings,
+    connectUserId: string | null = getConnectUserId()
+  ) {
     this.accessSettings = accessSettings;
     this.apiBase = apiBase ?? 'https://api.withone.ai/v1';
+    this.connectUserId = connectUserId;
+  }
+
+  /** The key, and the Connect user it acts for when there is one. */
+  private credentialHeaders(): Record<string, string> {
+    return this.connectUserId
+      ? { 'x-one-secret': this.apiKey, 'x-one-connect-user-id': this.connectUserId }
+      : { 'x-one-secret': this.apiKey };
   }
 
   private async request<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -172,7 +193,7 @@ export class OneApi {
     }
 
     const headers: Record<string, string> = {
-      'x-one-secret': this.apiKey,
+      ...this.credentialHeaders(),
       'Content-Type': 'application/json',
       ...opts.headers,
     };
@@ -229,7 +250,31 @@ export class OneApi {
     }
   }
 
+  /**
+   * The connections a Connect grant reaches, each with the access it confers
+   * (`GET /v1/connections/reachable`, the route a grant may list).
+   */
+  async listReachable(signal?: AbortSignal): Promise<ReachableConnection[]> {
+    const reachable: ReachableConnection[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const response = await this.request<{ rows?: ReachableConnection[]; pages?: number }>(
+        `/connections/reachable?page=${page}&limit=100`,
+        signal
+      );
+      reachable.push(...(response.rows || []));
+      totalPages = response.pages || 1;
+      page++;
+    } while (page <= totalPages);
+
+    return reachable;
+  }
+
   async listConnections(signal?: AbortSignal): Promise<Connection[]> {
+    if (this.connectUserId) return (await this.listReachable(signal)).map(asConnection);
+
     const allConnections: Connection[] = [];
     let page = 1;
     let totalPages = 1;
@@ -428,7 +473,7 @@ export class OneApi {
     }
 
     const headers: Record<string, string> = {
-      'x-one-secret': this.apiKey,
+      ...this.credentialHeaders(),
       'Content-Type': 'application/json',
       ...opts.headers,
     };
@@ -538,7 +583,7 @@ export class OneApi {
     for (const name of Object.keys(requestHeaders)) {
       if (IDENTITY_HEADERS.includes(name.toLowerCase())) delete requestHeaders[name];
     }
-    requestHeaders['x-one-secret'] = this.apiKey;
+    Object.assign(requestHeaders, this.credentialHeaders());
     requestHeaders['x-one-connection-key'] = args.connectionKey;
     requestHeaders['x-one-action-id'] = action._id;
 
@@ -849,6 +894,21 @@ export class TimeoutError extends Error {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * A reachable connection as a listed one. One sends a grant no record id, so
+ * the key stands in for it: it is as unique, and the routes that take an id
+ * (delete, tag) refuse a grant anyway.
+ */
+export function asConnection(reachable: ReachableConnection): Connection {
+  return {
+    id: reachable.key,
+    platform: reachable.platform,
+    key: reachable.key,
+    state: 'unknown',
+    ...(reachable.name && { name: reachable.name }),
+  };
 }
 
 /**

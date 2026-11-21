@@ -40,7 +40,7 @@ export function isConnectionAllowed(connectionKey: string, allowedConnectionKeys
  * connection and action from these, so a caller-supplied copy would replace
  * what was checked.
  */
-export const IDENTITY_HEADERS = ['x-one-secret', 'x-one-connection-key', 'x-one-action-id'];
+export const IDENTITY_HEADERS = ['x-one-secret', 'x-one-connect-user-id', 'x-one-connection-key', 'x-one-action-id'];
 
 /**
  * Headers that ask an upstream to treat the request as another method. One

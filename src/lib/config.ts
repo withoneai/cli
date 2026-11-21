@@ -256,6 +256,18 @@ export function getApiKey(): string | null {
 }
 
 /**
+ * The Connect user (`cu_…`) a Connect key acts for: `ONE_CONNECT_USER_ID` from
+ * the env, then `.onerc`. Set, every request runs under that user's grant.
+ * Never stored in config: it pairs with a Connect key, which an `ONE_SECRET`
+ * env or `.onerc` carries. One refuses it beside an ordinary key, so a cloned
+ * `.onerc` naming one cannot widen what that key reaches.
+ */
+export function getConnectUserId(): string | null {
+  const value = process.env.ONE_CONNECT_USER_ID?.trim() || readOneRc().ONE_CONNECT_USER_ID?.trim();
+  return value || null;
+}
+
+/**
  * Resolve the OpenAI API key using the same precedence as ONE_SECRET:
  *   env > .onerc > project config > global config.
  *
@@ -439,6 +451,7 @@ export function updateApiBase(url: string | null): void {
   // Clear cached whoami — base URL changed, so it needs to be re-fetched
   delete config.whoami;
   delete config.whoamiApiBase;
+  delete config.whoamiConnectUserId;
 
   writeConfig(config);
 }
@@ -491,6 +504,7 @@ export function saveCredentials(apiKey: string, scope: ConfigScope, opts: SaveCr
     whoami: opts.whoami,
     whoamiApiBase: getApiBase(),
   };
+  delete next.whoamiConnectUserId;
   if (opts.keyName) next.apiKeyName = opts.keyName;
   else delete next.apiKeyName;
   const userSetKnowledge = !!existing?.accessControl?.knowledgeAgent && !existing.knowledgeAgentFromGrant;
@@ -547,15 +561,17 @@ export function updateAccessControl(settings: AccessControlSettings): void {
 
 /**
  * The cached account record, or null when there is none or it was fetched
- * from a different API base than the one active now. A record written
- * before `whoamiApiBase` existed counts as fetched from the configured
- * base, so existing configs keep their cache until an override is active.
+ * from a different API base, or for a different Connect user, than the one
+ * active now. A record written before `whoamiApiBase` existed counts as
+ * fetched from the configured base, so existing configs keep their cache
+ * until an override is active.
  */
 export function getWhoAmI(): WhoAmIResponse | null {
   const config = readConfig();
   if (!config?.whoami) return null;
   const fetchedFrom = config.whoamiApiBase ?? withV1(config.apiBase ?? DEFAULT_API_BASE);
   if (fetchedFrom !== getApiBase()) return null;
+  if ((config.whoamiConnectUserId ?? null) !== getConnectUserId()) return null;
   return config.whoami;
 }
 
@@ -564,6 +580,9 @@ export function updateWhoAmI(whoami: WhoAmIResponse): void {
   if (!config) return;
   config.whoami = whoami;
   config.whoamiApiBase = getApiBase();
+  const connectUserId = getConnectUserId();
+  if (connectUserId) config.whoamiConnectUserId = connectUserId;
+  else delete config.whoamiConnectUserId;
   writeConfig(config);
 }
 
