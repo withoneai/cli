@@ -880,7 +880,7 @@ program
 
 program
   .command('whoami')
-  .description('Show the user, organization, and project for the current API key')
+  .description('Show the user, organization, and project for the current API key, and the Connect user it acts for when ONE_CONNECT_USER_ID is set')
   .action(async () => {
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -906,6 +906,7 @@ program
     // The name describes the config's key; an ONE_SECRET env or .onerc key
     // that won this call is a different credential and carries no name.
     const keyName = resolved.config?.apiKey === apiKey ? resolved.config.apiKeyName : undefined;
+    const { connectUserId } = api;
 
     if (isAgentMode()) {
       outputJson({
@@ -916,6 +917,7 @@ program
         configScope,
         apiBase,
         keyName,
+        ...(connectUserId && { connectUserId }),
       });
       return;
     }
@@ -934,6 +936,7 @@ program
     console.log(`  ${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
     console.log(`  ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
     if (keyName) console.log(`  ${pc.dim('Key:')} ${keyName}`);
+    if (connectUserId) console.log(`  ${pc.dim('Acting for Connect user:')} ${connectUserId}`);
     if (whoami.organization) console.log(`  ${pc.dim('Org:')} ${whoami.organization.name} ${pc.dim(`(${whoami.organization.id})`)}`);
     if (whoami.project) console.log(`  ${pc.dim('Project:')} ${whoami.project.name} ${pc.dim(`(${whoami.project.id})`)}`);
     console.log();
