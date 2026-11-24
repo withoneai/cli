@@ -20,7 +20,9 @@ import type {
   ActionLevel,
   ConnectionAccess,
   KeyAccessDocument,
+  KeyAccessRule,
   PermissionLevel,
+  ReachableConnection,
   ResolvedAllowedAction,
   ViewerAccessLevel,
 } from './types.js';
@@ -125,6 +127,23 @@ export function serverEnvelope(doc: KeyAccessDocument | null, connectionKey: str
     reachable: true,
     methods: rule.methods ?? doc.methods,
     actionIds: rule.actionIds ?? null,
+  };
+}
+
+/**
+ * A Connect grant's access as the document `serverEnvelope` reads: one rule
+ * per connection the grant reaches, so a connection it doesn't reach is
+ * unreachable.
+ */
+export function grantAccessDocument(reachable: ReachableConnection[]): KeyAccessDocument {
+  return {
+    methods: null,
+    rules: reachable.map(({ key, access }): KeyAccessRule => {
+      const rule: KeyAccessRule = { type: 'connection', connectionKey: key };
+      if (access.policy === 'methods') rule.methods = access.methods;
+      if (access.policy === 'actions') rule.actionIds = access.actions.map(a => a.actionId);
+      return rule;
+    }),
   };
 }
 

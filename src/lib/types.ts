@@ -186,6 +186,12 @@ export interface Config {
    */
   whoamiApiBase?: string;
   /**
+   * Connect user `whoami` was fetched for (`ONE_CONNECT_USER_ID`), absent for
+   * the key alone. Matched like `whoamiApiBase`, so a grant's user is never
+   * reported as the config key's owner, or one Connect user as another.
+   */
+  whoamiConnectUserId?: string;
+  /**
    * Unified-memory subsystem config. Shape defined in lib/memory/config.ts
    * (kept loose here to avoid import cycles between the core config layer
    * and the memory module).
@@ -204,6 +210,26 @@ export interface ConnectionsResponse {
   total: number;
   pages: number;
   page: number;
+}
+
+/** A Connect user, and the space they granted from when it is not their personal one. */
+export interface ConnectUser {
+  id: string;
+  organizationId?: string;
+  projectId?: string;
+}
+
+/**
+ * One connection a Connect grant reaches (`GET /v1/connections/reachable`),
+ * with the access the grant confers on it. One leaves out the record fields
+ * (id, state, tags) a grant may not see.
+ */
+export interface ReachableConnection {
+  key: string;
+  platform: string;
+  name?: string | null;
+  access: ConnectionAccess;
+  viewerAccessLevel?: ViewerAccessLevel;
 }
 
 export interface AvailableAction {

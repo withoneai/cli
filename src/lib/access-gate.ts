@@ -37,10 +37,17 @@ export function isConnectionAllowed(connectionKey: string, allowedConnectionKeys
 
 /**
  * Headers the CLI sets from the values the gate approved. One reads the key,
- * connection and action from these, so a caller-supplied copy would replace
- * what was checked.
+ * Connect user and space, connection and action from these, so a
+ * caller-supplied copy would replace what was checked.
  */
-export const IDENTITY_HEADERS = ['x-one-secret', 'x-one-connection-key', 'x-one-action-id'];
+export const IDENTITY_HEADERS = [
+  'x-one-secret',
+  'x-one-connect-user-id',
+  'x-one-organization-id',
+  'x-one-project-id',
+  'x-one-connection-key',
+  'x-one-action-id',
+];
 
 /**
  * Headers that ask an upstream to treat the request as another method. One

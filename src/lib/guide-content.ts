@@ -11,6 +11,8 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 You can also use \`one login\` / \`one logout\` to manage authentication separately (global or per-directory). \`one login\` refuses \`--agent\`; use \`one init --auth browser\` instead. **\`one --agent logout\` needs \`--force\`**: without it, it returns \`confirmation_required\` and the config it would clear. It clears only the config in effect (the project config if there is one) unless \`--scope global|both\`. Run it only when the user asked to log out. \`one --agent whoami\` shows the user, organization, project, env, config scope, API base and key name.
 
+To act for one user of an app built on Connect, set \`ONE_SECRET\` to the app's Connect key and \`ONE_CONNECT_USER_ID\` to the value the SDK stored for the user (\`cu_…\`, plus \`;org=<id>;project=<id>\` when they granted from an organization or project; env or \`.onerc\`). One then holds every call to that user's grant: \`whoami\` shows the connected user and \`connectUserId\`, \`connection list\` shows what the grant reaches, and \`actions find\`, \`actions load\` and \`actions execute\` run under it. Adding connections and relays need an ordinary key.
+
 Browser login opens a consent page that names the key and tags it with where the CLI runs (scope, project path, machine, OS user, CLI version, the agent harnesses you pick, and the per-install device id unless telemetry is off), so the dashboard can show every install. The terminal prints what will be sent before the browser opens. Set \`ONE_APP_URL\` (dashboard origin) and \`ONE_API_BASE\` (API origin) to run against a local stack; neither is written to config, so pair them with \`ONE_HOME\` to keep a local stack's credentials separate.
 
 ### Agent-driven setup (no prompts)
@@ -430,7 +432,7 @@ An action gets an event only when it matches both the endpoint's and the action'
 }
 \`\`\`
 
-\`body\`, \`headers\`, \`query\` and \`pathVariables\` all take Handlebars templates. \`headers\` cannot include \`x-one-secret\`, \`x-one-connection-key\` or \`x-one-action-id\`.
+\`body\`, \`headers\`, \`query\` and \`pathVariables\` all take Handlebars templates. \`headers\` cannot include \`x-one-secret\`, \`x-one-connect-user-id\`, \`x-one-organization-id\`, \`x-one-project-id\`, \`x-one-connection-key\` or \`x-one-action-id\`.
 
 **url** — POST the event to a public URL (private and internal addresses are refused; nothing is templated):
 \`\`\`json

@@ -2,10 +2,11 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
 import { checkManagementAccess, DELETE_CONFIRMATION_HINT } from '../lib/access-gate.js';
-import { OneApi, TimeoutError, PERMISSION_METHODS } from '../lib/api.js';
+import { OneApi, TimeoutError, PERMISSION_METHODS, asConnection } from '../lib/api.js';
 import {
   resolveAllowedActions,
   formatAccess,
+  grantAccessDocument,
   serverEnvelope,
   localEnvelope,
   intersectEnvelopes,
@@ -173,6 +174,20 @@ export async function connectionAddCommand(platformArg?: string, options?: { tag
   }
 }
 
+/**
+ * A Connect grant's listing, read off the connections it reaches: the routes
+ * a key's access and levels come from (`/access/me`, `/connections`) refuse a
+ * grant, and each reachable row carries both.
+ */
+async function grantListing(
+  api: OneApi
+): Promise<[Connection[], { ok: true; doc: KeyAccessDocument }, Map<string, ViewerAccessLevel>]> {
+  const reachable = await api.listReachable();
+  const levels = new Map<string, ViewerAccessLevel>();
+  for (const row of reachable) if (row.viewerAccessLevel) levels.set(row.key, row.viewerAccessLevel);
+  return [reachable.map(asConnection), { ok: true, doc: grantAccessDocument(reachable) }, levels];
+}
+
 export async function connectionListCommand(options?: { search?: string; limit?: string }): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
@@ -191,14 +206,16 @@ export async function connectionListCommand(options?: { search?: string; limit?:
     // and says so.
     // The person's own level (their share, or App Controls) caps every call
     // too; an older backend sends none, which leaves the listing as it was.
-    const [allConnections, serverAccess, viewerLevels] = await Promise.all([
-      api.listConnections(),
-      api.getOwnAccess().then(
-        doc => ({ ok: true as const, doc }),
-        () => ({ ok: false as const, doc: null }),
-      ),
-      api.listViewerLevels().catch(() => new Map<string, ViewerAccessLevel>()),
-    ]);
+    const [allConnections, serverAccess, viewerLevels] = api.connectUserId
+      ? await grantListing(api)
+      : await Promise.all([
+          api.listConnections(),
+          api.getOwnAccess().then(
+            doc => ({ ok: true as const, doc }),
+            () => ({ ok: false as const, doc: null }),
+          ),
+          api.listViewerLevels().catch(() => new Map<string, ViewerAccessLevel>()),
+        ]);
 
     // The CLI's own access settings (`one config`) narrow it further.
     const ac = getAccessControlFromAllSources();
