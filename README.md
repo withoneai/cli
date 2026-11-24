@@ -861,7 +861,7 @@ An app built on `@withone/connect` can run the CLI as one of its users. Set `ONE
 
 - `whoami` shows the connected user.
 - `list` shows the connections the grant reaches, with the access it gives on each.
-- `actions find`, `actions load` and `actions execute` run under the grant. An action outside it is refused with a 403.
+- `actions find` offers only actions inside the grant, and `actions execute` refuses one outside it with a 403. Plan from `list` and `find`: `actions load` reads an action's docs by id whether or not the grant reaches it.
 - Adding or removing connections and managing relays need an ordinary key. One refuses them under a grant.
 
 One refuses a Connect key without `ONE_CONNECT_USER_ID`, and an ordinary key with it, so setting one by mistake can't widen what a key reaches.
