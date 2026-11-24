@@ -256,8 +256,9 @@ export function getApiKey(): string | null {
 }
 
 /**
- * The Connect user (`cu_…`) a Connect key acts for: `ONE_CONNECT_USER_ID` from
- * the env, then `.onerc`. Set, every request runs under that user's grant.
+ * The Connect user a Connect key acts for, as the SDK stores it (see
+ * `parseConnectUser`): `ONE_CONNECT_USER_ID` from the env, then `.onerc`.
+ * Set, every request runs under that user's grant.
  * Never stored in config: it pairs with a Connect key, which an `ONE_SECRET`
  * env or `.onerc` carries. One refuses it beside an ordinary key, so a cloned
  * `.onerc` naming one cannot widen what that key reaches.

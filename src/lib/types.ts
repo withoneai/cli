@@ -212,6 +212,13 @@ export interface ConnectionsResponse {
   page: number;
 }
 
+/** A Connect user, and the space they granted from when it is not their personal one. */
+export interface ConnectUser {
+  id: string;
+  organizationId?: string;
+  projectId?: string;
+}
+
 /**
  * One connection a Connect grant reaches (`GET /v1/connections/reachable`),
  * with the access the grant confers on it. One leaves out the record fields

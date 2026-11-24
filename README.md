@@ -832,7 +832,7 @@ Drop a `.onerc` file in your project root to override settings per-project (sepa
 | Key | Purpose |
 |-----|---------|
 | `ONE_SECRET` | API key (also honored as env var) |
-| `ONE_CONNECT_USER_ID` | The `cu_…` user a Connect key acts for (also honored as env var); see [Acting for a Connect user](#acting-for-a-connect-user) |
+| `ONE_CONNECT_USER_ID` | The user a Connect key acts for, as the SDK stored it (also honored as env var); see [Acting for a Connect user](#acting-for-a-connect-user) |
 | `ONE_API_BASE` | API base URL, `https://api.withone.ai` or `https://development-api.withone.ai` only (the env var accepts any origin) |
 | `OPENAI_API_KEY` | OpenAI key for `one mem` semantic search (also honored as env var) |
 | `ONE_PERMISSIONS` | `admin` / `write` / `read`, can only lower the configured level |
@@ -842,7 +842,7 @@ Drop a `.onerc` file in your project root to override settings per-project (sepa
 
 Precedence: env var > `.onerc` > project config > global config. The access keys are the exception: they are not read from the environment, and a `.onerc` can only narrow the access settings in your config, never widen them, because it can arrive with a cloned repository. A value that would widen them is ignored with a warning; use `one config` instead.
 
-The access settings are enforced on every call to a connected app, whatever the command: `actions execute`, flows, sync and its validation runs. Headers named `x-one-secret`, `x-one-connect-user-id`, `x-one-connection-key` or `x-one-action-id` cannot be passed with `--headers`, method-override headers are judged against the permission level, and a path variable cannot be `.` or `..`. `--dry-run` is checked too. API requests never carry your key to another origin: a redirect to a different origin fails instead of being followed.
+The access settings are enforced on every call to a connected app, whatever the command: `actions execute`, flows, sync and its validation runs. Headers named `x-one-secret`, `x-one-connect-user-id`, `x-one-organization-id`, `x-one-project-id`, `x-one-connection-key` or `x-one-action-id` cannot be passed with `--headers`, method-override headers are judged against the permission level, and a path variable cannot be `.` or `..`. `--dry-run` is checked too. API requests never carry your key to another origin: a redirect to a different origin fails instead of being followed.
 
 They also apply to commands that change One's own resources. Creating, updating or activating a relay needs the `write` level and deleting one needs `admin`; `connection delete` needs `admin`; knowledge-only refuses all of them. A relay's `passthrough` actions are checked like `actions execute` when they are set, because they run later on One's servers. `url` and `agent` relay actions are allowed only when the connection and action allowlists are both `*`. With a connection allowlist, relay endpoints, events and deliveries on other connections are hidden or refused.
 
@@ -857,11 +857,11 @@ ONE_PERMISSIONS=read
 
 ### Acting for a Connect user
 
-An app built on `@withone/connect` can run the CLI as one of its users. Set `ONE_SECRET` to the app's Connect key and `ONE_CONNECT_USER_ID` to the user's `cu_…` id, in the environment or `.onerc`. Every request then carries both, and One holds it to the grant that user gave the app, as it does for the SDK.
+An app built on `@withone/connect` can run the CLI as one of its users. Set `ONE_SECRET` to the app's Connect key and `ONE_CONNECT_USER_ID` to the value the SDK stored for the user, in the environment or `.onerc`. That value is the user's `cu_…` id, followed by `;org=<id>;project=<id>` when they granted from an organization or project. Every request then carries the user and that space, and One holds it to the grant that user gave the app, as it does for the SDK.
 
 - `whoami` shows the connected user.
 - `list` shows the connections the grant reaches, with the access it gives on each.
-- `actions load` and `actions execute` run under the grant. An action outside it is refused with a 403.
+- `actions find`, `actions load` and `actions execute` run under the grant. An action outside it is refused with a 403.
 - Adding or removing connections and managing relays need an ordinary key. One refuses them under a grant.
 
 One refuses a Connect key without `ONE_CONNECT_USER_ID`, and an ordinary key with it, so setting one by mistake can't widen what a key reaches.

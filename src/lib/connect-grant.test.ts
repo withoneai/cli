@@ -59,11 +59,44 @@ describe('OneApi under a Connect grant', () => {
     ]);
   });
 
-  it('refuses a caller-supplied Connect user on a passthrough call', () => {
-    assert.throws(
-      () => checkPassthroughAccess({}, { actionId: 'a', connectionKey: 'k', method: 'GET', headers: { 'X-One-Connect-User-Id': CONNECT_USER } }),
-      /is set by the CLI and cannot be passed/,
-    );
+  it('sends the space the SDK stored with the user, and none for a personal grant', async () => {
+    const { calls } = serve({ '/knowledge': { rows: [action] } });
+    const api = new OneApi('sk_live_connect', 'https://api.test/v1', {}, `${CONNECT_USER};org=o1;project=p1`);
+    await api.whoami();
+    await api.executePassthroughRequest({ platform: 'stripe', actionId: 'conn_mod_def::1', connectionKey: 'live::stripe::default::s' }, action);
+    await new OneApi('sk_live_connect', 'https://api.test/v1', {}, CONNECT_USER).whoami();
+    assert.equal(api.connectUserId, CONNECT_USER);
+    for (const call of calls.slice(0, 2)) {
+      assert.equal(call.headers['x-one-connect-user-id'], CONNECT_USER);
+      assert.equal(call.headers['x-one-organization-id'], 'o1');
+      assert.equal(call.headers['x-one-project-id'], 'p1');
+    }
+    assert.equal(calls[2].headers['x-one-organization-id'], undefined);
+    assert.equal(calls[2].headers['x-one-project-id'], undefined);
+  });
+
+  it("says what One's bare refusal of a Connect user means, and leaves any other body alone", async () => {
+    const refuse = (status: number, body: string) => {
+      globalThis.fetch = (async () => new Response(body, { status })) as typeof fetch;
+    };
+    const grant = new OneApi('sk_live_connect', 'https://api.test/v1', {}, CONNECT_USER);
+    refuse(403, '403 Forbidden');
+    await assert.rejects(grant.whoami(), /outside the grant they gave the app/);
+    refuse(401, '401 Unauthorized');
+    await assert.rejects(grant.whoami(), /did not accept the Connect key/);
+    refuse(403, '{"message":"insufficient scope"}');
+    await assert.rejects(grant.whoami(), /insufficient scope/);
+    refuse(403, '403 Forbidden');
+    await assert.rejects(new OneApi('sk_live_k', 'https://api.test/v1', {}, null).whoami(), /^ApiError: 403 Forbidden$/);
+  });
+
+  it('refuses a caller-supplied Connect user or space on a passthrough call', () => {
+    for (const name of ['X-One-Connect-User-Id', 'X-One-Organization-Id', 'X-One-Project-Id']) {
+      assert.throws(
+        () => checkPassthroughAccess({}, { actionId: 'a', connectionKey: 'k', method: 'GET', headers: { [name]: 'x' } }),
+        /is set by the CLI and cannot be passed/,
+      );
+    }
   });
 });
 

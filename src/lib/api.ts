@@ -25,6 +25,7 @@ import type {
   ViewerAccessLevel,
   RelayFormField,
   ReachableConnection,
+  ConnectUser,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -150,28 +151,52 @@ export class OneApi {
   requireWriteConfirmation = false;
 
   /**
-   * The Connect user (`cu_…`) the key acts for, sent on every request beside
-   * it. Read from `ONE_CONNECT_USER_ID` unless a caller supplies it; `null`
-   * for an ordinary key.
+   * The Connect user the key acts for, sent on every request beside it. Read
+   * from `ONE_CONNECT_USER_ID` unless a caller supplies it; `null` for an
+   * ordinary key.
    */
-  readonly connectUserId: string | null;
+  private connectUser: ConnectUser | null;
 
   constructor(
     private apiKey: string,
     apiBase?: string,
     accessSettings?: AccessControlSettings,
-    connectUserId: string | null = getConnectUserId()
+    connectUser: string | null = getConnectUserId()
   ) {
     this.accessSettings = accessSettings;
     this.apiBase = apiBase ?? 'https://api.withone.ai/v1';
-    this.connectUserId = connectUserId;
+    this.connectUser = connectUser ? parseConnectUser(connectUser) : null;
   }
 
-  /** The key, and the Connect user it acts for when there is one. */
+  /** The `cu_…` id the key acts for, or `null` for an ordinary key. */
+  get connectUserId(): string | null {
+    return this.connectUser?.id ?? null;
+  }
+
+  /**
+   * The key, and the Connect user it acts for when there is one. One reads a
+   * grant's tenant from the space headers, and a call naming none runs in the
+   * user's personal space.
+   */
   private credentialHeaders(): Record<string, string> {
-    return this.connectUserId
-      ? { 'x-one-secret': this.apiKey, 'x-one-connect-user-id': this.connectUserId }
-      : { 'x-one-secret': this.apiKey };
+    if (!this.connectUser) return { 'x-one-secret': this.apiKey };
+    const { id, organizationId, projectId } = this.connectUser;
+    return {
+      'x-one-secret': this.apiKey,
+      'x-one-connect-user-id': id,
+      ...(organizationId && { 'x-one-organization-id': organizationId }),
+      ...(projectId && { 'x-one-project-id': projectId }),
+    };
+  }
+
+  /**
+   * The error for a refused call. One refuses a Connect user with a bare
+   * status line, so that is replaced with what it means.
+   */
+  private apiError(status: number, text: string, retryAfterSeconds?: number): ApiError {
+    if (this.connectUser && text.trim() === `${status} Forbidden`) return new ApiError(status, CONNECT_USER_REFUSED);
+    if (this.connectUser && text.trim() === `${status} Unauthorized`) return new ApiError(status, CONNECT_KEY_REFUSED);
+    return new ApiError(status, text || `HTTP ${status}`, retryAfterSeconds);
   }
 
   private async request<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -212,7 +237,7 @@ export class OneApi {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new ApiError(response.status, text || `HTTP ${response.status}`);
+      throw this.apiError(response.status, text);
     }
 
     const text = await response.text();
@@ -501,7 +526,7 @@ export class OneApi {
     if (!response.ok) {
       const text = await response.text();
       const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
-      throw new ApiError(response.status, text || `HTTP ${response.status}`, retryAfter);
+      throw this.apiError(response.status, text, retryAfter);
     }
 
     const etag = response.headers.get('etag') ?? null;
@@ -689,7 +714,7 @@ export class OneApi {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new ApiError(response.status, text || `HTTP ${response.status}`);
+      throw this.apiError(response.status, text);
     }
 
     const responseContentType = response.headers.get('content-type') || '';
@@ -894,6 +919,26 @@ export class TimeoutError extends Error {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+const CONNECT_USER_REFUSED =
+  "One refused this for the Connect user: it is outside the grant they gave the app (`one list` shows what it reaches), or they hold no live grant for it (never connected in this environment, revoked, or the app is deactivated).";
+const CONNECT_KEY_REFUSED =
+  "One did not accept the Connect key for ONE_CONNECT_USER_ID. Check that ONE_SECRET is the app's Connect key for this environment, and ONE_CONNECT_USER_ID the value the app stored for the user.";
+
+/**
+ * A Connect user as `@withone/connect` stores it: the `cu_…` id, then the
+ * space the user granted from when it is not their personal one
+ * (`cu_…;org=<id>;project=<id>`).
+ */
+export function parseConnectUser(value: string): ConnectUser {
+  const [id, ...parts] = value.split(';').map(part => part.trim());
+  const user: ConnectUser = { id };
+  for (const part of parts) {
+    if (part.startsWith('org=')) user.organizationId = part.slice('org='.length);
+    else if (part.startsWith('project=')) user.projectId = part.slice('project='.length);
+  }
+  return user;
 }
 
 /**
