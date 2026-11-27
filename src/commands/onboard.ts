@@ -280,11 +280,11 @@ function buildDemoActions(connections: Connection[]): string {
     lines.push('');
     lines.push(`### ${displayName}`);
     lines.push(`- ${demo.description}: \`one actions find ${platform} "${demo.query}"\``);
-    lines.push(`- Then get knowledge and execute to show the user the results`);
+    lines.push(`- Then read the docs it returns and execute to show the user the results`);
   }
 
   lines.push('');
-  lines.push('For ANY platform, the pattern is the same: search -> knowledge -> execute.');
+  lines.push('For ANY platform, the pattern is the same: find -> read the docs -> execute.');
 
   return lines.join('\n');
 }
