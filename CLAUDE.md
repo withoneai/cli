@@ -43,9 +43,12 @@ Always create a branch and PR for changes — do not commit directly to `main`.
 When making any feature change, **always update documentation as part of the implementation**:
 
 1. `src/lib/guide-content.ts` — CLI guide content (`one guide <topic>`)
-2. `skills/one/SKILL.md` — Agent-facing skill documentation
-3. `README.md` — User-facing command reference
-4. `src/cli.ts` — Help text and command descriptions (`src/index.ts` only re-exports `program`)
+2. `skills/one/SKILL.md` and `skills/one/references/*.md` — Agent-facing skill documentation
+3. `docs/*.md` — User-facing command reference, one file per topic (`docs/README.md` is the index)
+4. `README.md` — The overview: quick start, what the CLI does, the command table. Keep it short and put flags, defaults and output shapes in `docs/`
+5. `src/cli.ts` — Help text and command descriptions (`src/index.ts` only re-exports `program`)
+
+The README's banner and product graphics live in `assets/`. The README points at them on `main` through `raw.githubusercontent.com`, so they show as broken on a branch until it merges.
 
 Agent experience is the highest priority. Agents rely on accurate documentation to use the CLI correctly. Stale docs = broken agent workflows.
 

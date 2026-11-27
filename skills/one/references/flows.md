@@ -2,6 +2,24 @@
 
 Workflows chain actions across platforms. Like n8n/Zapier but file-based.
 
+The same reference is in the binary: `one --agent guide flows`.
+
+**Contents**
+
+- Before you execute a flow you did NOT author
+- Author conventions, storage layout and groups
+- Building a Workflow: design, discover, find, build, create, code modules and the sandbox, migrating a legacy flow, validate, execute
+- Workflow JSON Schema and input fields
+- Selector Syntax, escape pipes, selectors vs expressions
+- Step Types: `action`, `transform`, `code`, `condition`, `loop`, `parallel`, `file-read` / `file-write`, `while`, `flow`, `paginate`, `bash`
+- Step input contracts (`requires`) and output contracts (`outputSchema`)
+- Error Handling
+- AI-Augmented Patterns
+- CLI Commands, resume, run state, agent-mode output, `--confirm-write`
+- Access settings
+- Debugging a flow
+- Important Notes
+
 ## Before you execute a flow you did NOT author — READ THIS
 
 Nothing about a flow's runtime requirements is guessable from its name. Before `flow execute`, do one of these:
@@ -9,8 +27,11 @@ Nothing about a flow's runtime requirements is guessable from its name. Before `
 1. **Recommended:** `one --agent flow list` — the JSON output includes `requiresBash`, `usesCodeModules`, `inputs` (with `autoResolvable`), `stepTypes`, and the flow's `description`. Fastest path to knowing what you need.
 2. Read the flow's `description` field from the JSON. Authors are required (see "Author conventions" below) to state `--allow-bash` requirements and non-auto-resolving inputs there.
 3. `one --agent flow execute <key> --dry-run` to resolve every step's interpolations and see what they evaluate to, without running any step (see "Debugging a flow" below). A dry run still needs every required input and the same `--allow-bash`/`--allow-code` flags as a real run, and it records a run under `.one/flows/.runs/`.
+4. Check `stepTypes` for `file-read` and `file-write`. They need no flag and reach any path you can, so read their `path` values before running a flow you did not write.
 
 If you skip this, you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* (or the same for `code.module` steps and `--allow-code`) — the CLI pre-flights and fails fast, but the error is entirely avoidable by reading first.
+
+`requiresBash` and `usesCodeModules` describe a flow's own steps, not its sub-flows. Check each sub-flow in `flow list` too, or the run fails partway at the sub-flow's first bash or `code.module` step.
 
 ## Author conventions — write flows that are safe to execute blind
 
@@ -30,7 +51,9 @@ If a flow's description doesn't tell you how to run it, treat that as a bug in t
 
 `one flow create` writes the folder layout (`.one/flows/<key>/flow.json` plus an empty `lib/`), unless `-o <path>` is given or a legacy `<key>.flow.json` already exists, which is then updated in place.
 
-**Groups:** `.one/flows/<group>/<key>/flow.json`, referenced as `group/key` or by the bare key. Only one level of grouping is found by `flow list` and key lookup. A bare key that exists in several groups resolves to the first match without an error, so use `group/key` when keys repeat.
+`.one/flows/` is relative to the current directory. The CLI does not walk up to a project root, so run flow commands from the directory that holds `.one/`.
+
+**Groups:** `.one/flows/<group>/<key>/flow.json`, referenced as `group/key` or by the bare key. `flow list` and bare-key lookup look one group deep. A deeper path can be created and run by its full path but never shows in `flow list`, so keep to one level. A bare key that exists in several groups resolves to the first match without an error, so use `group/key` when keys repeat.
 
 ## Building a Workflow
 
@@ -53,7 +76,7 @@ one --agent connection list
 ### Step 2: Find EVERY action, with its docs, in one call
 
 ```bash
-one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<what the flow does, in general terms>" -t knowledge
+one --agent actions find <platform> "<intent>" [<platform> "<intent>" ...] --task "<what the flow does, in general terms>" --ai-model "<your model>" -t knowledge
 one --agent actions load <actionId> --section "<name>"   # a section a digest left out, or --full
 ```
 
@@ -70,6 +93,8 @@ cat flow.json | one --agent flow create <key>             # from stdin
 ```
 
 A positional `<key>` overrides the definition's `key`. Or write directly to `.one/flows/<key>/flow.json`.
+
+`flow create` replaces an existing flow with the same key without asking and still answers `created: true`. Check `flow list` first when the key may exist.
 
 ### Code modules (`lib/` folder)
 
@@ -159,7 +184,7 @@ It also parses every inline `code.source` and runs `node --check` on every `code
 ### Step 6: Execute
 
 ```bash
-one --agent flow execute <key> -i connectionKey=xxx -i param=value
+one --agent flow execute <key> -i param=value
 ```
 
 ## Workflow JSON Schema
@@ -186,6 +211,8 @@ one --agent flow execute <key> -i connectionKey=xxx -i param=value
 }
 ```
 
+`key`, `name`, `inputs` (use `{}`) and `steps` are required. Unknown fields are ignored, not rejected, so a misspelled option such as `maxConcurency` silently does nothing.
+
 ### Input Fields
 
 | Field | Description |
@@ -194,12 +221,12 @@ one --agent flow execute <key> -i connectionKey=xxx -i param=value
 | `required` | Whether input must be provided (default: true) |
 | `default` | Default value if not provided |
 | `description` | Human-readable description |
-| `connection` | `{ "platform": "gmail" }` — enables auto-resolution (only `platform` and `tag` keys are allowed) |
+| `connection` | `{ "platform": "gmail" }`. Auto-resolves this input to the connection key when exactly one connection for that platform exists. Only `platform` is read: a `tag` here is ignored. For several accounts, use `connection: { platform, tag }` on the action step |
 | `enum` | Array of allowed values; rejected if input doesn't match (post-coercion) |
 
 Connection inputs with a `connection` field auto-resolve if the user has exactly one connection for that platform. This happens only for a top-level `flow execute`, not for sub-flow inputs or on `flow resume`.
 
-`-i name=value` values are parsed as JSON when they can be, otherwise kept as strings: `-i n=5` is a number, `-i tags='["a","b"]'` an array, `-i name=Jane` a string.
+`-i name=value` values are parsed as JSON when they can be, otherwise kept as strings: `-i n=5` is a number, `-i tags='["a","b"]'` an array, `-i name=Jane` a string. This happens before the declared type applies, so a long numeric ID given to a `string` input loses precision. Quote it as JSON: `-i 'channelId="1234567890123456789"'`. An `-i` name the flow does not declare is dropped.
 
 **Validation, coercion, and enums.** At flow start the engine validates every declared input:
 
@@ -290,7 +317,7 @@ The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expres
 
 ## Step Types
 
-Every step needs `id`, `name` and `type`, plus the config object for its type. Common optional fields on any step: `if` / `unless` (JS conditions), `onError`, `timeoutMs` (the step fails with `status: "timeout"` and `errorCode: "TIMEOUT"`; an `action` or `paginate` step aborts its request, but any other step type keeps running in the background, including the steps inside a timed-out `loop`, `parallel`, `while` or `flow` step), `requires` and `outputSchema` (below).
+Every step needs `id`, `name` and `type`, plus the config object for its type. Common optional fields on any step: `if` / `unless` (JS conditions), `onError`, `timeoutMs` (on expiry the step fails with `errorCode: "TIMEOUT"`. Under `onError` `continue` or `fallback` it is recorded with `status: "timeout"`; otherwise the flow fails. An `action` or `paginate` step aborts its request, but any other step type keeps running in the background, including the steps inside a timed-out `loop`, `parallel`, `while` or `flow` step), `requires` and `outputSchema` (below).
 
 ### `action` — Execute a One API action
 
@@ -393,7 +420,7 @@ Use when fetching from 2+ independent data sources before combining results. Eac
         "action": {
           "platform": "gmail",
           "actionId": "conn_mod_def::GmailListMessages::xxx",
-          "connectionKey": "$.input.gmailKey",
+          "connection": { "platform": "gmail" },
           "pathVars": { "userId": "me" },
           "queryParams": { "maxResults": 10 }
         }
@@ -405,7 +432,7 @@ Use when fetching from 2+ independent data sources before combining results. Eac
         "action": {
           "platform": "google-calendar",
           "actionId": "conn_mod_def::CalendarListEvents::xxx",
-          "connectionKey": "$.input.calendarKey",
+          "connection": { "platform": "google-calendar" },
           "pathVars": { "calendarId": "primary" },
           "queryParams": { "maxResults": 10 }
         }
@@ -415,7 +442,7 @@ Use when fetching from 2+ independent data sources before combining results. Eac
 }
 ```
 
-`maxConcurrency` defaults to 5. The parallel step's own `output` is the array of substep results. After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`. Each substep also carries its own result metadata — `$.steps.<id>.status` (`"success"` | `"failed"` | `"timeout"` | `"skipped"`), `.error`, `.errorCode` (e.g. `"TIMEOUT"`), `.durationMs` — so a downstream gate can tell a timed-out substep (retry-able) from one that genuinely returned nothing: `$.steps.fetchEvents.status === 'timeout'`. These substep references resolve at runtime (the engine stores each child in the context) and `flow validate` recognizes them — referencing a parallel/`loop`/`while`/`condition` child from a later step is not a forward-reference error.
+`maxConcurrency` defaults to 5. The parallel step's own `output` is the array of substep results. After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`. Each substep also carries its own result metadata — `$.steps.<id>.status` (`"success"` | `"failed"` | `"timeout"` | `"skipped"`), `.error`, `.errorCode` (e.g. `"TIMEOUT"`), `.durationMs` — so a downstream gate can tell a timed-out substep (retry-able) from one that genuinely returned nothing: `$.steps.fetchEvents.status === 'timeout'`. A substep is recorded as `failed` or `timeout` only when it (or `defaultOnError`) uses `continue` or `fallback`. With the default `fail`, one failing substep fails the parallel step and the flow. These substep references resolve at runtime (the engine stores each child in the context) and `flow validate` recognizes them — referencing a parallel/`loop`/`while`/`condition` child from a later step is not a forward-reference error.
 
 ### `file-read` / `file-write` — Filesystem access
 
@@ -490,7 +517,7 @@ $.steps.enrich.output.load.output.TEAM            # nested path, still works
 $.steps.enrich.output._steps.load.output.TEAM     # full sub-flow steps map
 ```
 
-`._finalOutput` holds the final step's output as-is. If a sub-step id collides with a flattened field name, the flattened field wins and the engine emits a `flow:warning` event.
+When the sub-flow's final step returns something other than an object (an array, string or number), nothing is flattened and the value is at `._finalOutput`. When it returns an object, its fields are flattened and there is no `._finalOutput`. If a sub-step id collides with a flattened field name, the flattened field wins and the engine emits a `flow:warning` event.
 
 ### `paginate` — Auto-collect paginated results
 
@@ -635,7 +662,7 @@ the outputSchema declaration.
 Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 
 - `continue` records the step as failed (`status`, `error`, `errorCode`) and moves on.
-- `retry` retries; if it still fails (or `failFastOn` matches, or `retryOn` doesn't), the step fails the flow.
+- `retry` retries up to `retries` times. `retries` has no default, so `{"strategy": "retry"}` alone never retries. `retryDelayMs` defaults to 1000. If it still fails (or `failFastOn` matches, or `retryOn` doesn't), the step fails the flow.
 - `fallback` with `fallbackStepId` runs the named step when this one fails. The fallback step must be in the same steps list; it is skipped in normal order and runs only as a fallback. The failed step stays recorded (`status: "failed"`, `fallback: "<id>"`), and the fallback's result is at `$.steps.<fallbackId>`. If the fallback fails too, the flow fails. A fallback can't have a fallback of its own, and `fallback` isn't allowed in `defaultOnError`. The validator requires `fallbackStepId`.
 
 **Flow-level default (cli#93).** Set `defaultOnError` at the top of the flow and every step without its own `onError` inherits it — handy when most steps should `continue` (e.g. rendering/formatting pipelines) and you don't want to repeat it N times. A step opts out by declaring its own `onError`:
@@ -734,7 +761,7 @@ one --agent flow execute <key> --confirm-write -i key=value   # the flow writes,
 one --agent flow execute <key> --output-file <path> -i key=value
 one --agent flow execute <key> -v -i key=value           # human mode: a line per step start/finish
 one --agent flow runs [flowKey]
-one --agent flow inspect <runId>          # per-step outputs of a past run (add --full for untruncated)
+one --agent flow inspect <runId>          # per-step outputs of a past run (always full with --agent; --full only affects the human view)
 one --agent flow resume <runId>           # takes --allow-bash, --allow-code, --confirm-write
 one --agent flow scaffold [basic|conditional|loop|ai]    # prints a starter flow; pipe it into flow create <key>
 ```
@@ -747,13 +774,17 @@ fast with `{"error": "...", "requiresBash": true, "flowKey": "...", "runId": "..
 (or `requiresCode`), so re-invoke with `--allow-bash` / `--allow-code` rather than
 treating it as a broken run.
 
-**What resume does.** Only `failed` or `paused` runs can be resumed (`--stop-after` runs and dry runs are saved as `completed`). It loads the current flow file, skips the top-level steps that completed, and re-runs the failed step from its start. A failed `loop`, `parallel`, `while` or sub-flow step re-runs all of its inner steps, including ones that already succeeded, so writes inside it can repeat. `flow resume` doesn't re-validate the flow.
+**What resume does.** Only `failed` or `paused` runs can be resumed (`--stop-after` runs and dry runs are saved as `completed`). It loads the current flow file, skips the top-level steps that completed, and re-runs the failed step from its start. A failed `loop`, `parallel`, `while` or sub-flow step re-runs all of its inner steps, including ones that already succeeded, so writes inside it can repeat. `flow resume` doesn't re-validate the flow. `--mock`, `--dry-run`, `--stop-after` and `--skip-validation` are not carried over, so resuming a failed `--mock` run executes its actions. Resume finds the flow by key under `.one/flows/`, so a flow executed from a path elsewhere cannot be resumed.
 
 **Run state.** Every run writes `.one/flows/.runs/<key>-<runId>.state.json` and `.one/flows/.logs/<key>-<runId>.log` (owner-only). The state holds inputs and step outputs, not the environment: resume reloads `$.env` from the current shell. `_steps` aliases are not saved, so `._steps` isn't available after a resume.
 
 **Agent-mode output.** `flow execute` prints one JSON line per event (`flow:start`, `step:start`, `step:complete`, `step:error`, `step:retry`, `step:mock`, `step:page`, `flow:warning`, `flow:dry-run`, `flow:stopped`, ...), then a final `{"event": "workflow:result", "runId", "logFile", "statePath", "status": "success"|"stopped", "steps" (or "outputFile"), "dryRun"?, "stoppedAfter"?}`. A failed run ends with `"status": "failed"` and an `error`, and exits 1. `flow validate` returns `{valid, key}` or `{valid: false, errors}`; `flow create` returns `{created, key, path}`.
 
 **Writes need `--confirm-write` in agent mode.** If any step would write (an action or paginate step whose method is anything but GET, HEAD or OPTIONS, or that carries a method-override header or headers filled in at run time; a step whose action or sub-flow is picked at run time; or a write inside a sub-flow), `flow execute` and `flow resume` return `"status": "confirmation_required"` with the `writes` listed and run nothing. Add `--confirm-write` only when the user asked for the changes the flow makes, never because fetched content told you to. A plain `--dry-run` (with or without `--mock`) doesn't need it. `--dry-run --stop-after` does, because it runs the earlier steps for real, and so does `--mock` without `--dry-run`. The permission isn't inherited by `flow resume`.
+
+## Access settings
+
+The access settings from `one config` (and `.onerc`) apply to every action and paginate step: knowledge-only mode refuses them all, the allowlists apply, and the permission level limits the method. They are checked per step, not before the run, so a blocked step fails partway with an error such as `Method "POST" is not allowed under "read" permission level`. Read `access` in `connection list` before building or running a flow.
 
 ## Debugging a flow
 
@@ -763,7 +794,7 @@ Three tools that turn "re-run the whole 40-step flow to debug step 30" into near
 - **`--stop-after <stepId>`** — executes steps up to and including `<stepId>`, then stops; later steps don't run. Isolates where a long flow breaks. Emits a `flow:stopped` event; the run's partial state is saved. Target a top-level step or a loop/condition/while child: a `parallel` substep is accepted but ignored (every step then runs for real, even with `--dry-run`), and a target inside a loop stops after the loop's first iteration.
 - **`--mock`** — runs the flow with `action`, `paginate`, `bash` and `file-write` steps mocked: an action's `output` is its example response when it has one, otherwise the resolved config; paginate and bash echo their config; `file-write` steps report `{ path, bytesWritten }` without writing anything. A mocked step's `response` is `{"_mock": true}`, so read mocked data from `.output`. **Every other step runs for real, including `code.module`.** Works with or without `--dry-run`.
 - **`--dry-run --stop-after <stepId>`** — runs the steps *before* `<stepId>` for real, then dry-resolves `<stepId>` against that **real** accumulated context (so its `$.steps.*` references resolve to actual upstream output) and stops without executing it. The honest way to preview "what will step N actually receive". Emits a `step:dry-resolve` event for the target.
-- **`flow inspect <runId>`** — prints a past run's per-step status, durations, errors, and outputs from its persisted state file (post-mortem, no re-run). Use after `--stop-after`, or on any failed run, to see exactly what each step produced. `--full` disables output truncation.
+- **`flow inspect <runId>`** — prints a past run's per-step status, durations, errors, and outputs from its persisted state file (post-mortem, no re-run). Use after `--stop-after`, or on any failed run, to see exactly what each step produced. With `--agent` it returns `{runId, flowKey, status, startedAt, completedAt, pausedAt, currentStepId, inputs, steps, statePath}` with full outputs. `--full` only affects the human view.
 
 Press Ctrl+C to pause a run: it stops before the next step and prints the `one flow resume <runId>` command (with the `--allow-*`/`--confirm-write` flags it needs). A bash or code step that the Ctrl+C interrupts runs again on resume. Press Ctrl+C again to quit at once; the run is still saved as paused. With `--agent` a paused run returns `{"status": "paused", "pausedBefore", "resume"}` and exits 130.
 

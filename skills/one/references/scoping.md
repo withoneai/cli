@@ -48,3 +48,5 @@ To switch an existing project back to using the global config, remove its projec
 ```bash
 one --agent config reset        # removes the nearest project config that applies here (may be a parent's)
 ```
+
+With `--agent` this deletes at once, with no confirmation, and `--global` deletes `~/.one/config.json` (the key for every project). Run it only when the user asked. It returns `{deleted, scope, projectRoot, fallback}`.

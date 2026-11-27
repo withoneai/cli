@@ -2,6 +2,8 @@
 
 Webhook relay receives webhooks from a source platform and sends each event to another connected platform's action (a passthrough action, mapped with Handlebars templates), to your own URL, or to a One cloud agent — no middleware, no code needed.
 
+The same reference is in the binary: `one --agent guide relay`.
+
 ## Supported Source Platforms
 
 Over 100 platforms can send webhooks (Stripe, GitHub, Airtable, Attio, Google Calendar, Typeform, Asana, Calendly and many more). The list changes, so check it with `one --agent relay platforms` rather than assuming. Any connected platform can be a destination.
@@ -65,7 +67,7 @@ Always use `--create-webhook` — it registers the webhook URL with the source p
 one --agent relay metadata <source-platform>
 ```
 
-It returns `{platform, fields: [{key, label, required, secret, placeholder?}]}`: the keys One lists for registering that platform's webhook (the same list the dashboard's setup form shows). Ask the user for the values and pass them as one JSON object in `--metadata`. Keys are case-sensitive. A `secret` field is a credential: ask the user for it, and never use the placeholder as a value. An empty `fields` list means One lists none; most such platforms need none.
+It returns `{platform, fields: [{key, label, required, secret, placeholder?, options?}]}` (`options` lists the allowed values when the field is a choice): the keys One lists for registering that platform's webhook (the same list the dashboard's setup form shows). Ask the user for the values and pass them as one JSON object in `--metadata`. Keys are case-sensitive. A `secret` field is a credential: ask the user for it, and never use the placeholder as a value. An empty `fields` list means One lists none; most such platforms need none.
 
 With `--create-webhook`, `relay create` checks the required keys first. If any is missing it returns `"status": "metadata_required"` with the `missing` fields, exits 1 and creates nothing. A key the list doesn't name can still be missing: then the create response's `warning` names it.
 
@@ -135,7 +137,7 @@ An action gets an event only when it matches both the endpoint's and the action'
 }
 ```
 
-The `body`, `headers`, `query` and `pathVariables` fields all support Handlebars templates. `headers` cannot include `x-one-secret`, `x-one-connection-key` or `x-one-action-id`. The `actionId` must exist: the CLI looks it up to learn its method before saving the action.
+The `body`, `headers`, `query` and `pathVariables` fields all support Handlebars templates. `headers` cannot include `x-one-secret`, `x-one-connect-user-id`, `x-one-organization-id`, `x-one-project-id`, `x-one-connection-key` or `x-one-action-id`. The `actionId` must exist: the CLI looks it up to learn its method before saving the action.
 
 ### `url` — POST the event to a public URL
 
@@ -173,7 +175,7 @@ one --agent connection list
 one --agent relay event-types stripe
 
 # 3. Find the Slack send-message action, with its docs
-one --agent actions find slack "send a message to a channel" -t knowledge
+one --agent actions find slack "send a message to a channel" -t knowledge --task "<the job, in general terms>" --ai-model "<your model>"
 
 # 4. Create relay
 one --agent relay create \
@@ -248,6 +250,8 @@ one --agent relay deliveries --endpoint-id <id>
 one --agent relay deliveries --event-id <id>
 ```
 
+`relay delete` has no confirmation in agent mode. Delete only when the user asked, or to redo a create that returned a `warning`.
+
 Aliases: `one r` for `one relay`, `relay ls` for `relay list`. `deliveries` needs `--endpoint-id` or `--event-id`; with both, `--endpoint-id` wins.
 
 Agent-mode output:
@@ -261,7 +265,7 @@ Agent-mode output:
 | `delete` | `{deleted: true, id}` |
 | `platforms` | `{platforms: [{platform, eventTypeCount}]}` |
 | `event-types` | `{platform, eventTypes: [...]}` |
-| `metadata` | `{platform, fields: [{key, label, required, secret, placeholder?}]}` |
+| `metadata` | `{platform, fields: [{key, label, required, secret, placeholder?, options?}]}` |
 | `create` refused | `{status: "metadata_required", error, platform, missing: [...]}`, exit 1 |
 
 To page `list` or `events`, raise `--page` until `showing` is 0. With a connection allowlist, rows are filtered after the server pages them, so a page can hold fewer than `--limit` rows and `total` counts only the rows shown.
