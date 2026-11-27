@@ -1,216 +1,92 @@
-<img src="https://assets.withone.ai/banners/cli.png" alt="One CLI - Connect your agents to every API on the internet." style="border-radius: 5px;">
+<p>
+  <a href="https://withone.ai/products/cli">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/withoneai/cli/main/assets/banner-dark.svg">
+      <img src="https://raw.githubusercontent.com/withoneai/cli/main/assets/banner-light.svg" alt="One CLI. Every app, from the terminal." width="100%">
+    </picture>
+  </a>
+</p>
 
 <h3 align="center">One CLI</h3>
 
 <p align="center">
-  <a href="https://withone.ai"><strong>Website</strong></a>
-  &nbsp;·&nbsp;
-  <a href="https://withone.ai/docs"><strong>Docs</strong></a>
-  &nbsp;·&nbsp;
+  <a href="https://withone.ai/docs/getting-started"><strong>Get started</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="https://withone.ai/docs/cli"><strong>Docs</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="./docs"><strong>Reference</strong></a>
+  &nbsp;&middot;&nbsp;
+  <a href="https://withone.ai/knowledge"><strong>API directory</strong></a>
+  &nbsp;&middot;&nbsp;
   <a href="https://app.withone.ai"><strong>Dashboard</strong></a>
-  &nbsp;·&nbsp;
+  &nbsp;&middot;&nbsp;
   <a href="https://withone.ai/changelog"><strong>Changelog</strong></a>
-  &nbsp;·&nbsp;
-  <a href="https://x.com/withoneai"><strong>X</strong></a>
-  &nbsp;·&nbsp;
-  <a href="https://linkedin.com/company/withoneai"><strong>LinkedIn</strong></a>
 </p>
 
 <p align="center">
-  <a href="https://npmjs.com/package/@withone/cli"><img src="https://img.shields.io/npm/v/%40withone%2Fcli" alt="npm version"></a>
+  <a href="https://npmjs.com/package/@withone/cli"><img src="https://img.shields.io/npm/v/%40withone%2Fcli?color=447D5D&labelColor=132A21&style=flat-square" alt="npm version"></a>
   &nbsp;
-  <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Fplatforms" alt="platforms"></a>
+  <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Fplatforms&color=447D5D&labelColor=132A21&style=flat-square" alt="platforms"></a>
   &nbsp;
-  <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Ftools" alt="tools"></a>
+  <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Ftools&label=verified%20tools&color=447D5D&labelColor=132A21&style=flat-square" alt="verified tools"></a>  &nbsp;
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-447D5D?labelColor=132A21&style=flat-square" alt="License MIT"></a>
 </p>
 
-One gives your AI agent authenticated access to 1000+ platforms - Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else - through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
+The One CLI puts the apps you have connected on One at your agent's command line. One command finds the action a task needs and returns its real API documentation. The next one runs it. One holds the credentials and adds them on its side, which means your agent never sees an OAuth token or a platform API&nbsp;key.
 
-## Install
+It is built to be driven by an agent and works the same by hand. Add `--agent` and every command answers in&nbsp;JSON.
+
+## Quick start
+
+### With your agent
+
+Install the One skill, then hand the rest to your&nbsp;agent.
+
+```bash
+npx skills add withoneai/cli -g
+```
+
+Then send your agent this&nbsp;message.
+
+```text
+Use the One skill to set up the One CLI, then run "one onboard"
+```
+
+Your agent installs the CLI and opens your browser, where you sign in and choose what its key can reach. Then it runs `one onboard`, a three-step script written for an agent, which teaches it the commands and shows it which apps you have connected. Connect a first app with `one add gmail`, which you approve in your&nbsp;browser.
+
+### By hand
 
 ```bash
 npx @withone/cli@latest init
 ```
 
-Or install globally:
+`one init` signs you in through the browser, installs the One skill into the coding agents you pick and offers to connect your first app. To keep `one` on your path, install it&nbsp;globally.
 
 ```bash
 npm install -g @withone/cli
 one init
 ```
 
-`one init` walks you through setup: choose global or project scope, sign in through the browser or paste your [API key](https://app.withone.ai/settings/api-keys), optionally add an OpenAI key for semantic memory search, install the One skill into the AI agents you pick, and optionally connect your first app.
+It needs Node.js 22.23.4+, 24.22.1+ or 26.12.1+. If the global install fails with a permissions error, run each command through `npx @withone/cli@latest`&nbsp;instead.
 
-Or authenticate directly:
-
-```bash
-one login              # Opens the browser to sign in and create a key
-one logout             # Clear local credentials
-```
-
-The first `one login` writes the global config; once a key exists it asks whether the new one applies globally or to this directory. For a project key from the start, use `one init -p`. `one logout` asks which config to clear when both a project and a global config exist, and deletes the whole file (API key, OpenAI key, access control and memory settings). With `--agent` there's no prompt: it needs `--force` (without it, it returns `confirmation_required` and the config it would clear), and it clears only the config in effect (the project config if there is one) unless you pass `--scope global` or `--scope both`. The API key itself stays active until you revoke it in the dashboard.
-
-The browser consent page names the key and tags it with where this CLI is installed (scope, project path, machine, OS user, CLI version, chosen harnesses, and the per-install device id unless telemetry is off) so you can find and revoke it from Settings → API keys. The terminal prints exactly what will be sent before the browser opens.
-
-Requires Node.js 22.23.4+, 24.22.1+ or 26.12.1+. Older Node versions trust the
-compromised eMudhra intermediate CA certificates (October 2026), so a network
-attacker could intercept the CLI's traffic and your API key. On them the CLI
-refuses to run and prints the command that updates Node for how you installed
-it. Node 18, 20, 23 and 25 are end-of-life and never got the fix.
-
-If you can't update Node yet, `ONE_ALLOW_UNPATCHED_NODE=1` runs the CLI anyway,
-with a security warning on every run (silent in `--agent` mode). You remain exposed while it is set.
-
-## Quick start
+Then four commands take you from nothing to a sent&nbsp;email.
 
 ```bash
-# Connect a platform
+# Connect an app. Your browser opens, you approve, and it is connected
 one add gmail
 
-# See what you're connected to
+# See what you are connected to, and what this key may run on each app
 one list
 
-# Find the action, with its docs
+# Find the action for the job, with its documentation
 one actions find gmail "send an email" --task "email a hello to a contact"
 
-# Execute it
+# Run it
 one actions execute gmail <actionId> <connectionKey> \
-  -d '{"to": "jane@example.com", "subject": "Hello", "body": "Sent from my AI agent"}'
+  -d '{"to": "jane@example.com", "subject": "Hello", "body": "Sent from my agent"}'
 ```
 
-That's it. Four commands to go from zero to sending an email through Gmail's API - fully authenticated, correctly formatted, without touching a single OAuth token.
-
-### Multi-step flows
-
-Chain actions across platforms into reusable workflows:
-
-```bash
-# Create a flow that looks up a Stripe customer and sends a Gmail welcome email
-one flow create welcome-customer --definition '{
-  "key": "welcome-customer",
-  "name": "Welcome New Customer",
-  "version": "1",
-  "inputs": {
-    "stripeKey": { "type": "string", "required": true, "connection": { "platform": "stripe" } },
-    "gmailKey": { "type": "string", "required": true, "connection": { "platform": "gmail" } },
-    "email": { "type": "string", "required": true }
-  },
-  "steps": [
-    { "id": "find", "name": "Find customer", "type": "action",
-      "action": { "platform": "stripe", "actionId": "<actionId>", "connectionKey": "$.input.stripeKey",
-        "data": { "query": "email:'\''{{$.input.email}}'\''" } } },
-    { "id": "send", "name": "Send email", "type": "action",
-      "if": "$.steps.find.response.data.length > 0",
-      "action": { "platform": "gmail", "actionId": "<actionId>", "connectionKey": "$.input.gmailKey",
-        "data": { "to": "{{$.input.email}}", "subject": "Welcome!", "body": "Thanks for joining." } } }
-  ]
-}'
-
-# Validate it
-one flow validate welcome-customer
-
-# Run it - connection keys auto-resolve if you have one connection per platform
-one flow execute welcome-customer -i email=jane@example.com
-```
-
-Workflows live under `.one/flows/<key>/flow.json` with an optional `lib/` subfolder for `.mjs` code modules — create new flows in this folder layout. In agent mode, a flow with write steps needs `--confirm-write`, bash steps need `--allow-bash`, and `code.module` steps need `--allow-code`. Flows can be organized into subdirectory groups: `.one/flows/<group>/<key>/flow.json`. Reference them as `group/key` or just the bare key if unique. (The legacy single-file layout `.one/flows/<key>.flow.json` is deprecated but still loads for backward compatibility.) Flows support conditions, loops, while loops, parallel steps, transforms, sub-flows, pagination, bash steps, and external `.mjs` code modules. Run `one guide flows` for the full reference.
-
-## How it works
-
-```
-Your AI Agent
-    ↓
-  One CLI
-    ↓
-  One API (api.withone.ai/v1/passthrough)
-    ↓
-  Gmail / Slack / Shopify / HubSpot / Stripe / ...
-```
-
-Every API call routes through One's passthrough proxy. One injects the right credentials, handles rate limiting, and normalizes responses. You never see or manage raw OAuth tokens - your connection key is all you need.
-
-## Commands
-
-### `one init`
-
-Set up your API key and install the One skill into your AI agents.
-
-```bash
-one init
-```
-
-Steps: choose the scope, sign in (browser or API key), optionally add an OpenAI key for [`one mem`](#one-mem--unified-memory-store) semantic search, install the skill, and optionally connect a first app. The skill is copied to `~/.agents/skills/one/` and linked into each agent you pick: Claude Code, Claude Desktop and Codex by default, plus Cursor, Windsurf, Kiro, Goose, Amp, OpenCode and Roo. `one init` no longer writes MCP server entries; see [MCP server configs](#mcp-server-configs).
-
-**Global vs. project scope.** `one init` is interactive and asks where the setup should live:
-
-- **Global** (`~/.one/config.json`) — applies to every folder. Best when you only need one workspace / API key.
-- **Project** (`~/.one/projects/<slug>/config.json`) — scoped to the current project, stored under your home directory so secrets never land in git. Use this when different projects need different API keys, connections, or access control.
-
-When you run `one` in a project, it uses the project config if one exists and falls back to the global config otherwise. Use `one config path` to see which config is active and the full resolution order.
-
-In a monorepo, the project root is the nearest ancestor with `.one/`, `.git`, or `package.json` — checked in that order. Run `mkdir .one` in a nested subproject to make it its own project root (so the config is keyed by the nested dir's slug instead of the monorepo's). Your home directory itself is never treated as a project root — `~/.one` is the CLI's own config directory, and a dotfiles `.git` or stray `package.json` in `$HOME` shouldn't turn everything under home into one project. Scope that applies to all of home is the global config.
-
-If you've already set up, `one init` shows your current status for the active scope and a menu: install or update the skill, show the agent onboarding prompt, connect a platform, update the API key, add or update the OpenAI key, configure access control, or start fresh.
-
-After a browser sign-in the CLI prints what the key was granted (for example `Access: Gmail (Read only), Slack (Full access)`). A key granted **Knowledge only** also turns on the CLI's knowledge-only mode; a later sign-in that grants more turns it off again, unless you turned it on yourself with `one config`.
-
-**Agent-driven setup (no prompts).** Pass `--auth` and `one init` runs end-to-end without any terminal interaction — handy when an AI agent is onboarding you. It saves the key, installs the One skill for Claude Code, Claude Desktop and Codex, and skips the connect step (`one add` later). Without `--auth`, `one init` is interactive and refuses `--agent`.
-
-```bash
-one init --auth browser            # opens a login window; you authenticate, the window closes — done
-one init --auth manual --api-key sk_live_...   # headless / CI, no browser
-```
-
-| Flag | What it does |
-|------|-------------|
-| `-g, --global` | Use the global config (`~/.one/config.json`) and skip the scope question. Other prompts still run unless you pass `--auth` |
-| `-p, --project` | Use this project's config (`~/.one/projects/<slug>/config.json`) and skip the scope question. If both are passed, global wins |
-| `--auth <browser\|manual>` | Run setup with **no prompts**. `browser` opens a login window; `manual` uses `--api-key`. Scope from `-g`/`-p` (default global). |
-| `--api-key <key>` | API key for `--auth manual` (`sk_live_…` / `sk_test_…`) |
-| `--openai-key <key>` | Optional OpenAI key for `one mem` semantic search, with `--auth` (interactive init prompts for it instead) |
-| `ONE_APP_URL` (env) | Dashboard origin the browser flows open (default `https://app.withone.ai`); use `http://localhost:4202` against a local frontend. |
-| `ONE_API_BASE` (env) | API origin, overriding `apiBase` in config (default `https://api.withone.ai`); use `http://localhost:5005` against a local backend. |
-
-Both overrides apply to the current process only and are never written to config, so a key minted against a local backend lands in your normal config and a cron job or MCP server without the variable would send it to the hosted API. Pair them with `ONE_HOME` (see below) to keep a local stack's credentials in a separate profile.
-
-### `one whoami`
-
-Show the user, organization, project, environment (live/test) and key name for the current API key, plus the active config scope and API base. Under a Connect grant it shows the connected user and their `cu_…` id ([Acting for a Connect user](#acting-for-a-connect-user)).
-
-```bash
-one whoami
-one --agent whoami     # {user, organization, project, env, configScope, apiBase, keyName, connectUserId?}
-```
-
-### `--agent` (machine-readable mode)
-
-Put `--agent` right after `one` (or set `ONE_AGENT=1`) for JSON on stdout with no colours, spinners or prompts. A failure prints `{"error": "..."}` and exits 1; a refused write or delete adds `"status": "confirmation_required"`. Interactive-only commands (`init` without `--auth`, `login`, `add`, `config`) return an error in agent mode.
-
-### `one add [platform]`
-
-Connect a new platform via OAuth. Shortcut for `one connection add` (alias `one connection a`).
-
-```bash
-one add shopify
-one add hubspot
-one add gmail
-one add gmail --tag work        # tag the connection
-```
-
-Opens your browser, you authorize, done. The CLI polls until the connection is live (up to 5 minutes). Without a platform it asks you to pick one. It is interactive only: with `--agent` it refuses with an error, so an agent should ask the user to run it. Platform names are lowercase (with dashes for multi-word names) - run `one platforms` to see them all.
-
-| Flag | What it does |
-|------|-------------|
-| `--tag <name>` | Tag the new connection once it's created. Lets sync/flow profiles target a specific connection via `"connection": { "platform": "gmail", "tag": "work" }` when you have several connections for one platform (e.g. personal vs work Gmail). |
-
-### `one list`
-
-List your active connections with their status, connection keys, and the access this key has on each. Shortcut for `one connection list`; aliases `one ls`, `one connection ls`.
-
-```bash
-one list
-one list --search gmail      # filter by platform name
-```
+`one list` gives you the connection key that `execute`&nbsp;takes.
 
 ```
      Platform  Status       Connection Key                  Access
@@ -220,728 +96,198 @@ one list --search gmail      # filter by platform name
   ●  shopify   operational  live::shopify::default::ghi789  Read & write
 ```
 
-You need the connection key when executing actions. A Tags column appears when any connection is tagged, and a Your level column when your share holds you below Full access (see below).
+Once you are set up by hand, ask your agent to run `one onboard` and it learns the same&nbsp;way.
 
-| Option | What it does |
-|--------|-------------|
-| `-s, --search <query>` | Filter connections by platform name (case-insensitive substring) |
-| `-l, --limit <n>` | Max connections to return. In agent mode the default is 20: `total` is the full count, `showing` how many are listed, and a `hint` appears when some were left out |
+## How it works
 
-**Access reporting.** Every connection carries an `access` field: what this key may run there. The CLI reads it from One (`GET /v1/access/me`, the access chosen on the consent page or later in the dashboard) and narrows it by any limits you set with [`one config`](#one-config) — the server's answer is the ceiling, local settings can only lower it.
-
-| Policy | Means | `level` |
-|--------|-------|---------|
-| `{"policy": "full"}` | Every action on the connection | `full` (Full access) |
-| `{"policy": "methods", "methods": ["GET"], "access": ["read"]}` | Only actions at the levels in `access` (GET is `read`, POST/PUT/PATCH `write`, DELETE `delete`); One judges an action by its level, not its method | `read-only`, `write-only`, `read-write`, `full` (all three levels), or `custom` |
-| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | `custom`, or `none` when empty |
-
-A connection the key does not reach is not listed. When the policy is `actions`, those actions are exactly what may run — `actions load <actionId>` reads their docs, no find needed.
-
-```jsonc
-// one --agent list
-{
-  "total": 2,
-  "showing": 2,
-  "connections": [
-    {
-      "platform": "gmail",
-      "state": "operational",
-      "key": "live::gmail::default::abc123",
-      "access": { "policy": "full", "level": "full" },
-      "viewerAccessLevel": "read",
-      "effectiveLevel": "read-only"
-    }
-  ],
-  "accessSource": "server"
-}
+```
+Your agent
+    ↓
+One CLI
+    ↓
+One API    checks the access, adds the credentials, records the call
+    ↓
+Gmail · Slack · Shopify · HubSpot · Stripe · every other platform
 ```
 
-**Your own level.** In an organization, an admin may share an app with you at a lower level, or cap it with App Controls. The CLI reads that level from `GET /v1/connections` and reports it as `viewerAccessLevel` (`none`, `read`, `write`, `read_write`, `full`, `custom`). One holds every call to both it and `access`; `effectiveLevel` names what the two leave together. The human table adds a "Your level" column, in the dashboard's words, when any connection holds you below Full access. An older API sends no level, and the listing stays as it was.
+Every call to an app goes through One. One checks the call against what your key may do, adds the credentials for the connection, makes the request and records it. A connection key names a connection. It is not a&nbsp;credential.
 
-`accessSource` is `"server"` when One reported the key's access and `"local"` when it could not (an older API); then `access` shows only the CLI's own settings, the human table labels the column "Access (CLI settings only)", and `accessHint` says One may allow less. `knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists action ids that could not be looked up.
+Every task follows the same three steps, whatever the&nbsp;platform.
 
-This mirrors the `access` field on the One MCP server's `list_one_integrations` tool, so both surfaces report access the same way.
+| Step | Command | What it&nbsp;answers |
+|------|---------|-----------------|
+| 1 | `one list` | What am I connected to, and what may I run&nbsp;there? |
+| 2 | `one actions find` | Which action does this, and how do I call&nbsp;it? |
+| 3 | `one actions execute` | Do&nbsp;it |
 
-### `one connection delete <connection-key>`
+Read the documentation `find` returns before you execute. It holds the required parameters and the platform's&nbsp;quirks.
 
-Remove a connection by its key.
+## What you can do
+
+### Run actions
+
+Find the action for every step of a task in one call, across platforms, then run each one. `--dry-run` shows the request without sending it, `--mock` returns an example response, and `--parallel` runs several actions at&nbsp;once.
 
 ```bash
-one connection delete live::gmail::default::abc123
-one connection rm live::gmail::default::abc123      # alias
+one actions find hubspot "find a contact by email" gmail "send an email" \
+  --task "email a follow-up to a CRM contact"
+
+one actions execute stripe <actionId> <connectionKey> --query-params '{"limit": "10"}'
+one actions execute shopify <actionId> <connectionKey> --path-vars '{"order_id": "12345"}' --dry-run
 ```
 
-Shows the connection details and asks for confirmation before deleting. Use `--force` to skip the confirmation prompt. In agent mode (`--agent` or `ONE_AGENT=1`) there is no prompt, so `--force` is required; without it the command returns `confirmation_required` and deletes nothing. On success agent mode returns `{"deleted": true, "platform": "...", "key": "..."}`. Deleting needs the `admin` permission level in [`one config`](#one-config), and knowledge-only mode refuses it.
+See [Connections](./docs/connections.md) and [Actions](./docs/actions.md) in the&nbsp;reference.
 
-| Option | What it does |
-|--------|-------------|
-| `-f, --force` | Skip confirmation prompt |
+### Chain them into flows
 
-### `one platforms`
-
-Browse all 1000+ available platforms. Alias: `one p`.
+A flow is a multi-step workflow written as JSON, saved under `.one/flows/`. Flows have conditions, loops, parallel steps, transforms, pagination, sub-flows, code and bash steps. A run can be dry-run, stopped after any step, paused, resumed and inspected step by&nbsp;step.
 
 ```bash
-one platforms                      # all platforms
-one platforms -c "Sales & CRM"     # filter by category
-one platforms --json               # machine-readable output
+one flow scaffold loop | one flow create my-loop     # start from a template, then fill in its actions
+one flow validate my-loop
+one flow execute my-loop --dry-run                   # resolve every step without running it
+one flow execute my-loop
 ```
 
-`-c, --category` is an exact, case-sensitive match on the category name (for example `Sales & CRM`, `Communication`, `Developer Tools`); an unknown category lists the valid ones and exits 1. `--json` prints a bare array; `one --agent platforms` prints `{"platforms": [...]}`.
+See [Flows](./docs/flows.md) in the reference, or run `one guide flows` for the full&nbsp;schema.
 
-### `one actions find <platform> <intent> [<platform> <intent> ...]`
+### Sync app data into local memory
 
-Aliases: `one a f`. Find the action for every operation a task needs, across platforms, **with its documentation**, in one call: parameters, validation rules, request/response structure, and platform-specific quirks. One's decision model picks the action for each intent.
-
-```bash
-one actions find gmail "send an email"
-one actions find hubspot "find a contact by email" gmail "send an email" --task "email a follow-up to a CRM contact"
-one actions find shopify "list products" -t knowledge
-```
-
-- Each **intent** names the operation alone, in a few words (`"send a message to a channel"`), without its data: IDs, names and message text make the search miss. Up to 10 pairs. Name the platform before every intent, even when they share one (`stripe "list charges" stripe "list refunds"`); a "platform" containing a space is refused as an intent that slipped out of its pair.
-- **`--task`** describes the whole job in one line, in general terms. Agents are asked to send it with every find, since it helps tell similar actions apart.
-- **`-t knowledge`** searches the catalog for writing code and building flows and relays, which includes the platform's own (passthrough) endpoints; the default is the catalog for running actions now.
-- **`--ai-model`** names the model running the CLI (e.g. `claude-sonnet-5`), recorded with the find beside the CLI and the harness that launched it, so the account's usage can report which model asked. Agents are asked to send it with every find.
-- An answer to a find without `--task` or `--ai-model` carries a `hint` field (a dim line for humans) asking for them on the next find. Both stay optional.
-- **`--no-knowledge`** lists the chosen actions (actionId, title, method, path) without fetching their documentation; load it later with `one actions load <actionId>`.
-
-Each intent's answer gives the action(s) to use with their docs, any actions also needed beside them, a **substitute** when the model was unsure (use one or the other, never both), and a few alternatives, then says once how to execute. Always read the docs before executing. The access settings from `one config` apply: an action they refuse is never offered.
-
-A platform name no active platform has (`clickup` for `click-up`) is answered with `selector: "unknown_platform"` and a `suggestions` list of the platforms it may have meant, closest first, instead of being searched. Find again with the right name; `one platforms` lists them all.
-
-Large documents (over about 8,000 characters) come back as a **digest**: request-building sections in full (method/URL, headers, description, enforcement rules, required parameters, sample request, gotchas, error handling, plus optional parameters when they fit), then a notice naming what was left out with the exact command to load it. In knowledge-only mode the first pick of each intent comes back whole, with how to call it from code; other chosen actions are listed in `alsoSelected` to load.
-
-### `one actions load <actionId...>`
-
-More of an action's documentation: the digest by default (how to read an alternative from a find answer), or a section a digest left out, the whole document, or its table of contents. Up to 10 action ids. Alias: `one a l`.
+`one sync` pulls a platform's records into a local Postgres store that starts by itself on first use. Query, search and join them without another API call, keep them fresh on a schedule, and run a command when a record changes. `one mem` holds your agent's own notes in the same&nbsp;store.
 
 ```bash
-one --agent actions load <actionId> --section "Response Fields"  # one section, by heading or id
-one --agent actions load <actionId> --section response,examples  # several, by alias
-one --agent actions load <actionId> --full                       # whole document
-one --agent actions load <actionId> --toc                        # every section id, no document
-```
-
-Loads are served from the local cache once a doc is cached. `--section all` returns the whole document. When several flags are given, `--section` wins over `--toc`, which wins over `--full`. In knowledge-only mode `load` always returns the whole document with how to call it from code. Agent output: `{"loaded": [{"actionId", "title", "method", "path", "knowledge", "truncated"} | {"actionId", "error"}], "guide": "..."}`.
-
-### `one actions execute <platform> <actionId> <connectionKey>`
-
-Execute an API action on a connected platform. Alias: `one a x`.
-
-```bash
-# Simple GET
-one actions execute shopify <actionId> <connectionKey>
-
-# POST with data
-one actions execute hubspot <actionId> <connectionKey> \
-  -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
-
-# With path variables
-one actions execute shopify <actionId> <connectionKey> \
-  --path-vars '{"order_id": "12345"}'
-
-# With query params
-one actions execute stripe <actionId> <connectionKey> \
-  --query-params '{"limit": "10"}'
-```
-
-| Option | What it does |
-|--------|-------------|
-| `-d, --data <json>` | Request body (POST, PUT, PATCH) |
-| `--path-vars <json>` | Replace `{variables}` in the URL path |
-| `--query-params <json>` | Query string parameters; arrays expand to repeated keys (`{"ids":["a","b"]}` → `?ids=a&ids=b`) |
-| `--headers <json>` | Additional request headers |
-| `--form-data` | Send as multipart/form-data (text fields; object values are JSON-encoded; no file upload) |
-| `--form-url-encoded` | Send as application/x-www-form-urlencoded |
-| `--dry-run` | Show the request without executing it |
-| `--mock` | Return example response without making an API call |
-| `--skip-validation` | Skip input validation against the action schema |
-| `--confirm-write` | Required in agent mode for an action that writes (POST, PUT, PATCH, DELETE). Without it the command returns `confirmation_required` and sends nothing. It marks the write for the user's approval prompt and doesn't check anything itself, so an agent should pass it only for a change the user asked for. Not needed with `--dry-run` or `--mock`. A GET carrying a method-override header counts as a write |
-| `--output <path>` | Save a binary response to a file (PDFs, images). Text and JSON responses (text/plain, HTML, CSV, XML) always print inline and are not saved. |
-| `--no-cache` | Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached) |
-
-The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing, including before `--mock`. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.
-
-Agent-mode output: `{"dryRun": false, "request": {"method", "url"}, "response": ..., "_preflight": {"cache": "hit"|"miss"}}` (with `--dry-run` the request also shows `headers` and `data`, the key redacted). `--mock` returns `{"mock": true, "request", "response", "_preflight"}`. A write refused for lack of `--confirm-write` returns `{"status": "confirmation_required", "error", "request": {...}, "_hint"}` and exits 1.
-
-#### Parallel execution
-
-Execute multiple actions concurrently with `--parallel`, separating each action with `--`:
-
-```bash
-one --agent actions execute --parallel --confirm-write \
-  gmail send-email conn123 -d '{"to":"a@b.com","subject":"Hi","body":"Hello"}' \
-  -- slack post-message conn456 -d '{"channel":"#general","text":"Done"}' \
-  -- google-sheets append-row conn789 -d '{"values":["x","y"]}'
-```
-
-Each segment follows the same format: `<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...] [--headers ...] [--form-data | --form-url-encoded]` (`--output` isn't supported per segment). The global flags `--dry-run`, `--mock`, `--skip-validation`, `--no-cache`, `--confirm-write` and `--max-concurrency <n>` (space-separated, not `=`) apply to every segment; in agent mode one `--confirm-write` covers the batch, and a batch with an unconfirmed write runs nothing. All segments are validated upfront before any execution starts; a bad segment returns `{"error": "Validation failed", "segments": [...]}`. Results are collected via `Promise.allSettled` — if one fails, the rest still complete, and the command exits 1 when any segment failed.
-
-| Option | What it does |
-|--------|-------------|
-| `--parallel` | Enable parallel mode |
-| `--max-concurrency <n>` | Max concurrent actions per batch (default: 5) |
-
-Agent-mode output includes `parallel: true`, per-action `segment`/`platform`/`actionId`/`status`/`durationMs`/`response` (or `error`)/`_preflight` (`{"cache":"hit"|"miss"}`), plus `totalDurationMs`, `succeeded`, and `failed` counts.
-
-### `one cache`
-
-Manage the local cache of action documentation. `actions find` and `actions load` read each action's details (docs, method, path, validation schema) through the cache, so repeated reads serve instantly from disk, and `actions execute` reuses them for its preflight lookup, so a find followed by execute costs a single API round trip for the execute.
-
-```bash
-one cache list                    # List all cached entries with age and status (alias: cache ls)
-one cache list --expired          # Show only expired entries
-one cache clear                   # Clear all cached data
-one cache clear <actionId>        # Clear a specific entry
-one cache update-all              # Re-fetch fresh data for all cached entries
-```
-
-Find, load and execute also support cache flags:
-
-```bash
-one actions find gmail "send an email" --no-cache       # Fetch the docs fresh
-one actions load <actionId> --no-cache                  # Skip cache, fetch fresh
-one actions load <actionId> --cache-status              # Check cache status
-one actions load <actionId> --section response          # Served from the cached doc, no fetch
-one actions execute gmail <actionId> <key> --no-cache   # Fresh action-details lookup
-```
-
-Default TTL is 1 hour. Configure via `ONE_CACHE_TTL` environment variable (seconds) or `cacheTtl` in `~/.one/config.json`.
-
-`--cache-status` prints a JSON array, one entry per action id, even without `--agent`. Agent output: `cache list` → `{"entries": [{type, key, cachedAt, age, ttl, fresh, etag, path}]}`; `cache clear` → `{"cleared": true, "count": N}`; `cache update-all` → `{"updated", "failed", "errors"?}`.
-
-Note: execution responses are never cached — the action always runs live. Only action metadata (docs, method, path, schema) is cached, and agent-mode execute output reports it via `"_preflight": {"cache": "hit"|"miss"}`.
-
-### `one mem` — unified memory store
-
-One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled `embedded-postgres` plugin, with a `postgres` plugin for remote/self-hosted) that backs both user-authored notes and synced platform data. **Zero-config** — the first `one mem` call on a fresh machine auto-initializes the cluster at `~/.one/pg/cluster/` and writes a daemon PID file so subsequent CLI invocations reuse it. The daemon listens on port 5434, moving to the next free port if another program already holds it; pin a port with `one mem config set embedded-postgres.port <n>`. Every connection to it needs a password: one is generated per install and kept in `~/.one/pg/.pgserve-auth.json`, readable only by you.
-
-```bash
-# User memories — works immediately on a new install
-one mem add note '{"content":"Design review is Thursday"}' --tags work --weight 7
-one mem update <id> '{"status":"done"}'              # merges into data; refreshes searchable_text
-one mem search "design review"                       # FTS; hybrid with an OpenAI key + pgvector
-one mem search "design review" --deep                # hybrid or an error naming what's missing (no FTS fallback)
-one mem list note --limit 20
-
-# Merge keys (`keys[]`) are a first-class column (unique across ACTIVE records;
-# archiving frees them). Manage them after creation with `mem key` — NOT `mem update`.
-one mem key <id> --add email:x@y.com                 # also --remove / --set <csv>
-
-# Find every record tied to a person/company, grouped by type. Spans BOTH columns:
-# `keys[]` (this record IS the entity — drives merge) and `identity_keys[]` (this
-# record INVOLVES the entity — Gmail thread participants, calendar attendees; never merges).
-one mem find-by-key email:jane@acme.com              # every record carrying the key
-one mem find-by-key email:jane@acme.com --type gmail/gmailThreads
-one mem find-by-key email:jane@acme.com email:bob@acme.com   # intersection — records with BOTH
-
-# Backfill searchable_text for rows that landed NULL (add --all to also rewrite
-# stale or noisy text). Uses the generic text builder (drops ids/timestamps, leads
-# with name/title/email), not the profile's memory.searchable. No embedding provider needed.
-one mem reindex --searchable --type attio/attioPeople
-
-# Listing synced platform rows — type is positional and namespaced as <platform>/<model>;
-# there is NO --platform flag and NO platform column in the schema.
-one mem list "gmail/gmailThreads"
-one mem list "attio/attioPeople" --limit 5
-
-# Enable semantic search (optional): needs an OpenAI key AND pgvector.
-# The bundled Postgres has no pgvector: `brew install pgvector`, or use a postgres
-# backend with the `vector` extension. `searchMode` in search output says which ran.
-one init                                             # first-time setup prompts for it; on a re-run pick "Add OpenAI key"
-# OR
-one mem config set embedding.apiKey sk-...           # writes top-level openaiApiKey
-# OR
-export OPENAI_API_KEY=sk-...                         # no persistence
-
-# Status + diagnostics
-one mem status                                       # backend, provider, _upgrade hint
-one mem doctor                                       # 7-check health report
-```
-
-Key surfaces: `status`, `init`, `config`, `doctor`, `add`, `get`, `update`, `archive`, `weight`, `list`, `search`, `context`, `link`/`linked`/`unlink`, `key`, `sources`, `find-by-source`, `find-by-key`, `sql`, `export`, `import`, `migrate`, `vacuum`, `reindex`, and `sync` (alias of `one sync`). `flush` exists but is not implemented yet. There is no `unarchive`. Run `one guide memory` for the full reference.
-
-`mem sql "<query>"` runs one read-only `SELECT`/`WITH`/`EXPLAIN` in a read-only transaction (on the embedded store as a read-only role). Its keyword guard also refuses words like `start`, `do` or `set local` inside string literals and JSON paths.
-
-**Your own Postgres.** `one mem config set backend postgres`, then `one mem config set postgres.connectionString <url>` (or set `MEM_DATABASE_URL`, read only when the backend is `postgres`). Data doesn't move with the switch: `one mem export backup.jsonl`, switch, `one mem import backup.jsonl`. Import skips records without `keys[]`, brings archived rows back active, and copies neither links nor embeddings.
-
-`find-by-key` is the cross-platform join: lookups are lowercased and trimmed (sync writes keys that way), with one retry using the exact string you typed for hand-written mixed-case keys, `--type` narrows to one record type, and `--limit` (default 10) caps how many records are *shown per type* while the reported per-type `count` and overall `total` stay full match counts. Above 2000 matches the response flags `truncated` and the counts become floors — re-run with `--type` for an exact answer. Populate `identity_keys[]` from a sync profile's `identityKeys` field (see `one guide sync`), which ships pre-wired for `gmail/gmailThreads`, `google-calendar/events`, and `fathom/meetings`.
-
-### `one sync` (and `one mem sync` alias)
-
-Sync platform data into the unified memory store for instant queries, hybrid FTS + semantic search, scheduled refresh, and change-driven automation. Memory is always written; pass `--no-memory` to skip (rare).
-
-```bash
-# Discover → init (seeds from built-in, auto-tests) → declare searchable → preview → run
-one sync models stripe
-one sync init stripe balanceTransactions
-
-# Optional: declare clean fields for embedding, then preview
-# (--config merges into the existing profile. Without it, init refuses when a
-# profile already exists; --force replaces it with the built-in)
-one sync init stripe balanceTransactions --config '{
-  "memory": {
-    "embed": true,
-    "searchable": ["description","type","amount","currency"]
-  }
-}'
-one sync test stripe/balanceTransactions --show-searchable
-
-# Run — every row lands in memory (enriching profiles also keep a project-local
-# SQLite mirror). Rows are embedded when the profile's memory.embed says so (else
-# defaults.embedOnSync); --embed / --no-embed override it for one run.
-# --since only applies to profiles with a dateFilter (Stripe has none).
-one sync run stripe
-one mem sync run stripe                              # identical (alias)
-# Profiles with `enrich` run a second detail pass. It enriches each record ONCE;
-# the list pass thereafter merges rather than replaces, so the enriched payload
-# survives (reported as `memPreserved`). `--full-refresh` reconciles deletions,
-# it does not refresh detail content. To refresh detail:
-one sync run gmail --re-enrich                       # re-fetch every detail endpoint
-# ...or set `enrich.invalidateOn` in the profile (e.g. "historyId", "updated_at")
-# so only records that actually changed upstream are re-enriched, automatically.
-
-# Query + search (reads from memory)
-one sync query stripe/balanceTransactions --where "status=available" --limit 20
-one sync query stripe/customers --where 'address.city=SF'   # dotted paths supported
-one sync search "refund"                             # this project's synced models
-
-# Schedule unattended syncs + change hooks
+one sync init stripe customers                       # a profile from the built-in
+one sync run stripe                                  # pull the records into memory
+one sync query stripe/customers --where 'address.city=SF'
 one sync schedule add stripe --every 1h
-one sync init stripe balanceTransactions --config '{"onInsert":"one flow execute handle-new-txn"}'
 
-# Deletion detection: archives memory rows whose source is gone
-one sync run stripe --full-refresh
+one mem add note '{"content":"Design review is Thursday"}' --tags work
+one mem search "design review"
 ```
 
-`--where` takes `field<op>value` conditions joined by commas (AND); ops are `=`, `!=`, `>`, `<`, `>=`, `<=` and `like` with `%`. `sync search` covers only the models with a profile in this project; `one mem search "..." --type <p>/<m>` works from anywhere. A first `sync run` fetches the last 90 days for profiles with a `dateFilter` and later runs are incremental; `--since` takes `<n>d`, `<n>h`, `<n>m` (months) or a date. `sync run` never imports a project's old sync data (`.one/sync/data/*.db`); preview `one mem migrate --dry-run` before migrating.
+See [Memory and sync](./docs/memory-and-sync.md) in the&nbsp;reference.
 
-> **Sync uses passthrough actions only.** Profiles referencing a custom/composer action are rejected at runtime. `sync models` already filters to passthrough-only; if a model has no passthrough list endpoint, compose a flow instead of syncing.
+### React to webhooks
 
-> **Connections are late-bound.** Profiles use `"connection": { "platform": "<name>", "tag"?: "..." }` instead of literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. `tag` only needed for multi-account platforms (e.g. two Gmail accounts).
-
-> **`memory.searchable` paths.** Drives what gets embedded + FTS-indexed. Supports numeric indexes (`values.name[0].full_name`) and `[]` wildcards (`messages[].snippet`, `messages[].payload.parts[].body.data`). Without declared paths the default walker concatenates every string — correct but noisy for hierarchical APIs. Always declare when `embed: true`.
-
-| Subcommand | What it does |
-|------------|-------------|
-| `install` | Install the optional `better-sqlite3` module (needed by enriching profiles, `delete`, `remove`, `mem migrate`) |
-| `profiles [platform]` | List built-in pre-validated profiles |
-| `doctor` | Verify sync engine health (exits non-zero when not ready) |
-| `models <platform>` | Discover available data models |
-| `init <platform> <model>` | Create a profile from the built-in or inference. If one exists it refuses unless you pass `--config` (merges into it) or `--force` (replaces it). Auto-tests |
-| `test <platform>/<model>` | Validate profile. `--show-searchable` previews embedded text |
-| `suggest-searchable <platform>/<model>` | Rank candidate `memory.searchable` paths from a live sample |
-| `approve <platform>` | Approve the shell commands (`transform`, hooks) in profiles you didn't create |
-| `run <platform>` | Sync data (`--models`, `--force`, `--max-pages`, `--full-refresh`, `--since`, `--dry-run`, `--embed`/`--no-embed`, `--no-memory`, `--re-enrich`) |
-| `query <platform>/<model>` | Query memory with `--where` (dotted paths), `--after/before`, `--order-by`, `--limit` (default 50) |
-| `schema <platform>/<model>` | Field paths, types and examples of synced records |
-| `sql <platform>/<model> "<sql>"` | Read-only SQL against the memory store (add `WHERE type = '<p>/<m>'` yourself) |
-| `search <query>` | Hybrid FTS + semantic across this project's synced models |
-| `list [platform]` | Show profiles, record counts, freshness (alias `ls`) |
-| `schedule add/list/status/remove/repair` | Cron-backed scheduled syncs with drift detection |
-| `delete <platform>/<model>` | Delete rows from the SQLite mirror only (`--id`, `--where`); memory is untouched |
-| `remove <platform>` | Delete the platform's SQLite mirror and sync state; keeps profiles and memory records (`--dry-run` to preview) |
-
-Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — run a shell command (events as NDJSON on stdin; to start a flow, use a script that calls `one flow execute`) or append to an event log (`"log"`). Shell commands in a profile (`transform` and hooks other than `"log"`) only run once approved for that project: commands you pass in `sync init --config` are approved automatically, and commands that arrive in a profile on disk (for example from a cloned repo) need `one sync approve <platform>`. A change to an approved command needs approving again. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` or `one guide memory` for the full reference.
-
-### `one relay`
-
-Receive webhooks from platforms and forward them to any connected platform via passthrough actions.
+`one relay` receives a platform's webhook events on One and forwards each one to another app's action, a URL or an agent, with no server of your&nbsp;own.
 
 ```bash
-one relay platforms                        # List relay-capable platforms + event type counts
-one relay event-types <platform>           # List supported event types for a platform
-one relay metadata <platform>              # List the --metadata keys the platform needs on create
-one relay create --connection-key <key> --create-webhook --event-filters '["event.type"]'
-one relay activate <id> --actions '<json>' # Attach passthrough forwarding actions (agent mode: add --confirm-write for actions that write)
-one relay list                             # List existing relay endpoints
-one relay events --platform <p>            # Inspect received events
-one relay deliveries --endpoint-id <id>    # Check delivery status
+one relay platforms                                  # which platforms can send events
+one relay event-types stripe
+one relay create --connection-key <key> --create-webhook --event-filters '["customer.created"]'
+one relay activate <id> --actions '<json>'           # forward each event to an action
 ```
 
-Start with `one relay platforms` to discover which platforms support relay at all, then drill into `event-types <platform>` for the specific events and `metadata <platform>` for the `--metadata` keys it needs. With `--create-webhook`, `relay create` refuses to create anything while a required key is missing. Run `one guide relay` for the full reference.
+<p>
+  <img src="https://raw.githubusercontent.com/withoneai/cli/main/assets/relay.jpg" alt="The Relay page in the One dashboard. Each relay with its source app, its events, where it sends them and its status." width="100%">
+</p>
 
-### `one skills`
+See [Relay](./docs/relay.md) in the reference and&nbsp;the&nbsp;[Relay&nbsp;docs](https://withone.ai/docs/relay).
 
-Optional skills for your coding agent, installed on request. The One skill itself still comes from `one init` (and `one config skills sync|status`); these commands never touch it.
+### Build One into your product
+
+[Connect](https://github.com/withoneai/connect) is One's embeddable authentication. You add it to your product, and your users connect their own apps there. The CLI installs the Connect skill for your coding agent, creates the Connect app from a typed `one.connect.ts`, and can act for one of your users within what that user&nbsp;granted.
 
 ```bash
-one skills list                          # the One skill and each optional skill, with where it is installed
-one skills add connect                   # the One Connect skill, into this project
-one skills add connect --global          # ...or for every project on this machine
-one skills add connect --agents claude-code,windsurf   # link exactly these agents
-one skills update [connect]              # re-copy after upgrading @withone/connect (all installed ones when no name)
-one skills remove connect                # remove it and the agent folders that point at it (alias: rm)
+one skills add connect        # the One Connect skill, into this project
+one connect types             # tool slugs and action names autocomplete in one.connect.ts
+one connect create            # review and approve the app in the browser
 ```
 
-`update` and `remove` take `-g, --global` to act on the global install; `update --agents <ids>` changes which agents are linked (otherwise the existing links are kept). `add` outside a project (a folder with `package.json` or `.git`) errors unless you pass `--global`, which installs to `~/.agents/skills/one-connect` and links the agents whose home folder exists on this machine.
+See [Connect](./docs/connect.md) in the&nbsp;reference.
 
-What `one skills add connect` does:
+## Built for agents
 
-1. **Finds the skill** in the `@withone/connect` package your project installed (`node_modules/@withone/connect/skills/one-connect`), so your agent reads the docs for the exact SDK version your code calls. If the package isn't installed yet, it downloads the latest published package from npm and checks it against the registry's integrity hash first.
-2. **Installs it** into `.agents/skills/one-connect` (read by Codex, Cursor, Amp and OpenCode) and links `.claude/skills/one-connect` for Claude Code. Windsurf, Kiro, Goose and Roo get a link when the project already has their folder (`.windsurf`, `.kiro`, `.goose`, `.roo`). Where links aren't allowed (Windows without developer mode), it uses a junction, then a copy.
-3. **Stamps** the install with the package version in `.one-skill.json`.
-4. **Keeps it fresh**: any `one` command run in the project re-copies the skill when the installed `@withone/connect` version changes. Local files only; no network. This applies to a project install taken from the project's own `node_modules`; a skill fetched from npm, or a `--global` one, is refreshed only by `one skills update`.
+- **JSON on request.** Put `--agent` right after `one`, or set `ONE_AGENT=1`, for JSON on stdout with no colors, spinners or prompts. A failure prints `{"error": "..."}` and exits&nbsp;1.
+- **Writes wait for a yes.** In agent mode an action that writes or deletes returns `confirmation_required` and sends nothing until the command carries `--confirm-write`. Flows need `--allow-bash` and `--allow-code` before a bash step or a code module&nbsp;runs.
+- **A skill that stays current.** `one init` installs the [One skill](./skills/one) for Claude Code, Claude Desktop and Codex, and for Cursor, Windsurf, Kiro, Goose, Amp, OpenCode and Roo when you pick them. `npx skills add withoneai/cli -g` installs it before the CLI is there. The CLI refreshes the skill whenever its own version&nbsp;changes.
+- **A guide inside the binary.** An agent with nothing but the binary can run `one --agent guide` and get the whole manual as JSON. The topics are `overview`, `actions`, `flows`, `relay`, `cache`, `memory` and&nbsp;`sync`.
 
-Commit `.agents/skills/one-connect` and the agent links so your team's agents share the skill. Agent mode (`--agent`) returns JSON for every subcommand.
+The [One MCP server](https://github.com/withoneai/mcp) gives an agent the same three steps as tools, over the same&nbsp;connections.
 
-### `one connect`
-
-Create and update a [One Connect](https://www.npmjs.com/package/@withone/connect) app from `one.connect.ts`, typed by `defineConnectApp` from `@withone/connect/config` (0.20.0 or later).
-
-```bash
-one connect types     # writes one-connect-env.d.ts: tool slugs and action names autocomplete
-one connect create    # approve the app in the browser; re-run to review and apply changes
-```
-
-`one connect create` opens a setup page in your signed-in browser, where you review the app (or, on a re-run, its new version) and approve it; nothing is created or changed with your API key. A new app's client secret and connect key are made there and shown once, so they never pass through the terminal. The CLI waits up to 10 minutes (with `--agent`, the setup link goes to stderr at once). Once you approve, it writes `ONE_CLIENT_ID`, `ONE_REDIRECT_URI` and, for a list of tools, `ONE_PERMISSION_SET` to `.env.local` (or `.env`); for a new app it also adds empty `ONE_CLIENT_SECRET=` and `ONE_CONNECT_KEY=` lines for you to fill in from the page. `ask` is required: either the tools, where each takes `access` (`read-only`, `read-write`, `full-access`, or `custom` with `actions`, named as `one connect types` wrote them or by id from `one actions find <platform> "<what it does>" --no-knowledge`), or `"everything"`, where users see every connection they have and can connect any other app. An app switched to `"everything"` loses its ask, and the CLI removes `ONE_PERMISSION_SET` from the env file. Options: `--config <file>` (default `one.connect.ts`, `.mts`, `.mjs` or `.js` in this directory), `--env-file <file>`, `--no-open` (print the link instead of opening it); `connect types` takes `--config` too. Both need a configured API key. Install `@withone/connect` (0.20.0 or later) in the project first. A `.ts` config needs Node 22.18 or later; on older Node use `one.connect.mjs`.
-
-### `one guide [topic]`
-
-Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
-
-```bash
-one guide                 # full guide (all topics)
-one guide overview        # setup, --agent flag, discovery workflow
-one guide actions         # find, load, and execute
-one guide flows           # multi-step API workflows
-
-one --agent guide         # full guide as structured JSON
-one --agent guide flows   # single topic as JSON
-```
-
-Topics: `overview`, `actions`, `flows`, `relay`, `cache`, `memory`, `sync`, `all` (default).
-
-In agent mode (`--agent`), the JSON response includes the guide content and an `availableTopics` array so agents can discover what sections exist.
-
-### `one onboard`
-
-A three-step onboarding script written for an AI agent: it teaches the agent what the CLI can do and which apps you have connected. Needs a configured API key. Each step names the next command.
-
-```bash
-one onboard             # step 1
-one onboard --step 2    # then 2 and 3 (JSON with --agent)
-```
-
-### `one flow create [key]`
-
-Create a workflow from a JSON definition. New workflows are saved to the folder layout at `.one/flows/<key>/flow.json` (with a `lib/` subfolder scaffolded for code modules), unless you pass `-o` or a legacy `<key>.flow.json` already exists, which is then updated in place. A positional key overrides the definition's `key`. Use `group/key` to place flows in a subdirectory group (e.g. `.one/flows/research/company-research/flow.json`). The legacy `.one/flows/<key>.flow.json` single-file layout is deprecated; existing legacy files continue to load and run unchanged for backward compatibility.
-
-```bash
-# From a --definition flag
-one flow create welcome-customer --definition '{"key":"welcome-customer","name":"Welcome","version":"1","inputs":{},"steps":[]}'
-
-# Create in a subdirectory group
-one flow create research/company-research --definition @flow.json
-
-# From stdin
-cat flow.json | one flow create
-
-# Custom output path
-one flow create my-flow --definition '...' -o ./custom/path.json
-```
-
-| Option | What it does |
-|--------|-------------|
-| `--definition <json>` | Workflow definition as a JSON string |
-| `-o, --output <path>` | Custom output path (default: `.one/flows/<key>/flow.json`) |
-
-### `one flow execute <key>`
-
-Execute a workflow by key or file path. Pass inputs with repeatable `-i` flags.
-
-```bash
-# Execute with inputs (values are parsed as JSON when they can be: -i n=5 is a number)
-one flow execute welcome-customer \
-  -i email=jane@example.com
-
-# Dry run - resolve every step's interpolations and show what they evaluate to,
-# without executing any step (catches wiring bugs without burning API credits)
-one flow execute welcome-customer --dry-run -i email=jane@example.com
-
-# Stop after a specific step (isolate where a long flow breaks)
-one flow execute welcome-customer --stop-after find -i email=jane@example.com
-
-# Combine: run steps up to a point for real, then dry-resolve the suspect step
-# against the REAL accumulated output (so $.steps.* references resolve too)
-one flow execute welcome-customer --dry-run --stop-after send -i email=jane@example.com
-
-# Verbose - print each step as it starts and finishes
-one flow execute welcome-customer -v -i email=jane@example.com
-```
-
-Connection inputs with a `connection` field in the workflow definition are auto-resolved when the user has exactly one connection for that platform (top-level runs only, not sub-flows or resumes).
-
-Press Ctrl+C to pause a run: it stops before the next step and prints the `one flow resume <runId>` command (with the `--allow-*`/`--confirm-write` flags it needs). A bash or code step that the Ctrl+C interrupts runs again on resume. Press Ctrl+C again to quit at once; the run is still saved as paused. A run that fails can also be resumed with `one flow resume <runId>`.
-
-| Option | What it does |
-|--------|-------------|
-| `-i, --input <name=value>` | Input parameter (repeatable) |
-| `--dry-run` | Resolve each step's interpolations and show what they evaluate to, without running actions, code, bash or file steps. Transform and condition expressions are evaluated, in the sandbox. `$.input.*`/`$.env.*` resolve up front; `$.steps.*` refs are reported as deferred (they're produced at runtime). Still needs required inputs and `--allow-bash`/`--allow-code`, and records a run. |
-| `--mock` | Mock `action`, `paginate`, `bash` and `file-write` steps (an action returns its schema's example response when it has one; `file-write` steps report `{ path, bytesWritten }` without writing anything). Every other step runs for real, `code.module` included. A mocked step's `response` is `{"_mock": true}`; read `.output`. Works with or without `--dry-run` |
-| `--stop-after <stepId>` | Execute steps up to and including `<stepId>`, then stop (later steps are not run). Combined with `--dry-run`, runs earlier steps for real and dry-resolves `<stepId>` against their output without executing it. Use a top-level step or a loop/condition/while child; a `parallel` substep is ignored. Inspect what ran with `one flow inspect <runId>`. |
-| `--skip-validation` | Skip input validation against action schemas |
-| `--allow-bash` | Allow bash step execution (disabled by default for security) |
-| `--allow-code` | Allow `code.module` steps, which run a `.mjs` file with full Node access (disabled by default for security) |
-| `--confirm-write` | Required in agent mode when any step writes (any method but GET/HEAD/OPTIONS, a method-override header, or an action or sub-flow picked at run time). Without it the command returns `confirmation_required` with the writes listed and runs nothing. A plain `--dry-run` doesn't need it; `--dry-run --stop-after` and `--mock` alone do. Also on `flow resume` |
-| `-v, --verbose` | Print each step as it starts and finishes (status, duration, errors); human mode only |
-| `--output-file <path>` | Stream the full result to a file instead of stdout — for large results that would otherwise be truncated or exceed the JSON string-size limit. stdout (and `--agent` output) then carries an `outputFile` pointer instead of inline `steps`. |
-
-Inline JavaScript in a flow (transforms, conditions, `if`/`unless`, `code.source`) runs in a sandbox: a separate Node process with no file, child-process or network access and no environment of its own (`$.env` in the flow context still carries the CLI's variables). It needs no flag. `code.module` steps are full Node programs and need `--allow-code`.
-
-Step-level `if`/`unless` conditions (and `while`/`condition` steps) are null-safe: a condition that references a skipped or not-yet-run step's output (e.g. `$.steps.maybeSkipped.output.x`) evaluates to `false` rather than crashing the run.
-
-### `one flow list`
-
-List all workflows saved in `.one/flows/`.
-
-```bash
-one flow list
-```
-
-### `one flow validate <key>`
-
-Validate a workflow JSON file against the schema.
-
-```bash
-one flow validate welcome-customer
-```
-
-### `one flow resume <runId>`
-
-Resume a failed or paused workflow run. It skips the top-level steps that completed and re-runs the failed step from its start (a failed loop, parallel, while or sub-flow step re-runs all its inner steps, so writes there can repeat). It uses the current flow file.
-
-```bash
-one flow resume abc123
-one flow resume abc123 --allow-bash    # required if the flow has bash steps
-one flow resume abc123 --allow-code    # required if the flow has code.module steps
-```
-
-`--allow-bash`, `--allow-code` and `--confirm-write` are gated the same way as on `flow execute` — resuming doesn't
-inherit the permission from the original run, so pass it again. `one flow list`
-shows which flows need it.
-
-### `one flow runs [flowKey]`
-
-List workflow runs, optionally filtered by workflow key.
-
-```bash
-one flow runs                    # all runs
-one flow runs welcome-customer   # runs for a specific workflow
-```
-
-### `one flow inspect <runId>`
-
-Inspect a past (or in-progress) run's per-step outputs — post-mortem debugging without re-running the flow. Every run persists a state file that records each step's output as it completes (and is preserved on failure), so this shows exactly how far the run got and what each step produced.
-
-```bash
-one flow inspect abc123          # truncates large outputs
-one flow inspect abc123 --full   # full, pretty-printed outputs
-```
-
-Pairs with `--stop-after`: run up to a step, then `one flow inspect <runId>` to see its output. State files live in `.one/flows/.runs/` (owner-only) and hold inputs and step outputs, never the environment.
-
-### `one flow scaffold [template]`
-
-Print a starter workflow (`basic`, `conditional`, `loop` or `ai`) to stdout; nothing is saved. Pipe it into `one flow create <key>` to save it.
-
-```bash
-one flow scaffold loop | one flow create my-loop
-```
-
-`one flow` has the alias `one f`; `flow execute` is also `flow x` and `flow list` is `flow ls`.
-
-### `one config`
-
-Configure what this CLI may do: permission level, connection and action allowlists, knowledge-only mode, and the API base URL. Optional - full access is the default. The CLI enforces these on every call itself, and copies them into any existing `one` MCP server entries in your agent configs.
-
-```bash
-one config
-```
-
-| Setting | Options | Default |
-|---------|---------|---------|
-| Permission level | `admin` / `write` / `read` | `admin` |
-| Connection scope | All or specific connections | All |
-| Action scope | All or specific action IDs | All |
-| Knowledge-only mode | Enable/disable execution | Off |
-| API base URL | Default (`https://api.withone.ai`) or a custom base, which asks for a key | Default |
-
-Settings are written to the active scope (the project config if one exists, else global). `admin` allows every method, `write` allows GET, POST, PUT and PATCH, `read` allows GET only. These are local to this install and can only narrow what the key itself was granted on One (chosen on the consent page or in the dashboard).
-
-Run [`one list`](#one-list) to see the effect: each connection reports an `access` field describing exactly what these settings let you run on it.
-
-#### `one config path` / `one config reset`
-
-```bash
-one config path            # active config, its scope, and the project → global resolution order
-one config reset           # remove the project config for this directory (falls back to global)
-one config reset --global  # remove ~/.one/config.json instead
-```
-
-`reset` removes the nearest project config that applies to this directory, which can belong to a parent folder, and says what will be used next. It asks for confirmation; `--agent` skips the prompt.
-
-#### `one config skills status` / `one config skills sync`
-
-`one init` copies the packaged skill files (`SKILL.md`, `references/`) into `~/.agents/skills/one/` and symlinks per-agent paths to that canonical directory. When the CLI self-updates, the skill files in the canonical dir would normally stay frozen at the version that was installed. To prevent stale docs, every CLI command checks a `.one-cli-version` marker in the canonical dir and silently refreshes the skill files if they don't match the running CLI version. No user action required.
-
-| Command | What it does |
-|---------|--------------|
-| `one config skills status` | Show installed skill version, current CLI version, and path |
-| `one config skills sync` | Force a re-copy of packaged skill files (for troubleshooting) |
-
-Auto-sync refuses to resurrect skills if you opted out of skill installation during `one init` — the canonical dir has to already exist.
-
-### `one update`
-
-Updates the CLI to the latest version (`npm install -g @withone/cli@latest`).
-
-The CLI also **auto-updates in the background**: it checks npm for a new version at most every 4 hours, and when a newer version has been published for more than 30 minutes, the next `one` command silently kicks off a global install. This is hardened against concurrent runs — a lock file in `~/.one/` ensures at most one install runs at a time (so parallel agent invocations can't collide and wedge npm), and the lock self-heals after 10 minutes if an install ever crashes or hangs.
-
-**Scheduled runs update too.** `one sync schedule` installs a crontab entry, and cron runs jobs with a bare `PATH=/usr/bin:/bin` — where an nvm, Volta, fnm, or Homebrew `npm` does not appear. The updater therefore resolves `npm` next to the running `node` binary rather than through `PATH`, and prepends node's own directory to the install's environment. Without this a scheduled install can never upgrade itself and stays pinned to the version that created it, forever.
-
-If an install still doesn't land — a read-only prefix, a permissions problem, a node with no npm alongside it — the CLI **says so instead of retrying invisibly**. npm's own output is appended to `~/.one/auto-update.log`, and after three consecutive failed attempts a warning goes to **stderr** (never stdout, so it can't corrupt `--agent` JSON or a piped command) telling you to run the install by hand. That notice repeats at most once a day.
-
-To disable background auto-updates entirely (e.g. on CI or a shared agent host), set:
-
-```bash
-export ONE_NO_AUTO_UPDATE=1     # ONE_DISABLE_AUTO_UPDATE=1 (or =true) also works
-```
-
-That stops the install, not the version check. Run `one update` manually whenever you want to upgrade.
-
-### Telemetry
-
-Every call to a connected app (`actions execute`, flow steps, sync) and every `actions find` also tells One which surface and harness made it (`x-one-source: cli`, and `x-one-agent: claude-code` or whichever agent launched the CLI), so the dashboard's Logs page can show which agent ran each action. `actions find` also sends the `--ai-model` value, when given, as `x-one-agent-model`. This is the call's own record in your account, not analytics, and it is sent whether or not telemetry is on. No CLI version or arguments ride with it.
-
-The CLI collects **usage analytics** — which command was run, the CLI version, OS/arch, Node version, live/test environment, whether you're signed in, and whether it ran in `--agent` mode — to help us prioritize improvements. Events are linked to your One account (user id, email, name, org) so they line up with your dashboard activity. **Command arguments, inputs, connection data, and secrets are never collected** (only the command name, e.g. `actions execute`). A one-time notice is shown on first run. Commands are aggregated locally and sent as periodic, batched roll-ups in the background, so telemetry never slows down or blocks a command (and stays lightweight even under heavy automation).
-
-To opt out, set any of:
-
-```bash
-export ONE_NO_TELEMETRY=1     # also accepted: ONE_DISABLE_TELEMETRY=1, or the cross-tool standard DO_NOT_TRACK=1
-```
-
-Each accepts `1` or `true`. Telemetry is also disabled automatically when `CI=1`. You can persist the choice by adding `"telemetry": "off"` to the active config (`~/.one/config.json`, or the project config when one is active).
-
-### `.onerc` file
-
-Drop a `.onerc` file in your project root to override settings per-project (separate from the project config under `~/.one/projects/`). Simple `KEY=VALUE` format; `#` for comments. Read from the current working directory (no parent lookup).
-
-| Key | Purpose |
-|-----|---------|
-| `ONE_SECRET` | API key (also honored as env var) |
-| `ONE_CONNECT_USER_ID` | The user a Connect key acts for, as the SDK stored it (also honored as env var); see [Acting for a Connect user](#acting-for-a-connect-user) |
-| `ONE_API_BASE` | API base URL, `https://api.withone.ai` or `https://development-api.withone.ai` only (the env var accepts any origin) |
-| `OPENAI_API_KEY` | OpenAI key for `one mem` semantic search (also honored as env var) |
-| `ONE_PERMISSIONS` | `admin` / `write` / `read`, can only lower the configured level |
-| `ONE_CONNECTION_KEYS` | Comma-separated connection-key allowlist, intersected with the configured one |
-| `ONE_ACTION_IDS` | Comma-separated action-ID allowlist, intersected with the configured one |
-| `ONE_KNOWLEDGE_AGENT` | `true` turns knowledge-only mode on; it cannot turn it off |
-
-Precedence: env var > `.onerc` > project config > global config. The access keys are the exception: they are not read from the environment, and a `.onerc` can only narrow the access settings in your config, never widen them, because it can arrive with a cloned repository. A value that would widen them is ignored with a warning; use `one config` instead.
-
-The access settings are enforced on every call to a connected app, whatever the command: `actions execute`, flows, sync and its validation runs. Headers named `x-one-secret`, `x-one-connect-user-id`, `x-one-organization-id`, `x-one-project-id`, `x-one-connection-key` or `x-one-action-id` cannot be passed with `--headers`, method-override headers are judged against the permission level, and a path variable cannot be `.` or `..`. `--dry-run` is checked too. API requests never carry your key to another origin: a redirect to a different origin fails instead of being followed.
-
-They also apply to commands that change One's own resources. Creating, updating or activating a relay needs the `write` level and deleting one needs `admin`; `connection delete` needs `admin`; knowledge-only refuses all of them. A relay's `passthrough` actions are checked like `actions execute` when they are set, because they run later on One's servers. `url` and `agent` relay actions are allowed only when the connection and action allowlists are both `*`. With a connection allowlist, relay endpoints, events and deliveries on other connections are hidden or refused.
-
-```bash
-# .onerc
-ONE_SECRET=sk_live_xxx
-ONE_API_BASE=https://development-api.withone.ai
-ONE_PERMISSIONS=read
-```
-
-> ⚠️ **Add `.onerc` to your `.gitignore`.** If you put `ONE_SECRET` in it, committing the file will leak your API key. Treat `.onerc` like `.env` — never check it in.
-
-### Acting for a Connect user
-
-An app built on `@withone/connect` can run the CLI as one of its users. Set `ONE_SECRET` to the app's Connect key and `ONE_CONNECT_USER_ID` to the value the SDK stored for the user, in the environment or `.onerc`. That value is the user's `cu_…` id, followed by `;org=<id>;project=<id>` when they granted from an organization or project. Every request then carries the user and that space, and One holds it to the grant that user gave the app, as it does for the SDK.
-
-- `whoami` shows the connected user.
-- `list` shows the connections the grant reaches, with the access it gives on each.
-- `actions find` offers only actions inside the grant, and `actions execute` refuses one outside it with a 403. Plan from `list` and `find`: `actions load` reads an action's docs by id whether or not the grant reaches it.
-- Adding or removing connections and managing relays need an ordinary key. One refuses them under a grant.
-
-One refuses a Connect key without `ONE_CONNECT_USER_ID`, and an ordinary key with it, so setting one by mistake can't widen what a key reaches.
-
-### Relocating the CLI's state (`ONE_HOME`)
-
-Everything the CLI stores — `~/.one/config.json`, the knowledge cache, memory
-databases, sync schedules, and the installed skill files — is rooted at your
-home directory. Set `ONE_HOME` to put it somewhere else:
-
-```bash
-export ONE_HOME=/srv/one-state
-one whoami          # now reads /srv/one-state/.one/config.json
-```
-
-Useful for containers, CI runners, and shared/multi-tenant shells where the
-account's home directory isn't the right place for per-workspace state. It
-works identically on every platform — unlike `HOME`, which `os.homedir()`
-ignores on Windows.
-
-Agent config and skill paths move too (`~/.claude.json`, `~/.claude/skills/`,
-`~/.agents/skills/`, ...), so `one init` with `ONE_HOME` set installs the skill
-under that directory, where your real agents won't look.
-
-## The workflow
-
-The power of One is in the workflow. Every interaction follows the same pattern:
-
-```
-one list                    → What am I connected to?
-one actions find            → What do I run, and how?
-one actions execute         → Do it.
-```
-
-This is the same workflow whether you're sending emails, creating CRM contacts, processing payments, managing inventory, or posting to Slack. One pattern, any platform.
-
-For multi-step workflows that chain actions across platforms:
-
-```
-one actions find            → Find each action, with its schema
-one flow create             → Define the workflow as JSON
-one flow validate           → Check it
-one flow execute            → Run it
-```
-
-Workflows support conditions, loops, while loops, parallel execution, transforms, code steps, sub-flows, pagination, bash steps, and file I/O. Run `one guide flows` for the full schema reference and examples.
-
-## For AI agents
-
-If you're an AI agent with only the `one` binary (no MCP server or IDE skills), start with `one --agent guide` to get the full usage guide as structured JSON. This teaches you the complete workflow, JSON schemas, selector syntax, and more - everything you need to bootstrap yourself.
-
-If you're an AI agent using the One MCP server, the tools map directly:
-
-| MCP Tool | CLI Command |
-|----------|------------|
-| `list_one_integrations` | `one list` + `one platforms` |
-| `find_one_actions` | `one actions find` (and `one actions load` for its `load`) |
+| MCP&nbsp;tool | CLI&nbsp;command |
+|----------|-------------|
+| `list_one_integrations` | `one list` |
+| `find_one_actions` | `one actions find`, and `one actions load` for more of a&nbsp;document |
 | `execute_one_action` | `one actions execute` |
 
-The workflow is the same: list → find → execute. Never execute without reading the docs find returns - they contain required parameter info and platform-specific details that are critical for building correct requests.
+See [Agents](./docs/agents.md) in the&nbsp;reference.
 
-## MCP server configs
+## Access and security
 
-`one init` no longer installs an MCP server. Most clients can use One's [remote MCP server](https://withone.ai/docs/mcp) instead, with no local install and no API key in a config file. If an agent config already has a `one` entry for the local `@withone/mcp` server, the CLI keeps it in step when you run `one config` (access control) or update your key in `one init`. It reads and writes these files:
+Your agent never handles a platform credential. One stores the OAuth tokens and API keys for your connections and adds them on its side on each&nbsp;call.
 
-| Agent | Global | Project |
-|-------|--------|---------|
-| Claude Code | `~/.claude.json` | `.mcp.json` |
-| Claude Desktop | Platform-specific app support dir | - |
-| Cursor | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
-| Windsurf | `~/.codeium/windsurf/mcp_config.json` | - |
-| Codex | `~/.codex/config.toml` | `.codex/config.toml` |
-| Kiro | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
+**You choose what the key can reach.** `one login` opens a consent page in your browser. There you name the key and give it all your connections, specific ones at a level each, or Knowledge only, which reads API documentation and runs nothing. Change it later from Manage access in the [One dashboard](https://app.withone.ai). One enforces the key's access on every&nbsp;call.
 
-These files contain your One API key. Project configs are written readable by you only and added to `.gitignore`: don't commit or share them.
+<p>
+  <img src="https://raw.githubusercontent.com/withoneai/cli/main/assets/key-access.jpg" alt="Setting what an API key can reach in the One dashboard, with the level menu open for one app. Full access, Read and write, Read only, Custom actions and No access." width="100%">
+</p>
+
+**You can narrow it further on your machine.** `one config` sets a permission level of `read`, `write` or `admin`, an allowlist of connections, an allowlist of actions and a knowledge-only mode. These settings can only lower what the key was granted. A `.onerc` file in a project can only narrow them too, because it can arrive with a cloned&nbsp;repository.
+
+**Every call is on the record.** One records each action with the agent that ran it, the app, the access it used and the result. A call outside the key's access is refused before it reaches the app, and the Logs page shows that&nbsp;too.
+
+<p>
+  <img src="https://raw.githubusercontent.com/withoneai/cli/main/assets/logs.jpg" alt="The Logs page in the One dashboard. Each call with its action, the agent that made it, the app, read or write, the status and the time. One call is marked as blocked." width="100%">
+</p>
+
+The CLI sends usage analytics, which never include command arguments, inputs, connection data or secrets. `ONE_NO_TELEMETRY=1` or `DO_NOT_TRACK=1` turns them&nbsp;off.&nbsp;See&nbsp;[Setup](./docs/setup.md#telemetry).
+
+## Commands
+
+| Command | What it&nbsp;does |
+|---------|--------------|
+| `one init` | Sign in, install the One skill and connect a first&nbsp;app |
+| `one login`,&nbsp;`one logout` | Sign in through the browser, or clear local&nbsp;credentials |
+| `one whoami` | The user, organization, project, environment and key in&nbsp;use |
+| `one add <platform>` | Connect an app through&nbsp;OAuth |
+| `one list` | Your connections, their keys and your access on&nbsp;each |
+| `one connection delete <key>` | Remove a&nbsp;connection |
+| `one platforms` | Every platform you can&nbsp;connect |
+| `one actions find` | The action for each operation a task needs, with its&nbsp;documentation |
+| `one actions load` | More of an action's&nbsp;documentation |
+| `one actions execute` | Run an action on a&nbsp;connection |
+| `one cache` | The local cache of action&nbsp;documentation |
+| `one flow` | Create, validate, execute, resume and inspect multi-step&nbsp;workflows |
+| `one mem` | The local memory store of notes and synced&nbsp;records |
+| `one sync` | Sync a platform's records into memory, on demand or on a&nbsp;schedule |
+| `one relay` | Receive webhook events and forward them to&nbsp;actions |
+| `one connect` | Create and update a Connect app from&nbsp;`one.connect.ts` |
+| `one skills` | Optional skills for your coding&nbsp;agent |
+| `one config` | Access control, the active config and the installed&nbsp;skill |
+| `one guide`,&nbsp;`one onboard` | The built-in manual, and a three-step introduction for an&nbsp;agent |
+| `one update` | Update the CLI. It also updates itself in the&nbsp;background |
+
+`one --help` prints all of them, and `one <command> --help` prints a command's options. Every flag, default and output shape is in the&nbsp;[reference](./docs).
+
+## Configuration
+
+`one init` asks whether the setup is global or for one project. A global config lives in `~/.one/config.json`. A project config lives under `~/.one/projects/`, outside the repository, where a secret cannot land in git. In a project the CLI uses the project config when there is one and the global config otherwise. `one config path` shows which one is&nbsp;active.
+
+An API key is either live or test, and `one whoami` shows which one you are&nbsp;using.
+
+| Variable | What it&nbsp;does |
+|----------|--------------|
+| `ONE_SECRET` | The API key, in place of the one in the&nbsp;config |
+| `ONE_AGENT` | `1` turns on agent mode for every&nbsp;command |
+| `ONE_HOME` | Where the CLI keeps its state, in place of your home&nbsp;directory |
+| `ONE_CACHE_TTL` | How long action documentation is cached, in seconds. The default is one&nbsp;hour |
+| `ONE_NO_AUTO_UPDATE` | `1` stops the background&nbsp;update |
+| `ONE_NO_TELEMETRY` | `1` turns usage analytics&nbsp;off |
+
+See [Setup](./docs/setup.md) and [Configuration](./docs/configuration.md) in the&nbsp;reference.
 
 ## Development
 
 ```bash
+git clone https://github.com/withoneai/cli.git
+cd cli
+npm install        # also builds
 npm run dev        # watch mode
-npm run build      # production build
-npm run typecheck  # type check
+npm run typecheck
+npm test
 ```
+
+## Support and license
+
+Email support@withone.ai or [open an issue](https://github.com/withoneai/cli/issues). The CLI is released under the [MIT&nbsp;license](./LICENSE).
