@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "2.18.1",
+  "version": "2.18.2",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
@@ -47,6 +47,7 @@
     "tsx": "^4.23.1",
     "typescript": "^5.7.3"
   },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/withoneai/cli"
